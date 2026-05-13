@@ -72,6 +72,7 @@
 #define G_TICK_D4           (*(volatile uint32_t *)0x200000D4u)
 
 #define G_5A_TARGET         (*(volatile uint8_t  *)0x200000EAu)
+#define G_MOTION_REACHED    (*(volatile uint8_t  *)0x2000013Au) /* 1 = position-sensor latched motion-complete */
 #define G_TASK_ID           (*(volatile uint8_t  *)0x20000118u)
 #define G_FLAG_13E          (*(volatile uint8_t  *)0x2000013Eu)
 #define G_FLAG_13D          (*(volatile uint8_t  *)0x2000013Du)
@@ -119,7 +120,43 @@ static uint8_t sched_pick_task(void)
     const uint8_t v = G_STATE_FC;
     return v > 6u ? 6u : v;
 }
-static void    sched_pre_task(uint8_t b)         { (void)b; TRAP_VOID(); } /* OEM @ 0x080036D4 (74 B) */
+/* OEM @ 0x080032FA (210 B). H-bridge mask driver — toggles PA9/PA10
+ * (both GPIOA outputs) per the input nibble pattern. Decomp pending;
+ * stubbed for now. Observed inputs: 0xF0, 0x0F, 0xFF (forward / reverse
+ * / brake). */
+static void motor_h_bridge_set(uint8_t mask) { (void)mask; TRAP_VOID(); } /* OEM @ 0x080032FA (210 B) */
+
+/* OEM @ 0x0800315E (26 B). Status/ack report fired by motor_drive_step
+ * once the move-complete latch is captured. */
+static void report_motion_done(void) { TRAP_VOID(); }
+
+/* OEM @ 0x080036D4 (74 B). Per-iteration motor servoing step.
+ *
+ * The inbound shift command (`G_5A_TARGET`, set by Modbus cmd 0x5A)
+ * tells us which direction to drive — 0 = forward bank, 1 = reverse
+ * bank, anything else = leave the bridge as-is. Then we poll the
+ * "motion-reached" latch from the position sensor: as soon as it
+ * fires and we haven't already arrived (`G_5A_TARGET != 2`), we
+ * brake the motor (mask 0xFF), latch arrived, demote the running
+ * state-task if it was 2 → 1, and emit a motion-done report.
+ */
+static void motor_drive_step(uint8_t target)
+{
+    if (target == 0u) {
+        motor_h_bridge_set(0xF0u);
+    } else if (target == 1u) {
+        motor_h_bridge_set(0x0Fu);
+    }
+
+    if (G_MOTION_REACHED == 1u && G_5A_TARGET != 2u) {
+        G_5A_TARGET = 2u;
+        motor_h_bridge_set(0xFFu);
+        if (G_TASK_ID == 2u) {
+            G_STATE_FC = 1u;
+        }
+        report_motion_done();
+    }
+}
 static void    sched_default_post(void)          { TRAP_VOID(); } /* OEM @ 0x080036BA (26 B) */
 static void    sched_task_alpha(void)            { TRAP_VOID(); } /* OEM @ 0x08003608 (178 B) */
 static void    sched_task_beta(void)             { TRAP_VOID(); } /* OEM @ 0x080033E2 (196 B) */
@@ -231,7 +268,7 @@ int main(void)
     for (;;) {
         const uint8_t task = sched_pick_task();
         modbus_rx_poll();
-        sched_pre_task(G_5A_TARGET);
+        motor_drive_step(G_5A_TARGET);
 
         if (G_TICK_A != G_TICK_B) {
             G_TICK_A = G_TICK_A + 1u;
