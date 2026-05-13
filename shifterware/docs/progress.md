@@ -24,10 +24,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  90 | ~80% |
+| pending      |  87 | ~76% |
 | in-progress  |   0 |   0 |
-| named        |   5 | ~3% |
-| decomp-c     |  34 | ~19% |
+| named        |   6 | ~4% |
+| decomp-c     |  36 | ~24% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -40,10 +40,13 @@ Decomp'd so far:
 - **image** (`src/image.c`): `image_verify_crc` (100 B), `image_apply` (92 B), `report_image_status` (64 B)
 - **flash_store** (`src/flash_store.c`): `flash_unlock` (12 B), `flash_lock` (14 B), `flash_clear_status` (6 B), `flash_erase_page` (32 B), `flash_erase_pages` (32 B), `flash_get_status` (54 B), `flash_busy_step` (26 B), `flash_wait_status` (44 B), `flash_do_page_erase` (72 B)
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
+- **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 5 case-helper stubs awaiting their own decomp; `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher. Caller of `modbus_rx_poll` is at `0x08004366` (currently in no enclosing function — the main scheduler isn't decomp'd yet).
+- **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
 Named (in Ghidra) but no C yet:
 - `rcc_reset_usart` (`0x08005B9C`, 54 B) — toggles RCC peripheral-reset bit for USART1/2; out of plan-1 scope (not used by init/RX/IRQ).
+- `__gnu_thumb1_case_uqi` (`0x08005DB4`, 28 B) — libgcc compiler-runtime jump-table dispatcher for Thumb-1 unsigned-byte switches. Used by `modbus_dispatch_pdu`. Not project code; no C to write.
 
 > 🛠 **Plan-1 complete (USART):** `usart_t` in `include/mm32f031.h`
 > rewritten to the full MM32 layout (`TDR / RDR / SR / ISR / IER / ICR
@@ -190,8 +193,8 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08003bc4` |   88 | `FUN_08003bc4` |  | pending |  |
 | `0x08003c1c` |   76 | `FUN_08003c1c` |  | pending |  |
 | `0x08003c68` |   50 | `FUN_08003c68` |  | pending |  |
-| `0x08003c9a` |  278 | `FUN_08003c9a` |  | pending |  |
-| `0x08003eda` |  366 | `FUN_08003eda` |  | pending |  |
+| `0x08003c9a` |  278 | `modbus_dispatch_pdu` | modbus_dispatch | decomp-c | switch on cmd byte; 5 case helpers stubbed pending decomp |
+| `0x08003eda` |  366 | `modbus_rx_poll` | modbus_dispatch | decomp-c | RX FSM: assembles short/long frames, CRC, hands off to dispatcher |
 | `0x08004048` |   96 | `FUN_08004048` |  | pending |  |
 | `0x080040a8` |   10 | `FUN_080040a8` |  | pending |  |
 | `0x080040b2` |  126 | `FUN_080040b2` |  | pending |  |
@@ -273,7 +276,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08005d40` |   44 | `FUN_08005d40` |  | pending |  |
 | `0x08005d6c` |   36 | `memcpy` | util | decomp-c | word-fast + byte tail; **void return** (non-POSIX) |
 | `0x08005d90` |   36 | `FUN_08005d90` |  | pending |  |
-| `0x08005db4` |   28 | `FUN_08005db4` |  | pending |  |
+| `0x08005db4` |   28 | `__gnu_thumb1_case_uqi` | libgcc | named | compiler-runtime jump-table dispatcher; not project code |
 | `0x08005e2a` |   78 | `FUN_08005e2a` |  | pending |  |
 | `0x08005e78` |   38 | `FUN_08005e78` |  | pending |  |
 | `0x08005e9e` |    2 | `FUN_08005e9e` |  | pending |  |

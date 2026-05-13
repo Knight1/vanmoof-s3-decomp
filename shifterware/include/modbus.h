@@ -31,4 +31,15 @@ void modbus_tick(void);
  * for passthrough/echo responses. */
 void modbus_reply_passthrough(void);
 
+/* Top-of-stack PDU dispatcher: called by the RX FSM once a full
+ * inbound frame is in the scratch at `0x200000C8`. `cmd` is the
+ * function-code byte; `len` is the inbound PDU length. */
+void modbus_dispatch_pdu(uint8_t cmd, uint8_t len);
+
+/* RX state machine. Called from the main poll loop; consumes bytes
+ * the IRQ has appended to the scratch buffer, applies the
+ * end-of-frame timeout, CRC-validates, and forwards complete frames
+ * to `modbus_dispatch_pdu`. */
+void modbus_rx_poll(void);
+
 #endif /* SHIFTER_MODBUS_H */

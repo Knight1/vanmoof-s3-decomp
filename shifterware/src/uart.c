@@ -310,16 +310,16 @@ size_t uart1_rx_drain(uint8_t *dst, size_t max_len)
     return n;
 }
 
-/* OEM @ 0x0800450C (62 B). RX-side of USART1's IRQ. The OEM also has
- * a separate handler stub at 0x080044F0 that calls something at
- * 0x080044DC — likely the TX-side / inter-frame-timeout handler;
- * we don't dispatch through it yet.
+/* OEM @ 0x0800450C (62 B). RX-side of USART1's IRQ.
  *
- * Functional differences from OEM: the OEM writes into a linear 45-byte
- * buffer keyed by a uint16 count and resets a separate inter-byte
- * timing flag; we use the existing speculative head/tail ring buffer
- * to keep the consumer-side functions stable. Byte-equivalence isn't
- * achievable until we also adopt the OEM RX buffer layout. */
+ * The OEM appends each byte to a linear 45-byte scratch at
+ * `0x200001B2` indexed by `*(uint32_t*)0x200000E4`. Once the index
+ * reaches the maximum (45), further bytes are silently dropped — no
+ * wrap. Each byte also resets the inter-byte wait counter at
+ * `0x200000DC` (consumed by `modbus_rx_poll` as the end-of-frame
+ * timeout source). The static ring buffer / `uart1_rx_*` API earlier
+ * in this file is speculative pre-decomp scaffolding for
+ * `protocol.c`; it is not on the OEM RX path. */
 void USART1_IRQHandler(void)
 {
     if (!usart_check_status(USART1, USART_ISR_RX_READY_Msk)) {
@@ -329,11 +329,13 @@ void USART1_IRQHandler(void)
 
     const uint8_t b = usart_read_data(USART1);
 
-    const uint16_t head = s_rx_head;
-    const uint16_t next = (uint16_t)((head + 1u) % UART_RX_BUFFER_SIZE);
-    if (next != s_rx_tail) {
-        s_rx_buf[head] = b;
-        s_rx_head = next;
+    volatile uint32_t *const rx_head    = (volatile uint32_t *)0x200000E4u;
+    volatile uint8_t  *const rx_scratch = (volatile uint8_t  *)0x200001B2u;
+    volatile uint32_t *const wait_ctr   = (volatile uint32_t *)0x200000DCu;
+
+    if (*rx_head < 0x2Du) {
+        rx_scratch[*rx_head] = b;
+        *rx_head = *rx_head + 1u;
+        *wait_ctr = 0u;
     }
-    /* else: overrun — drop byte silently */
 }
