@@ -108,7 +108,15 @@ static void boot_apply_hash(uint16_t v, int t)   { (void)v; (void)t; TRAP_VOID()
 static bool sched_check_idle(void)               { TRAP_RET(false); } /* OEM @ 0x080033CC (22 B) */
 static bool sched_check_ready(void)              { TRAP_RET(false); } /* OEM @ 0x0800325C (22 B) */
 
-static uint8_t sched_pick_task(void)             { TRAP_RET(0); }     /* OEM @ 0x080035BE (74 B) */
+/* OEM @ 0x080035BE (74 B). Return the current state-machine value at
+ * G_STATE_FC, clamped to 6 (the highest valid round-robin case). The
+ * OEM source is a cascaded compare/return chain — clipped to its
+ * observable semantics. */
+static uint8_t sched_pick_task(void)
+{
+    const uint8_t v = G_STATE_FC;
+    return v > 6u ? 6u : v;
+}
 static void    sched_pre_task(uint8_t b)         { (void)b; TRAP_VOID(); } /* OEM @ 0x080036D4 (74 B) */
 static void    sched_default_post(void)          { TRAP_VOID(); } /* OEM @ 0x080036BA (26 B) */
 static void    sched_task_alpha(void)            { TRAP_VOID(); } /* OEM @ 0x08003608 (178 B) */
