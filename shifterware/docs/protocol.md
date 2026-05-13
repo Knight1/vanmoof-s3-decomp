@@ -1,0 +1,172 @@
+# Bus protocol — VanMoof S3 inter-module Modbus link
+
+The shifter talks to the bike's main module over a Modbus RTU half-
+duplex link on **USART1, 9600 baud, 8-N-1**. This file documents
+everything the decomp has revealed about the frame layouts, the CRC,
+the command codes, and the RX/TX paths in the firmware.
+
+## Wire framing
+
+Modbus RTU with the standard CRC-16:
+
+- **Polynomial**: `0xA001` (reversed `0x8005`)
+- **Initial value**: `0xFFFF`
+- **Byte order on wire**: CRC low byte then CRC high byte (Modbus
+  convention)
+- **Frame boundary**: inter-byte idle gap, tracked by an end-of-frame
+  countdown driven by SysTick (`modbus_tick` decrement, threshold
+  `0x00249F00` ticks)
+
+The shifter's bus address is **`0x20`**. The RX FSM rejects any frame
+whose first byte differs.
+
+### Frame layouts
+
+The shifter accepts two PDU lengths. Both are validated end-to-end
+by the same CRC-16; the dispatcher reads `cmd` (byte 3) and
+`len` (byte 1) verbatim from whichever buffer was filled.
+
+**Short frame (8 bytes total)** — used for everything except OTA
+payload writes:
+
+| Byte | Field |
+| ---- | ----- |
+| 0 | `0x20` slave address |
+| 1 | `len` (passed to dispatcher; pattern is "PDU length minus header"; observed values 3, 6, 0x0F) |
+| 2 | TBD (cherry-picked by some case handlers; e.g. `cmd_5c_write3` reads `G_5C_REGS[0..2]` from offsets [2,4,5]) |
+| 3 | `cmd` (function code; dispatched on) |
+| 4 | TBD |
+| 5 | TBD (used as a payload byte by cmd 0x5A) |
+| 6 | CRC low |
+| 7 | CRC high |
+
+**Long frame (45 bytes total / 0x2D)** — used by OTA firmware-page
+writes (cmd `0x82` with `len == 0x10`, accepted only after the
+`G_RX_FRAME_MODE` byte has been switched to 1 via cmd `0x95`):
+
+| Byte | Field |
+| ---- | ----- |
+| 0 | `0x20` slave address |
+| 1 | `len` (0x0F observed) |
+| 2..2A | TBD payload bytes (16 B of program data plus addressing info) |
+| 2B | CRC low (over bytes 0..2A) |
+| 2C | CRC high |
+
+In both cases the CRC is computed over all bytes preceding it
+(`modbus_crc16_compute(buf, N-2)`).
+
+## RX path
+
+1. **`USART1_IRQHandler`** (`uart.c`, OEM @ `0x0800450C`) reads one
+   byte from USART1's RDR on each RX-ready interrupt and appends it
+   to `G_RX_SCRATCH` (RAM `0x200001B2`) at index `G_RX_HEAD`
+   (`0x200000E4`). Caps at 45 bytes; further bytes are silently
+   dropped. Resets `G_RX_WAIT_CTR` (`0x200000DC`) to 0 on every
+   byte, restarting the end-of-frame timer.
+2. **`modbus_tick`** (`modbus.c`, OEM @ `0x080044DC`) is called
+   periodically from an ISR (likely SysTick). It decrements
+   `MODBUS_TICK_CTR` (`0x200000C4`) if non-zero — this is the
+   inter-byte countdown used elsewhere on the bus.
+3. **`modbus_rx_poll`** (`modbus_dispatch.c`, OEM @ `0x08003EDA`)
+   is called from the main super-loop. It:
+   - Returns early if `G_RX_HEAD == 0` (no bytes yet).
+   - Drops the frame if the first byte isn't `0x20`.
+   - In short-frame mode (`G_RX_FRAME_MODE == 0`):
+     - waits while `G_RX_HEAD < 8` and ticks the wait counter;
+     - on full frame, copies the 8 bytes into `G_RX_BUF`, CRC-checks,
+       sets `G_REQ_PENDING`, calls `modbus_dispatch_pdu(cmd, len)`.
+   - In long-frame mode (`G_RX_FRAME_MODE == 1`):
+     - same shape but with threshold 45 and `G_LONG_BUF`;
+     - on either timeout or CRC fail, exits long-frame mode and
+       resets the OTA staging pointers (`G_OTA_WRITE_PTR` ←
+       `0x08001800`).
+4. **`modbus_dispatch_pdu`** (`modbus_dispatch.c`, OEM @ `0x08003C9A`)
+   runs the switch documented below, then — regardless of which case
+   matched — calls `modbus_reply_passthrough()` whenever
+   `len == 6 || len == 0x0F`, and finally clears `G_REQ_PENDING`.
+
+## TX path
+
+- **`uart1_send_byte`** (`uart.c`, OEM @ `0x0800371E`) writes one
+  byte to TDR and spins on the TX-ready flag.
+- **`modbus_send_bytes`** (`modbus.c`, OEM @ `0x0800373A`) loops
+  `uart1_send_byte` over a byte range.
+- **`modbus_crc16_compute`** (`modbus.c`, OEM @ `0x0800378C`)
+  computes the CRC-16 (poly `0xA001`, init `0xFFFF`) over `len`
+  bytes and stores the result into the pair of bytes at
+  `0x200000E7`/`E8`.
+- **`modbus_tx_finalize`** (`modbus.c`, OEM @ `0x08003756`)
+  transmits `len` bytes from `MODBUS_TX_BUF` (`0x200001A9`) and,
+  iff `len == 7` AND `G_IMG_OK_FLAG == 1`, then writes
+  `SCB->AIRCR = 0x05FA0004` to fire a SYSRESETREQ so shifterboot
+  can install the freshly-validated OTA image.
+- **`modbus_reply_passthrough`** (`modbus.c`, OEM @ `0x080037CC`)
+  builds an 8-byte reply by copying the first 6 bytes of the
+  inbound PDU into the TX buffer, appending the CRC, and calling
+  `modbus_tx_finalize(8)`. Used for echo-style responses.
+- **`report_image_status`** (`image.c`, OEM @ `0x08003A86`) builds
+  a 7-byte status PDU from scattered RAM state and calls
+  `modbus_tx_finalize(7)` — the only 7-byte transmit, hence the
+  trigger condition for the post-OTA reset above.
+
+## Command codes (`cmd` byte = inbound PDU[3])
+
+Dispatched by `modbus_dispatch_pdu`. The GCC compiler emits the
+switch as a `__gnu_thumb1_case_uqi` jump table.
+
+| `cmd` | `len` | Effect |
+| ----- | ----- | ------ |
+| `0x0F` | 6 | Emit a uint32_t report via the not-yet-decomp'd `cmd_0f_report_u32(G_COUNTER)` chain (OEM `FUN_08003C68` → `FUN_08003C1C`). |
+| `0x14` | 6 | When `G_MODE == 0`: `G_COUNTER++`, set `G_14_FLAG_A = 1`, `G_14_FLAG_B = 1`. Otherwise: clear `G_14_FLAG_B`. |
+| `0x5A` | 6 | When `G_MODE == 0`: copy `G_RX_BUF[5]` into `G_5A_TARGET` (`0x200000EA`). Encodes the shift direction (0 = forward, 1 = reverse) consumed by the per-iteration motor servoing step (`motor_drive_step`) in `main`. Once the motor reaches position, `G_5A_TARGET` self-latches to 2 ("arrived"). |
+| `0x5B` | 6 | Run `FUN_08003BC4` — a 3-level self-test cascade that emits one of `{0, 0x32, 0x64, 0x96}` via `FUN_08003B9E`. |
+| `0x5C` | 3 | `cmd_5c_write3(G_5C_REGS[0..2])` → `FUN_08003B86`, which fans three bytes into RAM slots and calls `report_image_status`. |
+| `0x5C` | 0x0F | Copy `G_RX_BUF[2]`, `[4]`, `[5]` into `G_5C_REGS[0..2]` and call `cmd_5c_consume` → `FUN_080031E6`. |
+| `0x81` | — | `image_apply()`. Validate the receive-slot at flash `0x08001800`; on success latch `G_IMG_OK_FLAG`, on failure erase the slot and reset receive-state RAM bytes. |
+| `0x82` | 0x10 | `cmd_82_fw_page` → `FUN_080039E6` — accept a 16-byte OTA payload page (long-frame only). |
+| `0x95` | — | `flash_erase_pages(0x08001800, 12)` + set `G_RX_FRAME_MODE = 1` so subsequent frames are accepted as 45-byte OTA payloads. |
+| _any other_ | — | Silent ignore (GCC switch falls through to the common epilogue). |
+
+After the case body, dispatch always:
+- emits a 6-byte passthrough reply if `len == 6` or `len == 0x0F`;
+- clears `G_REQ_PENDING`.
+
+## Sequencing observations
+
+- The fact that `modbus_tx_finalize` only triggers the
+  SYSRESETREQ when `len == 7` AND `G_IMG_OK_FLAG == 1` ties the
+  reset specifically to **`report_image_status` after a successful
+  `image_apply`**. The bike's main module sees a 7-byte ACK and
+  the shifter resets ~immediately afterward; shifterboot then
+  picks up the freshly-staged image.
+- The "switch to long-frame mode after erase" (`cmd 0x95` ⇒
+  `G_RX_FRAME_MODE = 1`) is the OTA write protocol's first step.
+  Subsequent `cmd 0x82` frames each carry one 16-byte page; the
+  main module sends as many as the image needs, then issues
+  `cmd 0x81` to validate and reset.
+- `cmd 0x5C` is overloaded by length: short form (`len == 3`)
+  reads back a 3-byte register block to the bus; long form
+  (`len == 0x0F`) writes 3 bytes into the same block from the
+  inbound frame. Probably a generic 3-byte register R/W.
+
+## Open questions
+
+- **Heartbeat / status pulse?** The main module presumably polls
+  the shifter periodically; the round-robin in `main` looks like
+  it stages outbound updates by tick index but the cases aren't
+  fully decomp'd yet.
+- **Long-frame payload format inside `G_LONG_BUF`** is unmapped —
+  needs `FUN_080039E6` (the OTA-page consumer) decomp'd first.
+- **`G_5A_TARGET`** is the cmd 0x5A shift-direction byte; its consumer
+  is `motor_drive_step` (`0x080036D4`, now decomp'd). The motor's
+  H-bridge driver `motor_h_bridge_set` (`FUN_080032FA`, 210 B) is
+  still pending — it'll reveal the exact PA9/PA10 bit semantics for
+  each of the 0xF0 / 0x0F / 0xFF mask patterns.
+
+## Sources
+
+- `~/ghidra_scripts/DecompileOne.java <addr>` reproduces each entry.
+- The literal pools at `0x080041FC..0x080045B7` carry the global
+  addresses; resolve with `PeekBytes.java`.
+- Cross-reference with `hardware.md` for the RAM-side semantics of
+  every global named here.
