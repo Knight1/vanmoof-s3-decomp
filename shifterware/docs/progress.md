@@ -24,10 +24,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  92 | ~82% |
+| pending      |  90 | ~80% |
 | in-progress  |   0 |   0 |
 | named        |   5 | ~3% |
-| decomp-c     |  32 | ~18% |
+| decomp-c     |  34 | ~19% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -39,7 +39,7 @@ Decomp'd so far:
 - **util** (`src/util.c`): `memcpy` (36 B, non-standard `void` return)
 - **image** (`src/image.c`): `image_verify_crc` (100 B), `image_apply` (92 B), `report_image_status` (64 B)
 - **flash_store** (`src/flash_store.c`): `flash_unlock` (12 B), `flash_lock` (14 B), `flash_clear_status` (6 B), `flash_erase_page` (32 B), `flash_erase_pages` (32 B), `flash_get_status` (54 B), `flash_busy_step` (26 B), `flash_wait_status` (44 B), `flash_do_page_erase` (72 B)
-- **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B)
+- **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
 Named (in Ghidra) but no C yet:
@@ -174,7 +174,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x0800373a` |   28 | `modbus_send_bytes` | modbus | decomp-c | loops `uart1_send_byte` |
 | `0x08003756` |   54 | `modbus_tx_finalize` | modbus | decomp-c | send buf; if len==7 && img_ok, SYSRESETREQ |
 | `0x0800378c` |   64 | `modbus_crc16_compute` | modbus | decomp-c | poly 0xA001, init 0xFFFF; stores lo/hi at `0x200000E7`/`E8` |
-| `0x080037cc` |   70 | `FUN_080037cc` |  | pending |  |
+| `0x080037cc` |   70 | `modbus_reply_passthrough` | modbus | decomp-c | echo RX[0..5] + CRC over UART1, len=8 |
 | `0x08003812` |   32 | `flash_erase_page` | flash_store | decomp-c | unlock + clear-flags + inner-erase + clear-EOP + lock |
 | `0x08003852` |   70 | `FUN_08003852` |  | pending |  |
 | `0x08003898` |   54 | `FUN_08003898` |  | pending |  |
@@ -199,7 +199,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x0800450c` |   62 | `USART1_IRQHandler` | uart | decomp-c | RX byte → ring buffer; created in this round |
 | `0x080041c6` |   88 | `FUN_080041c6` |  | pending |  |
 | `0x0800428e` |   72 | `FUN_0800428e` |  | pending |  |
-| `0x080044dc` |   20 | `FUN_080044dc` |  | pending |  |
+| `0x080044dc` |   20 | `modbus_tick` | modbus | decomp-c | decrement-if-nonzero on inter-byte timeout @ `0x200000C4` |
 | `0x080045b8` |  106 | `FUN_080045b8` |  | pending |  |
 | `0x08004622` |    8 | `FUN_08004622` |  | pending |  |
 | `0x0800462a` |   66 | `FUN_0800462a` |  | pending |  |

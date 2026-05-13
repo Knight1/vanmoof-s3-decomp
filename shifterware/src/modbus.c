@@ -17,8 +17,20 @@
 #define MODBUS_CRC_HI   (*(volatile uint8_t *)0x200000E8u)
 
 /* Module-local TX buffer (max length determined by the longest PDU
- * the shifter ever emits — TBD; ≥7 bytes per `report_image_status`). */
+ * the shifter ever emits — TBD; ≥8 bytes per `modbus_reply_passthrough`). */
 #define MODBUS_TX_BUF   ((uint8_t *)0x200001A9u)
+
+/* Module-local RX scratch / inbound PDU buffer. The dispatcher in
+ * FUN_08003c9a fills this from UART1 RX and then either reads fields
+ * out of it (`report_image_status` cherry-picks specific offsets) or
+ * forwards the first 6 bytes back as a passthrough reply
+ * (`modbus_reply_passthrough`). */
+#define MODBUS_RX_BUF   ((const volatile uint8_t *)0x200000C8u)
+
+/* Inter-byte timeout counter, decremented once per system tick by
+ * `modbus_tick`. The dispatcher uses it to detect end-of-frame per
+ * Modbus RTU's 3.5-character idle rule. */
+#define MODBUS_TICK_CTR (*(volatile uint32_t *)0x200000C4u)
 
 /* Latch set by `image_apply` when the staged image validates clean.
  * `modbus_tx_finalize` consumes it after a 7-byte transmit to trigger
@@ -55,6 +67,39 @@ void modbus_send_bytes(const uint8_t *buf, unsigned len)
         uart1_send_byte(*buf++);
         len--;
     }
+}
+
+/* OEM @ 0x080044DC (20 B). Decrement-if-nonzero on the inter-byte
+ * timeout counter. Called from a periodic ISR (likely SysTick or TIM2)
+ * once per tick. */
+void modbus_tick(void)
+{
+    if (MODBUS_TICK_CTR != 0u) {
+        MODBUS_TICK_CTR = MODBUS_TICK_CTR - 1u;
+    }
+}
+
+/* OEM @ 0x080037CC (70 B). Forward the first 6 bytes of the inbound
+ * Modbus PDU back as the reply payload: copy RX[0..5] → TX[0..5],
+ * append CRC at TX[6..7], transmit 8 bytes. Used by the RX dispatcher
+ * for echo-style responses where the same header bytes ride back. */
+void modbus_reply_passthrough(void)
+{
+    uint8_t *const tx = MODBUS_TX_BUF;
+
+    tx[0] = MODBUS_RX_BUF[0];
+    tx[1] = MODBUS_RX_BUF[1];
+    tx[2] = MODBUS_RX_BUF[2];
+    tx[3] = MODBUS_RX_BUF[3];
+    tx[4] = MODBUS_RX_BUF[4];
+    tx[5] = MODBUS_RX_BUF[5];
+
+    modbus_crc16_compute(tx, 6);
+
+    tx[6] = MODBUS_CRC_LO;
+    tx[7] = MODBUS_CRC_HI;
+
+    modbus_tx_finalize(8u);
 }
 
 /* OEM @ 0x08003756 (54 B). */

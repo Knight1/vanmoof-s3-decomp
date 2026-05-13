@@ -22,4 +22,13 @@ void modbus_send_bytes(const uint8_t *buf, unsigned len);
  * install the freshly-validated image. */
 void modbus_tx_finalize(unsigned len);
 
+/* Decrement the Modbus inter-byte timeout counter. Wire this into a
+ * periodic ISR (SysTick or the bus-frame timer). */
+void modbus_tick(void);
+
+/* Build and send an 8-byte reply: echo the first 6 bytes of the
+ * inbound PDU buffer, then 2 bytes of CRC. Used by the RX dispatcher
+ * for passthrough/echo responses. */
+void modbus_reply_passthrough(void);
+
 #endif /* SHIFTER_MODBUS_H */
