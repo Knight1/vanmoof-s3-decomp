@@ -41,4 +41,10 @@ void gpio_pin_clear(gpio_t *port, uint8_t pin);
 void gpio_pin_write(gpio_t *port, uint8_t pin, bool value);
 bool gpio_pin_read(const gpio_t *port, uint8_t pin);
 
+/* OEM-confirmed helpers (see gpio.c). Defined against raw register
+ * offsets to bypass the speculative `gpio_t` struct. */
+bool gpio_idr_test(void *port, uint32_t mask);
+bool input_pa0(void);
+bool input_pa1(void);
+
 #endif /* SHIFTER_GPIO_H */

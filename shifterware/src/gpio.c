@@ -86,3 +86,27 @@ bool gpio_pin_read(const gpio_t *port, uint8_t pin)
 {
     return (port->IDR & (1u << (pin & 0xFu))) != 0u;
 }
+
+/* ---- OEM-confirmed GPIO helpers ----------------------------------- */
+
+/* OEM @ 0x08004DBC (20 B). Test masked bits in the IDR of an
+ * STM32F1-style GPIO port. Accesses the register by raw byte offset
+ * (0x08) to bypass the speculative `gpio_t` struct, whose IDR field
+ * is laid out at the STM32F0 offset (0x10) and so would point at the
+ * wrong register on this MCU. Plan-2 will fix `gpio_t` itself. */
+bool gpio_idr_test(void *port, uint32_t mask)
+{
+    return (*(volatile uint32_t *)((char *)port + 0x08u) & mask) != 0u;
+}
+
+/* OEM @ 0x0800325C (22 B). True iff GPIOA pin 0 reads high. */
+bool input_pa0(void)
+{
+    return gpio_idr_test((void *)0x48000000u, 0x1u);
+}
+
+/* OEM @ 0x080033CC (22 B). True iff GPIOA pin 1 reads high. */
+bool input_pa1(void)
+{
+    return gpio_idr_test((void *)0x48000000u, 0x2u);
+}

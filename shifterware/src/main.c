@@ -49,6 +49,7 @@
 #include "uart.h"
 #include "modbus.h"
 #include "util.h"
+#include "gpio.h"
 #include "mm32f031.h"
 #include <stdint.h>
 
@@ -105,8 +106,9 @@ static void set_nvic_priority(int p)             { (void)p; TRAP_VOID(); } /* OE
 static int  boot_hash(const void *p, uint32_t n) { (void)p; (void)n; TRAP_RET(0); } /* OEM @ 0x08005D40 (44 B) */
 static void boot_apply_hash(uint16_t v, int t)   { (void)v; (void)t; TRAP_VOID(); } /* OEM @ 0x08004048 (96 B) */
 
-static bool sched_check_idle(void)               { TRAP_RET(false); } /* OEM @ 0x080033CC (22 B) */
-static bool sched_check_ready(void)              { TRAP_RET(false); } /* OEM @ 0x0800325C (22 B) */
+/* OEM @ 0x080033CC and 0x0800325C are `input_pa1` / `input_pa0` in
+ * gpio.c — thin wrappers over `gpio_idr_test`. Calls below go direct
+ * to those instead of through a sched_ alias. */
 
 /* OEM @ 0x080035BE (74 B). Return the current state-machine value at
  * G_STATE_FC, clamped to 6 (the highest valid round-robin case). The
@@ -214,15 +216,16 @@ int main(void)
         boot_apply_hash((uint16_t)((unsigned)h - 1u), 99);
     }
 
-    /* Pre-loop state-machine sync. */
-    if (G_STATE_FC == 2u && sched_check_idle()) {
+    /* Pre-loop state-machine sync. PA1 gates a 2→1 demotion and the
+     * latch-into-2 path; PA0's level is mirrored into G_STATE_13B. */
+    if (G_STATE_FC == 2u && input_pa1()) {
         G_STATE_FC = 1u;
     }
-    if (G_STATE_115 != 1u && !sched_check_idle()) {
+    if (G_STATE_115 != 1u && !input_pa1()) {
         G_STATE_115 = 1u;
         G_STATE_FC  = 2u;
     }
-    G_STATE_13B = (uint8_t)sched_check_ready();
+    G_STATE_13B = (uint8_t)input_pa0();
 
     /* Super-loop. */
     for (;;) {
