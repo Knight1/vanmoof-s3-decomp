@@ -24,15 +24,17 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  87 | ~76% |
+| pending      |  86 | ~73% |
 | in-progress  |   0 |   0 |
 | named        |   6 | ~4% |
-| decomp-c     |  36 | ~24% |
+| decomp-c     |  37 | ~28% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
-_Total functions: 129 (the `USART1_IRQHandler` at `0x0800450C` was
-created in the previous round)._
+_Total functions: 130 (the `USART1_IRQHandler` at `0x0800450C` was
+created in an earlier round; `main` at `0x080042D6` was created when
+the call site `bl modbus_rx_poll` at 0x08004366 led us to its entry —
+the byte immediately after `FUN_0800428E`'s `pop {r4,pc}` epilogue)._
 
 Decomp'd so far:
 - **crc** (`src/crc.c`): `crc_reset` (8 B), `crc32_word` (24 B), `crc32_words` (32 B)
@@ -42,6 +44,7 @@ Decomp'd so far:
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
 - **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 5 case-helper stubs awaiting their own decomp; `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher. Caller of `modbus_rx_poll` is at `0x08004366` (currently in no enclosing function — the main scheduler isn't decomp'd yet).
 - **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
+- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6) — boot sequence (`.data` init, RCC/NVIC bring-up, UART init at 9600 baud, boot integrity check, pre-loop state-machine sync) followed by the super-loop (`sched_pick_task`/`modbus_rx_poll`/`sched_pre_task`, tick-gated round-robin task dispatch, 0x32-tick 5C consumer trigger, 2000-tick counter rollover). The super-loop is structurally complete; 14 helper functions called from main are trap-stubbed pending their own decomp (with OEM addresses noted at each stub).
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
 Named (in Ghidra) but no C yet:
@@ -202,6 +205,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x0800450c` |   62 | `USART1_IRQHandler` | uart | decomp-c | RX byte → ring buffer; created in this round |
 | `0x080041c6` |   88 | `FUN_080041c6` |  | pending |  |
 | `0x0800428e` |   72 | `FUN_0800428e` |  | pending |  |
+| `0x080042d6` |  484 | `main` | main | decomp-c | boot + super-loop; 14 helper trap-stubs noted at OEM addresses |
 | `0x080044dc` |   20 | `modbus_tick` | modbus | decomp-c | decrement-if-nonzero on inter-byte timeout @ `0x200000C4` |
 | `0x080045b8` |  106 | `FUN_080045b8` |  | pending |  |
 | `0x08004622` |    8 | `FUN_08004622` |  | pending |  |
