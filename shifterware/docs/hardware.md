@@ -18,22 +18,44 @@ register-access patterns).
 | PA1  | Input (digital read) | Gates `G_STATE_FC` 2→1 demotion and the latch-into-2 path in `main`. Read 9+ times across self-tests and the round-robin state-task helper. Likely the second of a pair with PA0. | `input_pa1` @ `0x080033CC` |
 | PB6  | Output, AF0 | USART1 TX. Configured by `uart1_init` for output 50 MHz alt-push-pull (CRL nibble = 0xB). | `uart1_init` @ `0x08004130` |
 | PB7  | Input, AF0 | USART1 RX. Configured for floating input (CRL nibble = 0x4). | `uart1_init` @ `0x08004130` |
-| PA9  | Output (digital write) | Half of the motor-drive H-bridge — toggled via BSRR/BRR by `motor_h_bridge_set` (`FUN_080032FA`). Pattern bytes 0xF0 / 0x0F / 0xFF drive forward / reverse / brake. | `motor_drive_step` @ `0x080036D4` via `FUN_080032FA` |
-| PA10 | Output (digital write) | Other half of the H-bridge — pair-driven with PA9. | same |
+| PA9  | Output (digital write) | "Forward" half of the motor H-bridge. Driven via BSRR/BRR by `motor_h_bridge_set`. Forward drive sets PA9 HIGH and PA10 LOW; reverse drive sets PA9 LOW and PA10 HIGH; brake sets both HIGH. | `motor_h_bridge_set` @ `0x080032FA` |
+| PA10 | Output (digital write) | "Reverse" half of the H-bridge — pair-driven with PA9. | same |
 
 PA0 / PA1 are the only digital inputs read in code so far. The e-Shifter
 typically uses a multi-position sensor for current-gear detection — PA0
 / PA1 are very plausibly two of its lines, but a schematic or board
 trace-out is needed to be certain.
 
-PA9 / PA10 are the motor-drive outputs. The OEM never writes any other
-GPIO output, which is consistent with a single H-bridge driving a DC
-motor or solenoid (the gear-actuator of the e-Shifter). Bit-pattern
-semantics still need verification on hardware — current best guess:
-`0xF0` = forward (PA9 high, PA10 low via BSRR/BRR pair), `0x0F` =
-reverse, `0xFF` = brake (both high). `motor_h_bridge_set` itself is
-not yet decomp'd; once it is, fold the exact bit→pin mapping back in
-here.
+PA9 / PA10 are the motor-drive outputs (a single H-bridge driving the
+gear actuator). With `motor_h_bridge_set` now decomp'd, the exact
+bit mapping is confirmed:
+- `0xF0` → PA9 HIGH, PA10 LOW = forward drive
+- `0x0F` → PA9 LOW, PA10 HIGH = reverse drive
+- `0xFF` → PA9 HIGH, PA10 HIGH = brake (both H-bridge halves high
+  shorts the motor through the bridge's high-side switches)
+- anything else → no GPIO change (callers won't pass other values)
+
+Drive cases also kick `motor_aux_kick` (`FUN_080032A4`, still pending
+decomp), which is where the gear-position counter (`G_STATE_115`)
+advances and PA0 is sampled into `G_STATE_13B`.
+
+### Motion-complete: sensor or timeout?
+
+Interesting reverse-engineering finding: `G_MOTION_REACHED` is the
+signal `motor_drive_step` waits on to stop the motor, but it's set
+by **two** independent paths — once by the H-bridge driver itself
+as a **stall timeout**, and once by something else (likely an
+EXTI on the position-sensor edge, but not yet decomp'd). The
+timeout limits inside `motor_h_bridge_set` are:
+- 200 ticks of `G_TICK_B` if the active round-robin task is `#2`
+  (state-task 2 is presumably the "active shift" task);
+- 2000 ticks otherwise.
+
+So even if the position sensor on PA0 misses an edge, the motor is
+guaranteed to be braked after at most ~2 seconds (assuming
+`G_TICK_B` runs at ~1 kHz, which is the typical SysTick on this
+MCU). That gives the protocol a hard upper bound on how long a
+shift command can keep the bridge energised.
 
 ## Confirmed peripheral instances
 
@@ -107,13 +129,16 @@ without a comment are still single-purpose unknowns.
 | `0x20000104` | `uint32_t` | `G_TICK_A` | "Compare" tick counter advanced in lockstep with `G_TICK_B` by the super-loop. |
 | `0x20000108` | `uint32_t` | `G_TICK_PREV_B` | Last-iteration snapshot of `G_TICK_B`; used for the 2000-tick rollover detector. |
 | `0x20000110` | `uint32_t` | `G_5C_DEADLINE_BASE` | Tick value captured when the 5C-busy latch goes high; the consumer fires when `G_TICK_B - this == 0x32`. |
+| `0x20000114` | `uint8_t` | `G_FLAG_114` | Per-task flag cleared at the tail of every state-task by `state_flags_reset`. Producer not yet identified. |
+| `0x2000010C` | `uint32_t` | `G_MOTOR_RUN_START` | `G_TICK_B` snapshot at the moment the H-bridge was last energised. Used by `motor_h_bridge_set` to time the stall-timeout fallback. |
 | `0x20000115` | `uint8_t` | `G_STATE_115` | Latched 1 during pre-loop sync the first time PA1 reads low. |
 | `0x20000116` | `uint8_t` | `G_FLAG_116` | Snapshot of `G_FLAG_117` in the "extra task" branch of the round-robin. |
 | `0x20000117` | `uint8_t` | `G_FLAG_117` (a.k.a. `G_14_FLAG_A`) | Set to 1 by cmd 0x14 (when `G_MODE == 0`). |
 | `0x20000118` | `uint8_t` | `G_TASK_ID` | Stamped to one of {2, 4, 5, 7, 8} by the round-robin case handlers — a "what task ran this tick" marker. |
-| `0x20000130` | `uint8_t[2]` | `G_5C_LATCH_PAIR` | `[0]` purpose unknown; `[1]` = `G_5C_LATCH_BYTE` (1 once the deadline is captured, cleared after `FUN_080031E6` fires). |
-| `0x20000139` | `uint8_t` | `G_MODE` | Gates cmd 0x14 and cmd 0x5A handlers + the 2000-tick rollover. 0 = normal, otherwise = held mode. |
-| `0x2000013A` | `uint8_t` | `G_MOTION_REACHED` | Position-sensor latch: 1 = the motor has reached the commanded position. Consumed by `motor_drive_step` to terminate the move and stamp `G_5A_TARGET = 2`. Producer not yet decomp'd (likely set in an EXTI or the `sched_task_alpha` self-test cascade). |
+| `0x20000130` | `uint8_t` | `G_MOTOR_RUN_LATCH` | 1 once `G_MOTOR_RUN_START` has been captured this run; set by `motor_h_bridge_set` on its first call after energising. Cleared by `state_flags_reset` at the end of each state-task. |
+| `0x20000131` | `uint8_t` | `G_5C_LATCH_BYTE` | 1 once the 5C-consumer deadline has been captured; set by `main`'s post-loop bookkeeping, cleared after `FUN_080031E6` fires. |
+| `0x20000139` | `uint8_t` | `G_MOTOR_RUNNING` | 1 = H-bridge driving (set by `motor_h_bridge_set`), 0 = braked/idle. Gates cmd 0x14 and cmd 0x5A handlers (so the bike can't preempt an active shift) and the 2000-tick rollover in `main`. |
+| `0x2000013A` | `uint8_t` | `G_MOTION_REACHED` | The "motor has arrived" signal that `motor_drive_step` waits on. Set from **two** independent paths: (a) `motor_h_bridge_set`'s stall-timeout fallback (200 ticks in task #2, 2000 otherwise), and (b) some not-yet-decomp'd consumer of the position sensor (likely an EXTI ISR). Cleared by `state_flags_reset`. |
 | `0x2000013B` | `uint8_t` | `G_STATE_13B` | Boot snapshot of PA0. |
 | `0x2000013C` | `uint8_t` | `G_5C_BUSY` | 1 = the 0x32-tick 5C-consume countdown is active in `main`'s post-loop bookkeeping. |
 | `0x2000013D` | `uint8_t` | `G_FLAG_13D` (a.k.a. `G_14_FLAG_B`) | Set/cleared by cmd 0x14 depending on `G_MODE`; gates `sched_task_beta` in several round-robin cases. |

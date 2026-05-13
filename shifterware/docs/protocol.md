@@ -117,8 +117,8 @@ switch as a `__gnu_thumb1_case_uqi` jump table.
 | `cmd` | `len` | Effect |
 | ----- | ----- | ------ |
 | `0x0F` | 6 | Emit a uint32_t report via the not-yet-decomp'd `cmd_0f_report_u32(G_COUNTER)` chain (OEM `FUN_08003C68` → `FUN_08003C1C`). |
-| `0x14` | 6 | When `G_MODE == 0`: `G_COUNTER++`, set `G_14_FLAG_A = 1`, `G_14_FLAG_B = 1`. Otherwise: clear `G_14_FLAG_B`. |
-| `0x5A` | 6 | When `G_MODE == 0`: copy `G_RX_BUF[5]` into `G_5A_TARGET` (`0x200000EA`). Encodes the shift direction (0 = forward, 1 = reverse) consumed by the per-iteration motor servoing step (`motor_drive_step`) in `main`. Once the motor reaches position, `G_5A_TARGET` self-latches to 2 ("arrived"). |
+| `0x14` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): `G_COUNTER++`, set `G_14_FLAG_A = 1`, `G_14_FLAG_B = 1`. Otherwise: clear `G_14_FLAG_B`. The motor-running gate prevents the bike from incrementing the counter mid-shift. |
+| `0x5A` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): copy `G_RX_BUF[5]` into `G_5A_TARGET`. Encodes the shift direction (0 = forward, 1 = reverse) consumed by the per-iteration motor servoing step (`motor_drive_step`) in `main`. Once the motor reaches position (or the stall timeout fires), `G_5A_TARGET` self-latches to 2 ("arrived"). |
 | `0x5B` | 6 | Run `FUN_08003BC4` — a 3-level self-test cascade that emits one of `{0, 0x32, 0x64, 0x96}` via `FUN_08003B9E`. |
 | `0x5C` | 3 | `cmd_5c_write3(G_5C_REGS[0..2])` → `FUN_08003B86`, which fans three bytes into RAM slots and calls `report_image_status`. |
 | `0x5C` | 0x0F | Copy `G_RX_BUF[2]`, `[4]`, `[5]` into `G_5C_REGS[0..2]` and call `cmd_5c_consume` → `FUN_080031E6`. |
@@ -157,11 +157,13 @@ After the case body, dispatch always:
   fully decomp'd yet.
 - **Long-frame payload format inside `G_LONG_BUF`** is unmapped —
   needs `FUN_080039E6` (the OTA-page consumer) decomp'd first.
-- **`G_5A_TARGET`** is the cmd 0x5A shift-direction byte; its consumer
-  is `motor_drive_step` (`0x080036D4`, now decomp'd). The motor's
-  H-bridge driver `motor_h_bridge_set` (`FUN_080032FA`, 210 B) is
-  still pending — it'll reveal the exact PA9/PA10 bit semantics for
-  each of the 0xF0 / 0x0F / 0xFF mask patterns.
+- **`G_5A_TARGET`** is the cmd 0x5A shift-direction byte; its
+  consumer is `motor_drive_step` → `motor_h_bridge_set`, both
+  decomp'd. The exact PA9/PA10 bit mapping for each mask is now
+  documented in `hardware.md`. The motor-running gate on cmd 0x14
+  and cmd 0x5A means the bike can't change the shift target
+  mid-move; it must wait for `G_5A_TARGET` to self-latch back to
+  the "arrived" state.
 
 ## Sources
 

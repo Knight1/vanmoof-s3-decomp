@@ -46,7 +46,7 @@
 #define G_COUNTER       (*(volatile uint32_t *)0x200000F8u) /* incremented in case 0x14 */
 #define G_5C_REGS       ((volatile uint8_t   *)0x20000100u) /* 3-byte register block */
 #define G_14_FLAG_A     (*(volatile uint8_t  *)0x20000117u)
-#define G_MODE          (*(volatile uint8_t  *)0x20000139u) /* gates 0x14, 0x5A */
+#define G_MOTOR_RUNNING (*(volatile uint8_t  *)0x20000139u) /* 1 = H-bridge driving (set by motor_h_bridge_set); gates cmd 0x14 and cmd 0x5A so the bike can't preempt an active shift */
 #define G_14_FLAG_B     (*(volatile uint8_t  *)0x2000013Du)
 #define G_OTA_OFF_LO    (*(volatile uint8_t  *)0x2000013Fu) /* OTA staging offset (lo) */
 #define G_OTA_OFF_HI    (*(volatile uint8_t  *)0x20000140u) /* OTA staging offset (hi) */
@@ -125,7 +125,7 @@ void modbus_dispatch_pdu(uint8_t cmd, uint8_t len)
         break;
 
     case 0x14u:
-        if (G_MODE == 0u) {
+        if (G_MOTOR_RUNNING == 0u) {
             G_COUNTER  = G_COUNTER + 1u;
             G_14_FLAG_A = 1u;
             G_14_FLAG_B = 1u;
@@ -135,7 +135,7 @@ void modbus_dispatch_pdu(uint8_t cmd, uint8_t len)
         break;
 
     case 0x5Au:
-        if (G_MODE == 0u) {
+        if (G_MOTOR_RUNNING == 0u) {
             G_5A_TARGET = G_RX_BUF[5];
         }
         break;

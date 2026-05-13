@@ -82,7 +82,9 @@
 #define G_5C_BUSY           (*(volatile uint8_t  *)0x2000013Cu)
 #define G_5C_DEADLINE_BASE  (*(volatile uint32_t *)0x20000110u)
 #define G_5C_LATCH_BYTE     (*(volatile uint8_t  *)0x20000131u)  /* 0x20000130 + 1 */
-#define G_MODE              (*(volatile uint8_t  *)0x20000139u)
+#define G_MOTOR_RUNNING     (*(volatile uint8_t  *)0x20000139u)  /* 1 = H-bridge driving, 0 = braked/idle */
+#define G_MOTOR_RUN_START   (*(volatile uint32_t *)0x2000010Cu)  /* G_TICK_B at the moment the motor was last energised */
+#define G_MOTOR_RUN_LATCH   (*(volatile uint8_t  *)0x20000130u)  /* 1 once G_MOTOR_RUN_START has been captured this run */
 
 #define RX_TICK_ROLLOVER    2000u   /* OEM literal: movs r1,#0x7d; lsls r1,#4 → 0x7D0 = 2000 */
 #define SCHED_5C_WAIT_TICKS 0x32u   /* ~50 ticks before firing the 5C consumer */
@@ -120,15 +122,80 @@ static uint8_t sched_pick_task(void)
     const uint8_t v = G_STATE_FC;
     return v > 6u ? 6u : v;
 }
-/* OEM @ 0x080032FA (210 B). H-bridge mask driver — toggles PA9/PA10
- * (both GPIOA outputs) per the input nibble pattern. Decomp pending;
- * stubbed for now. Observed inputs: 0xF0, 0x0F, 0xFF (forward / reverse
- * / brake). */
-static void motor_h_bridge_set(uint8_t mask) { (void)mask; TRAP_VOID(); } /* OEM @ 0x080032FA (210 B) */
+/* OEM @ 0x080032A4 (86 B). Auxiliary motor-step kicker — reads the
+ * position sensor (via input_pa0 + FUN_08003272/FUN_08003288 chain)
+ * and advances G_STATE_115 (gear position counter). Pending. */
+static void motor_aux_kick(void) { TRAP_VOID(); } /* OEM @ 0x080032A4 (86 B) */
 
-/* OEM @ 0x0800315E (26 B). Status/ack report fired by motor_drive_step
- * once the move-complete latch is captured. */
-static void report_motion_done(void) { TRAP_VOID(); }
+/* OEM @ 0x080032FA (210 B). H-bridge mask driver.
+ *
+ * Three bridge configurations are recognised — anything else is a
+ * no-op for the GPIOs:
+ *   `0x0F` → PA9 LOW,  PA10 HIGH — drive "reverse" half
+ *   `0xF0` → PA9 HIGH, PA10 LOW  — drive "forward" half
+ *   `0xFF` → PA9 HIGH, PA10 HIGH — brake (both halves high)
+ *
+ * The drive cases additionally kick `motor_aux_kick` (advances the
+ * gear-position counter) and set `G_MOTOR_RUNNING = 1`. The brake
+ * case clears `G_MOTOR_RUNNING = 0`.
+ *
+ * Once the motor is running, every call enforces a stall timeout:
+ * `G_TICK_B` is snapshotted into `G_MOTOR_RUN_START` on the first
+ * call after energising, then on subsequent calls the elapsed
+ * tick count is compared against a per-task limit (200 ticks for
+ * round-robin task #2, 2000 ticks otherwise). Exceeding the limit
+ * sets `G_MOTION_REACHED = 1`, which `motor_drive_step` will see
+ * on the next iteration and use to brake + latch arrival.
+ */
+static void motor_h_bridge_set(uint8_t mask)
+{
+    void *const gpioa = (void *)0x48000000u;
+    if (mask == 0x0Fu) {
+        gpio_brr_write (gpioa, 1u << 9);   /* PA9 LOW  */
+        gpio_bsrr_write(gpioa, 1u << 10);  /* PA10 HIGH */
+        motor_aux_kick();
+        G_MOTOR_RUNNING = 1u;
+    } else if (mask == 0xF0u) {
+        gpio_bsrr_write(gpioa, 1u << 9);   /* PA9 HIGH */
+        gpio_brr_write (gpioa, 1u << 10);  /* PA10 LOW  */
+        motor_aux_kick();
+        G_MOTOR_RUNNING = 1u;
+    } else if (mask == 0xFFu) {
+        gpio_bsrr_write(gpioa, 1u << 9);   /* PA9 HIGH */
+        gpio_bsrr_write(gpioa, 1u << 10);  /* PA10 HIGH (brake) */
+        G_MOTOR_RUNNING = 0u;
+    }
+
+    if (G_MOTOR_RUNNING == 1u) {
+        if (G_MOTOR_RUN_LATCH == 0u) {
+            G_MOTOR_RUN_START = G_TICK_B;
+            G_MOTOR_RUN_LATCH = 1u;
+        }
+        const uint32_t elapsed = G_TICK_B - G_MOTOR_RUN_START;
+        const uint32_t limit   = (G_TASK_ID == 2u) ? 199u : 1999u;
+        if (elapsed > limit) {
+            G_MOTION_REACHED = 1u;
+        }
+    }
+}
+
+/* OEM @ 0x0800315E (26 B). Clear the shared per-task flag bytes once
+ * the active state-task is done. Called by `motor_drive_step` at
+ * arrival, `cmd_5c_consume` at end of its 3-byte register write, and
+ * the three round-robin task helpers (`sched_task_alpha`,
+ * `sched_task_beta`, `FUN_08003538`) at their tails. Bytes cleared:
+ * `G_FLAG_114` (0x20000114, purpose TBD), `G_MOTION_REACHED`,
+ * `G_FLAG_13D`, `G_FLAG_13E`, and both bytes of `G_5C_LATCH_PAIR`
+ * (`0x20000130`/`0x20000131`). */
+static void state_flags_reset(void)
+{
+    *(volatile uint8_t *)0x20000114u = 0u;
+    G_MOTION_REACHED = 0u;
+    G_FLAG_13D       = 0u;
+    G_FLAG_13E       = 0u;
+    *(volatile uint8_t *)0x20000131u = 0u;
+    *(volatile uint8_t *)0x20000130u = 0u;
+}
 
 /* OEM @ 0x080036D4 (74 B). Per-iteration motor servoing step.
  *
@@ -154,7 +221,7 @@ static void motor_drive_step(uint8_t target)
         if (G_TASK_ID == 2u) {
             G_STATE_FC = 1u;
         }
-        report_motion_done();
+        state_flags_reset();
     }
 }
 static void    sched_default_post(void)          { TRAP_VOID(); } /* OEM @ 0x080036BA (26 B) */
@@ -286,7 +353,7 @@ int main(void)
             }
         }
 
-        if (G_MODE == 0u && (G_TICK_B - G_TICK_PREV_B == RX_TICK_ROLLOVER)) {
+        if (G_MOTOR_RUNNING == 0u && (G_TICK_B - G_TICK_PREV_B == RX_TICK_ROLLOVER)) {
             G_TICK_B      = 0u;
             G_TICK_D4     = 0u;
             G_TICK_A      = 0u;

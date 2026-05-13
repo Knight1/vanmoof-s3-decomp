@@ -110,3 +110,15 @@ bool input_pa1(void)
 {
     return gpio_idr_test((void *)0x48000000u, 0x2u);
 }
+
+/* OEM @ 0x08004DF4 (4 B). Raw BSRR write (sets bits at offset 0x10). */
+void gpio_bsrr_write(void *port, uint32_t mask)
+{
+    *(volatile uint32_t *)((char *)port + 0x10u) = mask;
+}
+
+/* OEM @ 0x08004DF8 (4 B). Raw BRR write (clears bits at offset 0x14). */
+void gpio_brr_write(void *port, uint32_t mask)
+{
+    *(volatile uint32_t *)((char *)port + 0x14u) = mask;
+}

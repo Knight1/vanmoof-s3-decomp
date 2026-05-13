@@ -28,10 +28,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  81 | ~69% |
+| pending      |  77 | ~65% |
 | in-progress  |   0 |   0 |
 | named        |   6 | ~4% |
-| decomp-c     |  42 | ~28% |
+| decomp-c     |  46 | ~33% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -48,8 +48,8 @@ Decomp'd so far:
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
 - **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 5 case-helper stubs awaiting their own decomp; `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher. Caller of `modbus_rx_poll` is at `0x08004366` (currently in no enclosing function — the main scheduler isn't decomp'd yet).
 - **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
-- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6) — boot sequence (`.data` init, RCC/NVIC bring-up, UART init at 9600 baud, boot integrity check, pre-loop state-machine sync) followed by the super-loop (`sched_pick_task`/`modbus_rx_poll`/`motor_drive_step`, tick-gated round-robin task dispatch, 0x32-tick 5C consumer trigger, 2000-tick counter rollover). `sched_pick_task` (74 B, OEM @ 0x080035BE — returns `min(G_STATE_FC, 6)`) and `motor_drive_step` (74 B, OEM @ 0x080036D4 — drives the H-bridge per `G_5A_TARGET`, brakes & latches on motion-reached) are now real; 11 other helper functions called from main remain trap-stubbed (`motor_h_bridge_set` and `report_motion_done` are new stubs added by this round).
-- **gpio** (`src/gpio.c`): three new OEM-confirmed helpers added alongside the pre-existing speculative API — `gpio_idr_test` (20 B, OEM @ 0x08004DBC — tests masked bits in a port's IDR by raw offset 0x08, bypassing the speculative `gpio_t` struct), `input_pa0` (22 B, OEM @ 0x0800325C), `input_pa1` (22 B, OEM @ 0x080033CC). The two input wrappers gate state-machine transitions in `main` and the not-yet-decomp'd self-test in `FUN_08003BC4`.
+- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`). 11 helpers still trap-stubbed; `motor_aux_kick` (86 B, OEM @ 0x080032A4) is the newest stub (reads position sensor + bumps `G_STATE_115`).
+- **gpio** (`src/gpio.c`): five OEM-confirmed helpers added alongside the pre-existing speculative API — `gpio_idr_test` (20 B, OEM @ 0x08004DBC), `input_pa0` (22 B, OEM @ 0x0800325C), `input_pa1` (22 B, OEM @ 0x080033CC), `gpio_bsrr_write` (4 B, OEM @ 0x08004DF4 — raw BSRR set), `gpio_brr_write` (4 B, OEM @ 0x08004DF8 — raw BRR clear). All five use raw byte offsets, bypassing the still-broken speculative `gpio_t` struct (plan-2).
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
 Named (in Ghidra) but no C yet:
@@ -165,14 +165,14 @@ targets land in vectors 38–47 once the dump is fixed.
 | --- | --- | --- | --- | --- | --- |
 | `0x080030e4` |    4 | `FUN_080030e4` |  | pending |  |
 | `0x080030f0` |  110 | `FUN_080030f0` |  | pending |  |
-| `0x0800315e` |   26 | `FUN_0800315e` |  | pending |  |
+| `0x0800315e` |   26 | `state_flags_reset` | main | decomp-c | clears 6 shared task-flag bytes; called by 5 different state-tasks at their tails |
 | `0x08003178` |  110 | `FUN_08003178` |  | pending |  |
 | `0x080031e6` |  118 | `FUN_080031e6` |  | pending |  |
 | `0x0800325c` |   22 | `input_pa0` | gpio | decomp-c | reads GPIOA IDR bit 0 |
 | `0x08003272` |   22 | `FUN_08003272` |  | pending |  |
 | `0x08003288` |   28 | `FUN_08003288` |  | pending |  |
 | `0x080032a4` |   86 | `FUN_080032a4` |  | pending |  |
-| `0x080032fa` |  210 | `FUN_080032fa` |  | pending |  |
+| `0x080032fa` |  210 | `motor_h_bridge_set` | main | decomp-c | PA9/PA10 H-bridge driver with stall-timeout fallback |
 | `0x080033cc` |   22 | `input_pa1` | gpio | decomp-c | reads GPIOA IDR bit 1 |
 | `0x080033e2` |  196 | `FUN_080033e2` |  | pending |  |
 | `0x080034a6` |   60 | `FUN_080034a6` |  | pending |  |
@@ -234,8 +234,8 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08004c64` |  106 | `FUN_08004c64` |  | pending |  |
 | `0x08004cce` |  222 | `gpio_pin_configure` | uart | decomp-c | CRL/CRH 4-bit MODE+CNF per pin, plus optional BSRR/BRR initial level |
 | `0x08004dbc` |   20 | `gpio_idr_test` | gpio | decomp-c | `(*(uint32_t*)(port+8) & mask) != 0` — STM32F1-style IDR test |
-| `0x08004df4` |    4 | `FUN_08004df4` |  | pending |  |
-| `0x08004df8` |    4 | `FUN_08004df8` |  | pending |  |
+| `0x08004df4` |    4 | `gpio_bsrr_write` | gpio | decomp-c | raw BSRR write at port+0x10 |
+| `0x08004df8` |    4 | `gpio_brr_write` | gpio | decomp-c | raw BRR write at port+0x14 |
 | `0x08004e22` |   70 | `gpio_set_af` | uart | decomp-c | AFRL/AFRH nibble write |
 | `0x08004e74` |  106 | `nvic_configure` | uart | decomp-c | priority + ISER/ICER |
 | `0x08004faa` |   48 | `FUN_08004faa` |  | pending |  |

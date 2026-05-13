@@ -47,4 +47,7 @@ bool gpio_idr_test(void *port, uint32_t mask);
 bool input_pa0(void);
 bool input_pa1(void);
 
+void gpio_bsrr_write(void *port, uint32_t mask);
+void gpio_brr_write(void *port, uint32_t mask);
+
 #endif /* SHIFTER_GPIO_H */
