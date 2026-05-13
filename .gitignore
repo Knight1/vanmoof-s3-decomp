@@ -1,0 +1,34 @@
+# Build output
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Pre-decomp backups kept locally during incremental rewrites of
+# speculative modules. Not for upstream.
+*.bak
+
+# Ghidra exports may be regenerated; keep small JSON, ignore large dumps
+ghidra/exports/*.bndb
+ghidra/exports/*.gar
+
+# OEM firmware images — never commit, even by accident
+shifterware_*.bin
+shifterware_*.elf
+mainware*.bin
+batteryware*.bin
+motorware*.bin
+bleware*.bin
+*.pak
+SPI-Flash_*.rom
+*.rom
