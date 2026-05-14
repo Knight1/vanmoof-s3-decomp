@@ -126,6 +126,20 @@ void cmd_5c_write3(uint8_t version, uint8_t pkt0, uint8_t pkt1)
     report_image_status();
 }
 
+/* OEM @ 0x08003B9E (26 B). Variant of `cmd_5c_write3` that derives the
+ * version byte from the inbound PDU rather than from a parameter:
+ * `G_VERSION_BYTE = (G_RX_BUF[5] & 0x7F) << 1` — the same sub-id
+ * encoding as `image_apply` and `cmd_0f_report_u32`. Callers supply
+ * the two payload bytes directly. Used by `cmd_5b_selftest` to report
+ * the PA0/PA1 input state on the bus. */
+void emit_image_status_payload(uint8_t b0, uint8_t b1)
+{
+    G_VERSION_BYTE = (uint8_t)((G_C8_SCRATCH[5] & 0x7Fu) << 1);
+    G_PKT_BYTES[0] = b0;
+    G_PKT_BYTES[1] = b1;
+    report_image_status();
+}
+
 void image_apply(void)
 {
     G_IMG_STATUS = (uint8_t)image_verify_crc();

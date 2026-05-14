@@ -23,4 +23,9 @@ void image_apply(void);
  * latched 3-byte register block (`G_5C_REGS`) back to the bus. */
 void cmd_5c_write3(uint8_t version, uint8_t pkt0, uint8_t pkt1);
 
+/* Variant of cmd_5c_write3 that recomputes the version byte from
+ * G_RX_BUF[5] each time and only takes the two payload bytes from the
+ * caller. Used by cmd_5b_selftest to report the PA0/PA1 state. */
+void emit_image_status_payload(uint8_t b0, uint8_t b1);
+
 #endif /* SHIFTER_IMAGE_H */

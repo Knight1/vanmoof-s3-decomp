@@ -25,6 +25,7 @@
 #include "modbus.h"
 #include "image.h"
 #include "flash_store.h"
+#include "gpio.h"
 #include <stdint.h>
 
 /* ---- raw RAM globals touched by the dispatcher and the RX FSM -----
@@ -120,11 +121,27 @@ static void cmd_5c_consume(void)
     for (;;) { /* TODO: implement (decomp pending) */ }
 }
 
-/* OEM @ 0x08003BC4 (88 B). Case 0x5B — runs a 3-level self-test
- * cascade and emits one of {0, 0x32, 0x64, 0x96} as a status code. */
+/* OEM @ 0x08003BC4 (88 B). Case 0x5B — read PA0 and PA1 (the same two
+ * GPIOA inputs used by the motor-position state machine in main.c) and
+ * emit a 4-state status code that encodes the {PA0, PA1} pair:
+ *
+ *   {0,0} -> 0       {1,0} -> 0x32 (50)
+ *   {0,1} -> 0x64    {1,1} -> 0x96 (150)
+ *
+ * The encoded value is reported via the image-status emit path
+ * (`emit_image_status_payload`) — sub-id derived from G_RX_BUF[5],
+ * `b0 = 0`, `b1 = status_code`. The bus sees a 7-byte status PDU. */
 static void cmd_5b_selftest(void)
 {
-    for (;;) { /* TODO: implement (decomp pending) */ }
+    if (!input_pa0() && !input_pa1()) {
+        emit_image_status_payload(0u, 0u);
+    } else if (input_pa0() && !input_pa1()) {
+        emit_image_status_payload(0u, 0x32u);
+    } else if (!input_pa0() && input_pa1()) {
+        emit_image_status_payload(0u, 0x64u);
+    } else {
+        emit_image_status_payload(0u, 0x96u);
+    }
 }
 
 /* OEM @ 0x080039E6 (160 B). Case 0x82, len==0x10 — accept a 16-byte
