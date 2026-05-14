@@ -11,14 +11,19 @@ See `docs/hardware.md` for the canonical binary identity (size, SHA hashes).
 
 | Count | Status |
 | --- | --- |
-| 74 | pending |
+| 72 | pending |
 | 0  | in-progress |
 | 2  | decomp-asm |
-| 2  | named (rename in Ghidra, no source yet) |
+| 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
 
-(no `decomp-c` entries yet — startup is asm-source by nature)
+Lineage finding: `Reset_Handler`, the Cortex-M0 vector table, and
+`SystemInit` are byte-identical to MindMotion's stock pre-2021 AE-Team
+SDK files (`startup_MM32F031x4x6_q.s` + `system_MM32F031x4x6_q.c`).
+That means the startup half of the decomp is *recognition* rather
+than *reconstruction* — we can transcribe the vendor source line-by-line
+once we hit each function. See `docs/hardware.md`.
 
 ## Per-module decomp log
 
@@ -44,7 +49,10 @@ See `docs/hardware.md` for the canonical binary identity (size, SHA hashes).
 | --- | --- | --- | --- | --- |
 | `0x080000bc` | 4   | `thunk_main` | decomp-asm | tail of `_cold_reset`; pool-thunk into main |
 | `0x080001d8` | 802 | `main` | named | largest function; called via `thunk_main` from `_cold_reset` |
-| `0x0800060c` | 46  | `Reset_Handler` | pending | privilege check → device-ID-gated SYSCFG remap → call `FUN_080005BE` → tail-jump to `_cold_reset` |
+| `0x0800054c` | 106 | `FUN_0800054c` | pending | likely `SetSysClockToXXM` (called from `SetSysClock`); decode once `SetSysClock` is C-translated |
+| `0x080005b6` | 8   | `SetSysClock` | named | 8-byte trampoline: `push {r4,lr}; bl FUN_0800054c; pop {r4,pc}`. Matches MindMotion's `SetSysClock → SetSysClockToXXM` template. |
+| `0x080005be` | 66  | `SystemInit` | named | byte-identical to MindMotion stock: resets RCC->{CR,CFGR,CIR} to defaults, then tail-calls `SetSysClock`. Confirms `RCC_BASE = 0x40021000` via the data pool at `0x08000600`. |
+| `0x0800060c` | 46  | `Reset_Handler` | pending | stock MindMotion: `msr msp,=initial_sp` → if reset vector top byte == 0x1F (entered via on-chip ROM bootloader) enable SYSCFGEN and clear `SYSCFG->CFGR1` → `blx SystemInit` → `bx __main` (which in this build points at `_cold_reset`). Decompile is recognition — transcribe from the canonical vendor source. |
 | `0x08000632` | 2   | `FUN_08000632` | pending | trap (NMI slot) |
 | `0x08000634` | 2   | `FUN_08000634` | pending | trap (HardFault slot) |
 | `0x08000636` | 2   | `FUN_08000636` | pending | trap (reserved CM3 / MemManage slot) |
@@ -69,13 +77,9 @@ See `docs/hardware.md` for the canonical binary identity (size, SHA hashes).
   the application?
 - Initial SP `0x200006F8` — what state in SRAM[0x6F8..0x1000) does the
   loader expect to be preserved across the warm jump?
-- Reset_Handler's data pool at `0x08000648..0x08000668` references
-  `RCC->APB2ENR` (`0x40021018`) and `SYSCFG->CFGR1` (`0x40010000`)
-  and only acts on them if the reset-vector slot's top byte equals
-  `0x1F` (System Memory). That's a re-entry path from the on-chip
-  UART/USB bootloader. Confirms the loader is intended to coexist
-  with the MM32 factory ROM.
-- The OEM uses an explicit pool-thunk (`ldr r0, =main; bx r0`) instead
-  of `bl main`. Why? Likely hand-written asm where the author wanted
-  no `lr` link-back into the stub, but `bl` would work just as well —
-  no clear functional reason. May be a code-style artifact.
+- The pool-thunk-to-main pattern in `_cold_reset` (vs a 4-byte
+  `bl main`) — now explained by the vendor-template lineage: the
+  MindMotion `Reset_Handler` ends with `ldr r0,=__main; bx r0`. The
+  pool-thunk at `0x080000BC` is the *same pattern* used a second time
+  inside the custom `__main` replacement — VanMoof copied the vendor
+  idiom rather than introducing a `bl main`.

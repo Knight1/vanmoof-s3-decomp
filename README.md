@@ -4,10 +4,34 @@ Clean-room rebuild of **VanMoof S3 / X3 firmwares** from decompilations,
 producing a buildable C source tree that re-emits binary-equivalent (or
 behaviour-equivalent) images.
 
-**First target: the e-Shifter** (`shifterware 0.237`, SHA-512 `8f454dfc…97409`),
-running on the **MM32F031F6U6** Cortex-M0 MCU on the shifter PCB. Other
-firmwares (motorware, batteryware, mainware, bleware) come later under the
-same project; they live in sibling subdirectories once started.
+**Active targets — both on the e-Shifter MM32F031F6U6 Cortex-M0:**
+
+| Subdir | Firmware | Role | Size | Status |
+| --- | --- | --- | --- | --- |
+| [`shifterware/`](shifterware/) | `shifterware 0.237` | application (super-loop + Modbus bus protocol) | ~12 KB | active — `59 decomp-c / 6 named / 64 pending` |
+| [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
+
+**Shifterboot lineage:** the bootloader's startup path is a lightly-customised
+MindMotion vendor template — `Reset_Handler`, the Cortex-M0 vector table, and
+`SystemInit` are byte-identical to MindMotion's stock
+[`startup_MM32F031x4x6_q.s`](https://github.com/SoCXin/MM32F031/blob/master/src/device/MM32F031x4x6_q/Source/KEIL_StartAsm/startup_MM32F031x4x6_q.s)
+and
+[`system_MM32F031x4x6_q.c`](https://github.com/SoCXin/MM32F031/blob/master/src/device/MM32F031x4x6_q/Source/system_MM32F031x4x6_q.c)
+from the pre-2021 MindMotion AE-Team SDK (same source Keil's
+[`MM32F031_DFP`](https://www.keil.arm.com/packs/mm32f031_dfp-mindmotion/devices/)
+ships). The MindMotion BSP itself is a fork of ST's `system_stm32f10x.c`
+template — which is why the RCC reset masks visible in the decomp
+(`0xF0FF0000`, `0xFFF6FFFF`, `0xFFFBFFFF`, `0x009F0000`) are F1-lineage rather
+than F0-native. The bespoke parts are a custom 20-byte cold-reset stub that
+replaces the Keil/ARMCC `__main` C runtime — packed into the unused tail of
+the Cortex-M0 vector table at file offset `0xB4` — and `SysTick_Handler` (the
+stock template has `B .` there; VanMoof installed real logic). See
+[`shifterboot/docs/progress.md`](shifterboot/docs/progress.md) for the
+per-function evidence.
+
+Other VanMoof S3 firmwares (motorware, batteryware, mainware, bleware,
+bmsboot, mainboot, etc.) come later under the same project; they live in
+sibling subdirectories once started.
 
 | | |
 | --- | --- |

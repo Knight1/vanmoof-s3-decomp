@@ -30,6 +30,45 @@ The 6 KB / 26 KB split between loader and application is the working
 assumption based on the 6144-byte image size; confirm once the
 application's image layout is decoded.
 
+## Provenance: MindMotion BSP fork
+
+The startup code is **not bespoke**. `Reset_Handler` (`0x0800060C`),
+the Cortex-M0 vector-table layout, and `SystemInit` (`0x080005BE`) are
+byte-identical to MindMotion's stock pre-2021 AE-Team SDK files
+`startup_MM32F031x4x6_q.s` and `system_MM32F031x4x6_q.c` (the source
+that Keil's `MM32F031_DFP` ships). MindMotion's BSP was itself forked
+from ST's `system_stm32f10x.c` — hence the RCC reset masks visible in
+`SystemInit` (`0xF0FF0000`, `0xFFF6FFFF`, `0xFFFBFFFF`, `0x009F0000`)
+are STM32F1-lineage and not F0-native. Tell-tale F1 holdovers in the
+CM0 vector table: the slots for MemManage / BusFault / UsageFault /
+DebugMon (CM3+ only, reserved on CM0) are still present and populated
+with 2-byte `b .` trap stubs at `0x08000636..0x0800063E`.
+
+Bespoke parts:
+
+- The 20-byte **cold-reset stub** at `0x080000B4` (replacing Keil/ARMCC
+  `__main` with a hand-coded SP-load + `_init_data_bss` + pool-thunk
+  to `main`, packed into the unused CM0 vector-table tail).
+- **`SysTick_Handler` at `0x080014C2`** — the MindMotion stock template
+  has just `b .` here; VanMoof installed real logic (tail-calls
+  `FUN_080014AE`).
+- Everything from `main` (`0x080001D8`) onward.
+
+References:
+- <https://github.com/SoCXin/MM32F031/blob/master/src/device/MM32F031x4x6_q/Source/KEIL_StartAsm/startup_MM32F031x4x6_q.s>
+- <https://github.com/SoCXin/MM32F031/blob/master/src/device/MM32F031x4x6_q/Source/system_MM32F031x4x6_q.c>
+- <https://github.com/ARM-software/CMSIS_4/blob/master/Device/_Template_Flash/Test/system_stm32f10x.c> (ST F10x lineage)
+- <https://www.keil.arm.com/packs/mm32f031_dfp-mindmotion/devices/> (Keil pack)
+
+## RCC and SYSCFG bases (confirmed via SystemInit's literal pool)
+
+| Address | Use |
+| --- | --- |
+| `0x40021000` | `RCC_BASE` — `+0`=CR, `+4`=CFGR, `+8`=CIR |
+| `0x40021018` | `RCC->APB2ENR` (touched by Reset_Handler's bootloader-recovery branch to enable SYSCFGEN) |
+| `0x40022000` | `FLASH_BASE` (present in SystemInit's data pool at `0x08000604`, not yet observed in use by `SystemInit` itself; likely used by `SetSysClock` for ACR latency) |
+| `0x40010000` | `SYSCFG_BASE` — `+0`=CFGR1 (cleared by Reset_Handler when entered via on-chip ROM bootloader) |
+
 ## Vector table (head, from raw bytes)
 
 | CM0 idx | Vector | Value | Note |

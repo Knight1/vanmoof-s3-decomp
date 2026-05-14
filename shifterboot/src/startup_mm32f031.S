@@ -3,19 +3,30 @@
  * Cortex-M0 startup for MM32F031F6U6, decompiled from
  * shifterboot.bin (SHA-512 see docs/hardware.md).
  *
+ * Provenance: Reset_Handler, the vector table, and SystemInit are
+ * byte-identical to MindMotion's stock pre-2021 AE-Team SDK
+ * (startup_MM32F031x4x6_q.s + system_MM32F031x4x6_q.c). The only
+ * bespoke pieces are (a) the 20-byte _cold_reset stub below that
+ * replaces the Keil/ARMCC __main runtime entry, and (b) the
+ * SysTick_Handler. See docs/hardware.md for references.
+ *
  * Boot path observed in the OEM image:
  *
  *   1. CPU enters at the Reset vector (table slot 1) = Reset_Handler
- *      @ 0x0800060C. (warm-reset path; Reset_Handler is still pending)
- *   2. Reset_Handler tail-calls back into the *cold reset stub* below
- *      at 0x080000B4.
- *   3. Cold reset stub sets MSP, calls _init_data_bss to copy .data
- *      and zero .bss, then bx's to main.
+ *      @ 0x0800060C. (stock MindMotion: sets MSP, optional SYSCFG
+ *      remap-recovery if entered from the on-chip ROM bootloader,
+ *      calls SystemInit, then bx's to __main — which in this build
+ *      points at _cold_reset below instead of Keil's __main.)
+ *   2. SystemInit @ 0x080005BE resets RCC->{CR,CFGR,CIR} to their
+ *      power-on defaults and calls SetSysClock to configure the
+ *      clock tree.
+ *   3. _cold_reset @ 0x080000B4 sets MSP again, calls _init_data_bss
+ *      to copy .data and zero .bss, then bx's to main.
  *
  * The cold reset stub is placed at the tail of the Cortex-M0 vector
  * table region (slots 45/46/47, which the CM0 NVIC doesn't use). This
- * is unusual placement but legal — the OEM saves bytes by reusing the
- * unused-vector area for the stub.
+ * is unusual placement but legal — VanMoof saves bytes by reusing the
+ * unused-vector area for the custom __main replacement.
  */
 
     .syntax unified
