@@ -40,10 +40,11 @@ to the eShifter/motor/battery MCUs).
 
 | Count | Status |
 | --- | --- |
-| 178 | pending (Muco — awaiting decomp) |
+| 177 | pending (Muco — awaiting decomp) |
 | 0   | vendor-stock (recognised; ST/ARM CMSIS — none confirmed yet) |
 | 0   | in-progress |
 | 2   | decomp-c |
+| 1   | decomp-asm |
 | 0   | named (rename in Ghidra, no source yet) |
 
 `function_count = 180` per `ghidra/exports/mainboot_program.json`
@@ -55,6 +56,16 @@ to the eShifter/motor/battery MCUs).
   `rcc_post_reset_hook` it calls. Resets every peripheral on every
   bus (APB1 → APB2 → AHB1 → AHB2 → AHB3) by writing
   `0xFFFFFFFF` then `0` to each `*RSTR`. Returns 0.
+- `dead_stubs.S` — `dispatch_disabled_stub`. A 16-byte function
+  whose guard literal is hard-coded to zero, so the body never
+  runs. The body would have loaded a function pointer
+  (`0x080055EC`) and a SRAM context pointer (`0x20000200`) and
+  called the function — but the `bl` has been replaced with a
+  4-byte `nop.w`, leaving the symbol in place for two real call
+  sites inside the main loop (in `FUN_08004254`). Written in
+  asm because byte-equivalence requires preserving the
+  literal-pool entries and the wide NOP. Assembles to 28 bytes
+  that match the OEM byte-for-byte.
 
 ## Functions
 
@@ -62,21 +73,21 @@ to the eShifter/motor/battery MCUs).
 
 | Address | Size | Name | Source file | Notes |
 | --- | --- | --- | --- | --- |
-| `0x080005d0` | 2  | `rcc_post_reset_hook`       | `src/rcc.c` | empty `bx lr`; placeholder hook Muco never filled in |
-| `0x080005d4` | 38 | `rcc_reset_all_peripherals` | `src/rcc.c` | pulse-resets all peripherals via the five RCC `*RSTR` registers, returns 0 |
+| `0x08000204` | 16 | `dispatch_disabled_stub`    | `src/dead_stubs.S` | guard==0 → cbz always fires; body is a NOP'd-out `bl`; symbol kept for 2 callers in main loop |
+| `0x080005d0` | 2  | `rcc_post_reset_hook`       | `src/rcc.c`        | empty `bx lr`; placeholder hook Muco never filled in |
+| `0x080005d4` | 38 | `rcc_reset_all_peripherals` | `src/rcc.c`        | pulse-resets all peripherals via the five RCC `*RSTR` registers, returns 0 |
 
 ### Pending decomp targets (small leaves to look at next)
 
 | Address | Size | Notes |
 | --- | --- | --- |
-| `0x08000204` | 16 | guard-flag check (`if (*flag) { … nop.w }`) — body is a `nop.w`; likely a stubbed-out logging helper |
 | `0x08000520` | 16 | `strlen`-style loop (`while (*p++); return p - start - 1`) |
 | `0x0800067c` | 14 | `*(uint32_t*)A += *(uint8_t*)B` — looks like a small counter increment |
 | `0x08000694` | 6  | trivial getter `return *(uint32_t*)lit` |
 | `0x080006a0` | 34 | (TBC) |
 | `0x080006c8` | 32 | (TBC) |
 
-Full list in `ghidra/exports/mainboot_program.json` (178 still
+Full list in `ghidra/exports/mainboot_program.json` (177 still
 auto-named `FUN_xxxxxxxx`).
 
 ## Open questions
