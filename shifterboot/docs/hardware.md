@@ -5,6 +5,18 @@ The bootloader runs on the same MCU as the application
 shifterboot-specific observations; the shared eShifter PCB notes live
 in the sibling `shifterware/docs/hardware.md`.
 
+## Binary identity
+
+| | |
+| --- | --- |
+| File | `shifterboot.bin` |
+| Size | 6144 bytes (real content `0x17E4` = 6116 B; tail `0x17E4..0x17FF` is `0xFF` flash-erase padding) |
+| Version | **unknown** |
+| SHA-256 | `4e043e09757b164c4e4785150d2a0bd26bc83ac7fd27d45c7f3f4cce37058aff` |
+| SHA-512 | `b08403daf0ec4fec7e80a4e926a3a2e953471bb41aab7e939242ce81b14f556390edad5b2955ea0bbf211dbf5175e2e6eaf59935c200e94801259489167c88bc` |
+
+The hashes are the contract — if a future blob differs by a single byte, it is a different shifterboot.
+
 ## Memory map
 
 | Region | Start | End | Use |
