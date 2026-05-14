@@ -10,7 +10,7 @@ behaviour-equivalent) images.
 | --- | --- | --- | --- | --- | --- |
 | [`shifterware/`](shifterware/) | `shifterware 0.237` | MM32F031F6U6 (Cortex-M0) | e-Shifter application (super-loop + Modbus bus protocol) | ~12 KB | active — `59 decomp-c / 6 named / 64 pending` |
 | [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | MM32F031F6U6 (Cortex-M0) | e-Shifter first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
-| [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | ST STM32F413VGT6 (Cortex-M4) | main-controller bootloader (third-party Muco Technologies) | 32 KB | active — `2 decomp-c / 1 decomp-asm / 177 pending` |
+| [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | ST STM32F413VGT6 (Cortex-M4) | main-controller bootloader (third-party Muco Technologies) | 32 KB | active — `7 decomp-c / 1 decomp-asm / 1 vendor-stock / 1 named / 170 pending` |
 
 **Shifterboot lineage:** the bootloader's startup path is a lightly-customised
 MindMotion vendor template — `Reset_Handler`, the Cortex-M0 vector table, and

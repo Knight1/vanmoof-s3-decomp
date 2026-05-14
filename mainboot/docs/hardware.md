@@ -26,13 +26,45 @@ string:
 STM32 bootloader <%X.%02X> Muco Technologies (c)2019
 ```
 
-It is a commercial STM32F4 bootloader product from **Muco
-Technologies** (a Dutch firm; the same vendor identifier seen in
-the `Muco-` filename prefix). VanMoof appears to have licensed this
-loader and integrated it as the main-controller first-stage; the
+**Muco Technologies B.V.** is a Dutch embedded-engineering
+contractor (part of the MACH Technology Group, alongside Head
+Electronics B.V., CDS Electronics, and Venne). VanMoof appears to
+have outsourced the main-controller first-stage to them; the
 "customisation" likely comes from build-time configuration (image
 table layout, peripheral assignments, CRC seed) rather than source
-edits.
+edits. The multi-image layout (Loaded / Shadow / per-subsystem
+firmware blobs) and the "Copy Shadow to App" + "Jump" flow are
+**Muco-specific** — no upstream ST or open-source bootloader has
+this structure.
+
+### Upstream ST code expected inside this image
+
+Muco's bootloader sits on top of ST's STM32Cube ecosystem. We
+expect to find — and will mark `vendor-stock` when identified —
+the following upstream sources:
+
+- **STM32CubeF4 HAL/LL** (`STM32Cube_FW_F4`): `HAL_FLASH_*`
+  (used by the "Erase sector %d" / "Erasing shadow flash..." flow),
+  `HAL_CRC_*` (used by the "Shadow CRC error" / "APP CRC error"
+  integrity checks), `HAL_UART_*` (used by the printf banner
+  output), `HAL_RCC_*` for clock setup, `HAL_GPIO_*`, possibly
+  `HAL_TIM_*` if timing is required.
+- **CMSIS-Core** intrinsics (`__DSB`, `__ISB`, `NVIC_SystemReset`,
+  `NVIC_SetPriority`, `__disable_irq`, `__enable_irq`, etc.).
+- **CMSIS-Device** startup file (vector table layout, `SystemInit`,
+  `Reset_Handler` — these may or may not be byte-identical;
+  Muco's reset path is custom enough to be recognisable on its
+  own).
+
+What is **not** in scope as upstream (verified by web search):
+
+- ST's `stm32-mw-openbl` ("Open Bootloader"): uses different
+  protocols (the on-chip ROM bootloader's USART/I2C/SPI/USB-DFU
+  AN3155 family). No string or protocol overlap with muco-boot.
+- ST's CubeF4 IAP example (`STM32Cube_FW_F4/Projects/<board>/
+  Applications/IAP/`): structurally simpler (single
+  application slot, YMODEM upload). Muco's multi-image scheme
+  is its own design.
 
 Consequence for the decomp scope policy: nearly the entire
 function set is third-party code, not bespoke. We still translate

@@ -40,12 +40,12 @@ to the eShifter/motor/battery MCUs).
 
 | Count | Status |
 | --- | --- |
-| 177 | pending (Muco — awaiting decomp) |
-| 0   | vendor-stock (recognised; ST/ARM CMSIS — none confirmed yet) |
+| 170 | pending (Muco — awaiting decomp) |
+| 1   | vendor-stock (recognised; ST/ARM CMSIS) — `NVIC_SetPriorityGrouping` |
 | 0   | in-progress |
-| 2   | decomp-c |
+| 7   | decomp-c |
 | 1   | decomp-asm |
-| 0   | named (rename in Ghidra, no source yet) |
+| 1   | named (rename in Ghidra, no source yet) — `SysTick_Handler` |
 
 `function_count = 180` per `ghidra/exports/mainboot_program.json`
 (refresh after every mutating Ghidra run; see top-level CLAUDE.md).
@@ -56,6 +56,49 @@ to the eShifter/motor/battery MCUs).
   `rcc_post_reset_hook` it calls. Resets every peripheral on every
   bus (APB1 → APB2 → AHB1 → AHB2 → AHB3) by writing
   `0xFFFFFFFF` then `0` to each `*RSTR`. Returns 0.
+- `scheduler.c` — `scheduler_tick`. 16-slot one-shot timer/callback
+  dispatcher invoked by `SysTick_Handler` before `systick_tick`.
+  The table lives in `.bss` at SRAM `0x2000038C` (literal pool entry
+  at `0x0800389c`); layout is a 16-bit `enabled_mask` at `+0x04`,
+  sixteen callback pointers at `+0x08..+0x47`, sixteen counters at
+  `+0x48..+0x87` (`0x88` bytes total). Per enabled slot: if the
+  counter is non-zero it is decremented; if the decremented value
+  equals 1 the slot's callback is invoked (so the callback fires
+  exactly on the `2 → 1` transition). GCC produces 52 B vs OEM's
+  90 B — the OEM compiler recomputes `base + i*4` on every field
+  access where GCC hoists the table base into one register and walks
+  it forward by `+4` each loop. Behaviour-equivalent, not
+  byte-equivalent. First-bytes of the registration API are very
+  likely `FUN_080006a0` / `FUN_080006c8`, both of which sit right
+  next to `systick_tick` and weren't classified yet.
+- `systick.c` — `systick_get_count` and `systick_delay`.
+  `systick_get_count` is the trivial 6-byte getter that returns
+  `*g_systick_counter` (literal at `0x0800069c` =
+  `0x2000083C`) — byte-equivalent to OEM. `systick_delay(ticks)`
+  is the busy-wait used throughout the bootloader: sample
+  `systick_get_count` for `start`, add `g_systick_step` to
+  `ticks` (skipped iff `ticks == 0xFFFFFFFF`, the OEM
+  effectively-infinite sentinel), then spin until
+  `current - start >= ticks`. The `+= step` is the standard
+  "round up to the next tick" guard so callers get a *minimum*
+  of `ticks` periods even if SysTick fires just after the start
+  sample. GCC `-Os` emits 28 B vs OEM's 34 B (GCC uses IT-blocks
+  to predicate the adjustment; OEM uses an explicit branch) —
+  behaviour-equivalent.
+- `systick.c` — `systick_tick`. Increments the `g_systick_counter`
+  free-running counter at SRAM `0x2000083C` (.bss) by the
+  `g_systick_step` byte at SRAM `0x20000014` (.data, initialised
+  to 1). Called from `SysTick_Handler` (OEM `FUN_08003754` —
+  a 12-byte handler that first calls a 90-byte scheduler
+  dispatcher at `FUN_08003840`, then `systick_tick`). The OEM
+  function is byte-shape but not byte-equivalent: GCC schedules
+  the two pool loads back-to-back, OEM interleaves load-addr +
+  deref per variable, so 6 of 14 instruction bytes differ
+  (literal pool and outer shape match).
+- `string.c` — `strlen`. Canonical Thumb-2 `strlen` with the
+  `ldrb.w rN, [rM], #1` post-indexed-byte-load idiom, returning
+  `(end - start) - 1`. C `-Os` reproduces the OEM bytes
+  identically (all 16 bytes match `0x08000520..0x0800052F`).
 - `dead_stubs.S` — `dispatch_disabled_stub`. A 16-byte function
   whose guard literal is hard-coded to zero, so the body never
   runs. The body would have loaded a function pointer
@@ -74,20 +117,32 @@ to the eShifter/motor/battery MCUs).
 | Address | Size | Name | Source file | Notes |
 | --- | --- | --- | --- | --- |
 | `0x08000204` | 16 | `dispatch_disabled_stub`    | `src/dead_stubs.S` | guard==0 → cbz always fires; body is a NOP'd-out `bl`; symbol kept for 2 callers in main loop |
+| `0x08000520` | 16 | `strlen`                    | `src/string.c`     | canonical Thumb-2 `strlen` (post-indexed `ldrb.w`); byte-equivalent to OEM |
 | `0x080005d0` | 2  | `rcc_post_reset_hook`       | `src/rcc.c`        | empty `bx lr`; placeholder hook Muco never filled in |
 | `0x080005d4` | 38 | `rcc_reset_all_peripherals` | `src/rcc.c`        | pulse-resets all peripherals via the five RCC `*RSTR` registers, returns 0 |
+| `0x0800067c` | 14 | `systick_tick`              | `src/systick.c`    | `g_systick_counter += g_systick_step`; called by `SysTick_Handler` |
+| `0x08000694` | 6  | `systick_get_count`         | `src/systick.c`    | trivial getter; returns `g_systick_counter` — byte-equivalent to OEM |
+| `0x080006a0` | 34 | `systick_delay`             | `src/systick.c`    | busy-wait `ticks` SysTick periods; `0xFFFFFFFF` is the OEM forever-sentinel |
+| `0x08003840` | 90 | `scheduler_tick`            | `src/scheduler.c`  | 16-slot one-shot timer/callback dispatcher; table at SRAM `0x2000038C` |
+
+### Vendor-stock (recognised, no decomp needed)
+
+| Address | Size | Name | Source |
+| --- | --- | --- | --- |
+| `0x080006c8` | 32 | `NVIC_SetPriorityGrouping` | ARM CMSIS-Core M4 `core_cm4.h` standard `__STATIC_INLINE` — clears PRIGROUP (`AIRCR[10:8]`) + VECTKEYSTAT, ORs in `(param & 7) << 8` and the `0x5FA` VECTKEY |
+
+### Named (no source yet)
+
+| Address | Size | Name | Why named |
+| --- | --- | --- | --- |
+| `0x08003754` | 12 | `SysTick_Handler` | vector slot 15 target; body is `bl <scheduler>; bl systick_tick` |
 
 ### Pending decomp targets (small leaves to look at next)
 
 | Address | Size | Notes |
 | --- | --- | --- |
-| `0x08000520` | 16 | `strlen`-style loop (`while (*p++); return p - start - 1`) |
-| `0x0800067c` | 14 | `*(uint32_t*)A += *(uint8_t*)B` — looks like a small counter increment |
-| `0x08000694` | 6  | trivial getter `return *(uint32_t*)lit` |
-| `0x080006a0` | 34 | (TBC) |
-| `0x080006c8` | 32 | (TBC) |
 
-Full list in `ghidra/exports/mainboot_program.json` (177 still
+Full list in `ghidra/exports/mainboot_program.json` (174 still
 auto-named `FUN_xxxxxxxx`).
 
 ## Open questions
