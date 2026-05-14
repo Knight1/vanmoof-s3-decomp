@@ -4,12 +4,13 @@ Clean-room rebuild of **VanMoof S3 / X3 firmwares** from decompilations,
 producing a buildable C source tree that re-emits binary-equivalent (or
 behaviour-equivalent) images.
 
-**Active targets — both on the e-Shifter MM32F031F6U6 Cortex-M0:**
+**Active targets:**
 
-| Subdir | Firmware | Role | Size | Status |
-| --- | --- | --- | --- | --- |
-| [`shifterware/`](shifterware/) | `shifterware 0.237` | application (super-loop + Modbus bus protocol) | ~12 KB | active — `59 decomp-c / 6 named / 64 pending` |
-| [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
+| Subdir | Firmware | MCU | Role | Size | Status |
+| --- | --- | --- | --- | --- | --- |
+| [`shifterware/`](shifterware/) | `shifterware 0.237` | MM32F031F6U6 (Cortex-M0) | e-Shifter application (super-loop + Modbus bus protocol) | ~12 KB | active — `59 decomp-c / 6 named / 64 pending` |
+| [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | MM32F031F6U6 (Cortex-M0) | e-Shifter first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
+| [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | STM32F4/F7 (Cortex-M3+, 320 KB SRAM) | main-controller bootloader | 32 KB | active — scaffold only |
 
 **Shifterboot lineage:** the bootloader's startup path is a lightly-customised
 MindMotion vendor template — `Reset_Handler`, the Cortex-M0 vector table, and
@@ -30,7 +31,7 @@ stock template has `B .` there; VanMoof installed real logic). See
 per-function evidence.
 
 Other VanMoof S3 firmwares (motorware, batteryware, mainware, bleware,
-bmsboot, mainboot, etc.) come later under the same project; they live in
+bmsboot, etc.) come later under the same project; they live in
 sibling subdirectories once started.
 
 | | |
