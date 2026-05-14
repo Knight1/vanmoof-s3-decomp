@@ -45,18 +45,51 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 800 | pending (auto-named `FUN_xxxxxxxx`) |
-| 1   | vendor-stock — `strcmp` (canonical glibc/newlib optimised strcmp) |
+| 794 | pending (auto-named `FUN_xxxxxxxx`) |
+| 3   | vendor-stock — `strcmp`, `strtol` (newlib); `HAL_GPIO_WritePin` (CubeF4 HAL) |
 | 0   | in-progress |
-| 2   | decomp-c — `systick_tick`, `login_handler` |
+| 6   | decomp-c — `systick_tick`, `login_handler`, `volume_high_set`, `volume_medium_set`, `console_start_motor_update`, `console_soc_set` |
 | 0   | decomp-asm |
-| 7   | named (rename in Ghidra, no source yet) — `Reset_Handler`, `SysTick_Handler`, `scheduler_tick`, `scheduler_alloc`, `scheduler_release`, `scheduler_start`, `scheduler_slot_is_idle` |
+| 8   | named (rename in Ghidra, no source yet) — `Reset_Handler`, `SysTick_Handler`, `scheduler_tick`, `scheduler_alloc`, `scheduler_release`, `scheduler_start`, `scheduler_slot_is_idle`, `console_next_token` |
 
-`function_count = 810` per `ghidra/exports/mainware_program.json`
+`function_count = 811` per `ghidra/exports/mainware_program.json`
 (refresh after every mutating Ghidra run; see top-level `CLAUDE.md`).
 
 ## Per-module decomp log
 
+- `console.c` — `volume_medium_set` (`0x080424A4`, 236 B) and
+  `volume_high_set` (`0x080423B8`, 236 B). Two near-identical command
+  handlers; differ only by which byte in the session context they
+  write — `ctx_sub->volume_medium` (`+0x105`) vs `ctx_sub->volume_high`
+  (`+0x106`). The rodata pairing with the `"Volume Low / Medium /
+  High %d"` dump labels at `0x08054AD0..0x08054AF8` and the
+  block-snapshot at `+0x104` (`audio_engine_cfg[0..3]`) supports the
+  low/medium/high → `+0x104/+0x105/+0x106` mapping; the "low"
+  counterpart is wired by a yet-undecoded handler. With no arg the
+  handler echoes the current value; with an arg in `[0, 64]`
+  (`"Volume 0..64"` range string) it sets the byte, drives the audio
+  amp (PE2 = enable, PD5 = mute, written via `HAL_GPIO_WritePin`
+  recognised as the CubeF4 BSRR helper at `FUN_08026AC6`), and runs
+  an audio-engine apply through `FUN_08031728(ctx->cfg[0..3])`.
+  Parsed `0` powers the amp down and prints `"Audio off"`. The OEM
+  also snapshots `ctx_sub[0x104..0x1C4]` (192 B) onto the stack
+  just before the apply call — the snapshot isn't read back in any
+  decoded path, but it's preserved verbatim in our C in case some
+  not-yet-decoded callee inspects the buffer. The C source factors
+  the shared body into a static `volume_set_common(input, target)`
+  helper, so the two public entry points are each 20 B trampolines;
+  combined size is 256 B vs OEM's 472 B (saving 216 B on
+  duplication). Behaviour-equivalent, not byte-equivalent.
+- `console.c` — `console_start_motor_update` (`0x08042590`, 28 B).
+  Logs `"Start motor update.."` and calls `FUN_080313E4(4)` (likely
+  a subsystem-mode request — "4" is presumably the motor-update
+  state). Single-line stub, byte-shape equivalent.
+- `console.c` — `console_soc_set` (`0x080425AC`, 72 B). Parses an
+  integer argument with `strtol(s, NULL, 10)`, writes it to
+  `ctx_sub->set_soc` (`+0x3D4`), prints `"Set SOC %d"`, and calls
+  `FUN_0802F1C0(2)` (broadcast/announce the SOC change). When the
+  argument is missing the handler simply returns — no
+  current-value echo.
 - `console.c` — `login_handler`. The ES3 debug-console login callback
   (entry `0x080425F4`, 166 B). Reads a NUL-terminated input line and
   matches it first against `g_app_state.ctx_sub->user_password` (the
@@ -107,14 +140,20 @@ per-subsystem updater flows, and the bike-state model.
 
 | Address | Size | Name | Source file | Notes |
 | --- | --- | --- | --- | --- |
-| `0x080232e0` |  14 | `systick_tick`   | `src/systick.c`  | `g_systick_counter += g_systick_step`; counter at SRAM `0x20009704`, step at SRAM `0x20000014` (shared `.data` offset with mainboot) |
-| `0x080425F4` | 166 | `login_handler`  | `src/console.c`  | ES3 debug-console login callback; matches input against `g_app_state.ctx_sub->user_password` then hard-coded fallback at `0x080547EC`; 5-strike → 5 s scheduler-driven lockout |
+| `0x080232E0` |  14 | `systick_tick`              | `src/systick.c` | `g_systick_counter += g_systick_step`; counter at SRAM `0x20009704`, step at SRAM `0x20000014` (shared `.data` offset with mainboot) |
+| `0x080423B8` | 236 | `volume_high_set`           | `src/console.c` | console command: show/set `ctx_sub->volume_high` (`+0x106`); range `[0, 64]`, drives audio amp via `HAL_GPIO_WritePin`, runs audio-engine apply |
+| `0x080424A4` | 236 | `volume_medium_set`         | `src/console.c` | same flow, writes `ctx_sub->volume_medium` (`+0x105`) |
+| `0x08042590` |  28 | `console_start_motor_update`| `src/console.c` | logs `"Start motor update.."` + `FUN_080313E4(4)` |
+| `0x080425AC` |  72 | `console_soc_set`           | `src/console.c` | parses int arg, writes `ctx_sub->set_soc` (`+0x3D4`), prints `"Set SOC %d"`, announces via `FUN_0802F1C0(2)` |
+| `0x080425F4` | 166 | `login_handler`             | `src/console.c` | ES3 debug-console login callback; matches input against `g_app_state.ctx_sub->user_password` then hard-coded fallback at `0x080547EC`; 5-strike → 5 s scheduler-driven lockout |
 
 ### Vendor-stock (recognised, no decomp needed)
 
 | Address | Size | Name | Source |
 | --- | --- | --- | --- |
 | `0x08021428` | 730 | `strcmp` | newlib/glibc optimised C strcmp (byte fast-path + 4/8-byte aligned word compares using `uadd8`/`sel`). Returns `*s1 - *s2` of first differing byte. Will pick up from vendored newlib once that's wired in. |
+| `0x08021EAC` |  18 | `strtol` | newlib reentrant trampoline: loads `_REENT` from `*0x2000011C` and tail-calls `_strtol_r` at `0x08021D5C`. Standard `long strtol(const char *s, char **endptr, int base)`. |
+| `0x08026AC6` |  12 | `HAL_GPIO_WritePin` | CubeF4 HAL inline: writes `pin_mask` to `GPIOx->BSRR` if state non-zero, otherwise `pin_mask << 16` (atomic bit-set / bit-reset). |
 
 ### Named (no source yet)
 
@@ -127,6 +166,7 @@ per-subsystem updater flows, and the bike-state model.
 | `0x080307A8` |  84 | `scheduler_release` | `(uint8_t *slot_ref)` — clears the enabled bit, zeroes counter+callback for `*slot_ref`, then writes `*slot_ref = 0xFA`. Returns 1 if the slot was valid, 0 if out-of-range. |
 | `0x08030800` |  50 | `scheduler_start` | `(slot, ticks, cb)` — stores counter+callback for `slot` and sets its enabled bit. Re-calling on an already-armed slot just resets the counter. |
 | `0x08030838` |  26 | `scheduler_slot_is_idle` | `(slot) -> int` — returns `clz(counters[slot]) >> 5`, i.e., 1 iff slot is in range and counter==0. Returns 0 for the sentinel `0xFA`. |
+| `0x08040A5C` |  66 | `console_next_token` | `(char **pp) -> int` — advances `*pp` past the current token (delimiters `\0`, space, `.`, `:`), then past consecutive delimiters; returns 1 if a next token exists, 0 if line is exhausted. Used by every console command handler that accepts an argument. |
 
 ### Pending decomp targets (small leaves to look at next)
 
@@ -137,9 +177,11 @@ per-subsystem updater flows, and the bike-state model.
 | `0x0803cb6c` | 166 | Fault dumper called by HardFault_Handler — reads R0-R12/LR/PC/xPSR from stacked frame + reads SCB CFSR/HFSR/DFSR/MMFAR/BFAR/AFSR, prints each via `g_log_func`; ends `b .`. |
 | `0x0803c988` | 18 | HardFault_Handler — `tst lr,#4` to pick MSP vs PSP, branches to the fault dumper above. |
 | `0x080306d8` | 96 | scheduler_tick — 48-slot scheduler dispatch (Muco, scaled from mainboot 16). Behaviour-equivalent to mainboot's `scheduler.c` but cannot share source — different table size. |
-| `0x080423B8` | 200 | Sibling console handler (set-user-password?) — same line-read flow as `login_handler`, writes to `ctx_sub[0x106]` and `ctx_sub[+0xF4..]`. |
-| `0x080424A4` | 200 | Sibling console handler (set-admin-password?) — like above but operates on `ctx_sub[0x105]`. |
-| `0x08042590` |  ? | Sibling console handler (set-baud?) — writes a single byte to `ctx_sub[0x3D4]`. |
+| `0x08031728` |  ? | Audio-engine apply (4-word arg). Called from `volume_*_set` after every volume change with the four words at `ctx_sub->audio_engine_cfg[0..3]`. |
+| `0x080391B8` |  ? | Volume validator. Called with a pointer to the just-parsed volume byte; non-zero return triggers a `" ERR set volume"` log. |
+| `0x080313E4` |  ? | Subsystem-mode request. Called as `(4)` from `console_start_motor_update`. |
+| `0x0802F1C0` |  ? | Broadcast/announce. Called as `(2)` from `console_soc_set` after writing the SOC override. |
+| `0x08020EC0` |  ? | Likely `memcpy(dst, src, n)` — three-arg copy used by the volume handler snapshot. Confirm before naming. |
 
 Full list in `ghidra/exports/mainware_program.json` once generated.
 

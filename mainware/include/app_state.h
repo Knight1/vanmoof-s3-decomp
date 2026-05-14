@@ -32,21 +32,51 @@ _Static_assert(__builtin_offsetof(struct console_state, login_state) == 0x05,
 extern struct console_state g_console_state;   /* SRAM 0x2000010E */
 
 struct session_ctx {
-    uint8_t  _pad0[0x2D9];   /* +0x000..+0x2D8 */
-    uint8_t  logged_in;      /* +0x2D9 — non-zero once login succeeded */
-    uint8_t  _pad1[0x06];    /* +0x2DA..+0x2DF */
-    uint8_t  fail_count;     /* +0x2E0 — consecutive failed password tries */
-    uint8_t  _pad2[0xB7];    /* +0x2E1..+0x397 */
-    char     user_password[0x40]; /* +0x398 — user-configurable service
-                                   *           password; empty string
-                                   *           means "not set". Length
-                                   *           cap is 0x40 elsewhere in
-                                   *           the console code. */
+    uint8_t  _pad0[0xF4];           /* +0x000..+0x0F3 */
+    uint32_t audio_engine_cfg[4];   /* +0x0F4..+0x103 — four words consumed by
+                                     *                  the audio-config apply
+                                     *                  helper after every
+                                     *                  volume-set. Semantics
+                                     *                  not yet decoded. */
+    uint8_t  volume_low;            /* +0x104  (hypothesis) */
+    uint8_t  volume_medium;         /* +0x105  written by set-volume-medium */
+    uint8_t  volume_high;           /* +0x106  written by set-volume-high */
+    uint8_t  _pad1[0xBE];           /* +0x107..+0x1C4 — rest of the audio
+                                     *                  block the OEM
+                                     *                  snapshots; not
+                                     *                  individually decoded
+                                     *                  yet. */
+    uint8_t  _pad2[0x114];          /* +0x1C5..+0x2D8 */
+    uint8_t  logged_in;             /* +0x2D9 — non-zero once login succeeded */
+    uint8_t  _pad3[0x06];           /* +0x2DA..+0x2DF */
+    uint8_t  fail_count;            /* +0x2E0 — consecutive failed login tries */
+    uint8_t  _pad4[0xB7];           /* +0x2E1..+0x397 */
+    char     user_password[0x3C];   /* +0x398..+0x3D3 — user-configurable
+                                     *           service password; empty
+                                     *           string means "not set".
+                                     *           Length cap is whatever the
+                                     *           set-password handler
+                                     *           enforces (not yet
+                                     *           decoded); the buffer is
+                                     *           bounded by `set_soc` at
+                                     *           +0x3D4. The hard-coded
+                                     *           backdoor at OEM rodata
+                                     *           0x080547EC is 40 chars
+                                     *           plus NUL, well within. */
+    uint8_t  set_soc;               /* +0x3D4 — SOC override byte from the
+                                     *           console "soc" command;
+                                     *           gets announced via
+                                     *           FUN_0802F1C0(2) after write. */
     /* ... grows further; not yet decoded. */
 };
-_Static_assert(__builtin_offsetof(struct session_ctx, logged_in)       == 0x2D9, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, fail_count)      == 0x2E0, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, user_password)   == 0x398, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, audio_engine_cfg) == 0xF4, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_low)       == 0x104, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_medium)    == 0x105, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_high)      == 0x106, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, logged_in)        == 0x2D9, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, fail_count)       == 0x2E0, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, user_password)    == 0x398, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, set_soc)          == 0x3D4, "");
 
 struct app_state {
     uint8_t  _pad0[0x2DC];        /* +0x000..+0x2DB */
