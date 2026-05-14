@@ -120,7 +120,7 @@ switch as a `__gnu_thumb1_case_uqi` jump table.
 | `0x14` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): `G_COUNTER++`, set `G_14_FLAG_A = 1`, `G_14_FLAG_B = 1`. Otherwise: clear `G_14_FLAG_B`. The motor-running gate prevents the bike from incrementing the counter mid-shift. |
 | `0x5A` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): copy `G_RX_BUF[5]` into `G_5A_TARGET`. Encodes the shift direction (0 = forward, 1 = reverse) consumed by the per-iteration motor servoing step (`motor_drive_step`) in `main`. Once the motor reaches position (or the stall timeout fires), `G_5A_TARGET` self-latches to 2 ("arrived"). |
 | `0x5B` | 6 | Run `FUN_08003BC4` — a 3-level self-test cascade that emits one of `{0, 0x32, 0x64, 0x96}` via `FUN_08003B9E`. |
-| `0x5C` | 3 | `cmd_5c_write3(G_5C_REGS[0..2])` → `FUN_08003B86`, which fans three bytes into RAM slots and calls `report_image_status`. |
+| `0x5C` | 3 | `cmd_5c_write3(G_5C_REGS[0..2])` (`image.c`, OEM @ 0x08003B86) — splice the three previously-staged register bytes into the image-status emit slots (`G_VERSION_BYTE`, `G_PKT_BYTES[0..1]`) and fire `report_image_status`. The bus sees a 7-byte status PDU; if `G_IMG_OK` is set, this also triggers a SYSRESETREQ — but normally the short-form is used as a status ping rather than a reset trigger. |
 | `0x5C` | 0x0F | Copy `G_RX_BUF[2]`, `[4]`, `[5]` into `G_5C_REGS[0..2]` and call `cmd_5c_consume` → `FUN_080031E6`. |
 | `0x81` | — | `image_apply()`. Validate the receive-slot at flash `0x08001800`; on success latch `G_IMG_OK_FLAG`, on failure erase the slot and reset receive-state RAM bytes. |
 | `0x82` | 0x10 | `cmd_82_fw_page` → `FUN_080039E6` — accept a 16-byte OTA payload page (long-frame only). |
@@ -145,9 +145,12 @@ After the case body, dispatch always:
   main module sends as many as the image needs, then issues
   `cmd 0x81` to validate and reset.
 - `cmd 0x5C` is overloaded by length: short form (`len == 3`)
-  reads back a 3-byte register block to the bus; long form
+  reads back the previously-stashed 3-byte register block to the
+  bus via `cmd_5c_write3` (`image.c`, see above); long form
   (`len == 0x0F`) writes 3 bytes into the same block from the
-  inbound frame. Probably a generic 3-byte register R/W.
+  inbound frame. The short form acts like a status ping that
+  carries whatever was last written, packaged as the 7-byte
+  image-status PDU.
 
 ## Open questions
 

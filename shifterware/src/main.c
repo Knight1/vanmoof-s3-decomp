@@ -4,8 +4,9 @@
  *
  * Shape of the OEM main:
  *   1. Copy 0xC0 bytes of .data from flash 0x08004828 to SRAM 0x20000000.
- *   2. Enable SYSCFG (RCC_APB2ENR bit 0) and set NVIC priority via
- *      `FUN_080052E8(3)`.
+ *   2. Enable SYSCFG (RCC_APB2ENR bit 0) and call
+ *      `syscfg_set_mem_mode(3)` to slam the MEM_MODE field of
+ *      `SYSCFG_CFGR1` (boot memory remap; value 3 is MM32-specific).
  *   3. `cpsie i` to enable IRQs.
  *   4. Three init thunks (`FUN_0800428E`, `FUN_080041C6`, `FUN_080040B2`)
  *      bring up the rest of the peripherals (TIM / ADC / etc., not yet
@@ -79,6 +80,7 @@
 #define G_FLAG_117          (*(volatile uint8_t  *)0x20000117u)
 #define G_FLAG_116          (*(volatile uint8_t  *)0x20000116u)
 
+#define G_COUNTER           (*(volatile uint32_t *)0x200000F8u)  /* cmd-0x14 monotonic counter; reset by `sched_idle_reset` */
 #define G_5C_BUSY           (*(volatile uint8_t  *)0x2000013Cu)
 #define G_5C_DEADLINE_BASE  (*(volatile uint32_t *)0x20000110u)
 #define G_5C_LATCH_BYTE     (*(volatile uint8_t  *)0x20000131u)  /* 0x20000130 + 1 */
@@ -113,7 +115,19 @@
 static void boot_init_periphs_a(void)            { TRAP_VOID(); } /* OEM @ 0x0800428E (72 B) */
 static void boot_init_periphs_b(void)            { TRAP_VOID(); } /* OEM @ 0x080041C6 (88 B) */
 static void boot_init_periphs_c(void)            { TRAP_VOID(); } /* OEM @ 0x080040B2 (126 B) */
-static void set_nvic_priority(int p)             { (void)p; TRAP_VOID(); } /* OEM @ 0x080052E8 (24 B) */
+/* OEM @ 0x080052E8 (24 B). Read-modify-write the `MEM_MODE` field
+ * (bits 0..1) of `SYSCFG_CFGR1` at `0x40010000`. On the STM32F0
+ * family this selects boot-time memory remap (Flash / System
+ * memory / SRAM); the MM32F031 silicon may extend the encoding —
+ * the OEM passes `3`, which is "reserved" per ST docs but
+ * presumably has a vendor-specific meaning here. Caller (only one)
+ * is `main`'s boot prologue, right after gating the SYSCFG clock on
+ * in `RCC->APB2ENR`. */
+static void syscfg_set_mem_mode(uint32_t mode)
+{
+    volatile uint32_t *const cfgr1 = (volatile uint32_t *)0x40010000u;
+    *cfgr1 = (*cfgr1 & 0xFFFFFFFCu) | (mode & 0x3u);
+}
 
 static int  boot_hash(const void *p, uint32_t n) { (void)p; (void)n; TRAP_RET(0); } /* OEM @ 0x08005D40 (44 B) */
 static void boot_apply_hash(uint16_t v, int t)   { (void)v; (void)t; TRAP_VOID(); } /* OEM @ 0x08004048 (96 B) */
@@ -279,7 +293,22 @@ static void motor_drive_step(uint8_t target)
         state_flags_reset();
     }
 }
-static void    sched_default_post(void)          { TRAP_VOID(); } /* OEM @ 0x080036BA (26 B) */
+static void sched_5c_consume(void); /* fwd decl: stub lives below */
+
+/* OEM @ 0x080036BA (26 B). The case-0 epilogue of `sched_run_task`,
+ * fired the iteration after `G_STATE_FC` lands at 0. Resets the
+ * application state machine back to its initial "home" configuration
+ * — promotes `G_STATE_FC` out of state 0, zeroes the cmd-0x14 counter,
+ * latches the gear-position counter back to home (1), then drains
+ * whatever payload `sched_5c_consume` had staged. Only caller is
+ * main's `sched_run_task` (case 0); never invoked from anywhere else. */
+static void sched_idle_reset(void)
+{
+    G_STATE_FC  = 1u;
+    G_COUNTER   = 0u;
+    G_STATE_115 = 1u;
+    sched_5c_consume();
+}
 static void    sched_task_alpha(void)            { TRAP_VOID(); } /* OEM @ 0x08003608 (178 B) */
 static void    sched_task_beta(void)             { TRAP_VOID(); } /* OEM @ 0x080033E2 (196 B) */
 static void    sched_task_extra(void)            { TRAP_VOID(); } /* OEM @ 0x080034A6 (60 B) */
@@ -298,7 +327,7 @@ static void sched_run_task(uint8_t task)
 {
     switch (task) {
     case 0u:
-        sched_default_post();
+        sched_idle_reset();
         return;
 
     case 1u:
@@ -359,7 +388,7 @@ int main(void)
 
     /* RCC + NVIC + IRQs */
     RCC->APB2ENR |= RCC_APB2_SYSCFGEN;
-    set_nvic_priority(3);
+    syscfg_set_mem_mode(3u);
     __asm__ volatile ("cpsie i");
 
     /* Per-peripheral bring-up. */

@@ -110,6 +110,22 @@ void report_image_status(void)
     modbus_tx_finalize(7u);
 }
 
+/* OEM @ 0x08003B86 (24 B). Drives the short form of Modbus cmd 0x5C
+ * (`len == 3`): the bike echoes back the 3-byte register block it
+ * previously stashed in `G_5C_REGS` via the long-form (`len == 0x0F`)
+ * write. We splice those three bytes into the image-status emit
+ * slots — `version` into `G_VERSION_BYTE`, `pkt0`/`pkt1` into the
+ * two `G_PKT_BYTES` slots — and fire `report_image_status`, which
+ * lays out a 7-byte PDU on the bus and may piggy-back a post-OTA
+ * SYSRESETREQ (gated by `G_IMG_OK`, see modbus_tx_finalize). */
+void cmd_5c_write3(uint8_t version, uint8_t pkt0, uint8_t pkt1)
+{
+    G_VERSION_BYTE = version;
+    G_PKT_BYTES[0] = pkt0;
+    G_PKT_BYTES[1] = pkt1;
+    report_image_status();
+}
+
 void image_apply(void)
 {
     G_IMG_STATUS = (uint8_t)image_verify_crc();

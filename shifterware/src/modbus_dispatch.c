@@ -75,14 +75,6 @@ static void cmd_0f_report_u32(uint32_t value)
     for (;;) { /* TODO: implement (decomp pending) */ }
 }
 
-/* OEM @ 0x08003B86 (24 B). Case 0x5C, len==3 — accept a 3-byte
- * register write and trigger a status report. */
-static void cmd_5c_write3(uint8_t a, uint8_t b, uint8_t c)
-{
-    (void)a; (void)b; (void)c;
-    for (;;) { /* TODO: implement (decomp pending) */ }
-}
-
 /* OEM @ 0x080031E6 (118 B). Case 0x5C, len==0x0F — after the
  * dispatcher has staged 3 bytes into G_5C_REGS, kick the consumer. */
 static void cmd_5c_consume(void)

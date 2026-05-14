@@ -73,6 +73,7 @@ shift command can keep the bridge energised.
 | CRC        | `0x40023000` | Hardware CRC32 for image-validation in `image_verify_crc`. | `crc_reset`, `crc32_word`, `crc32_words` |
 | FLASH (controller) | `0x40022000` | OTA staging — page erase + word program. Status codes 1=BUSY 2=PGERR 3=WRPRTERR 4=READY. | `flash_*` family |
 | SCB (Cortex-M0) | `0xE000ED00` | `SYSRESETREQ` after a validated OTA, via `AIRCR = 0x05FA0004`. | `modbus_tx_finalize` |
+| SYSCFG     | `0x40010000` | Boot prologue writes `MEM_MODE` field to 3 (MM32-specific encoding) before enabling interrupts. Clock gated on via RCC APB2ENR bit 0. | `syscfg_set_mem_mode` @ `0x080052E8` |
 
 ## MCU register-layout note
 
@@ -128,15 +129,15 @@ without a comment are still single-purpose unknowns.
 
 | Addr | Type | Name | Behaviour |
 | ---- | ---- | ---- | --------- |
-| `0x200000F8` | `uint32_t` | `G_COUNTER` | Incremented in cmd 0x14 (when `G_MODE == 0`). Emitted big-endian by cmd 0x0F via `cmd_0f_report_u32` → `FUN_08003C68` → `FUN_08003C1C`. |
-| `0x200000FC` | `uint8_t` | `G_STATE_FC` | Master state byte; values 0..6 select which round-robin task runs each tick. Read by `sched_pick_task`. |
+| `0x200000F8` | `uint32_t` | `G_COUNTER` | Incremented in cmd 0x14 (when `G_MOTOR_RUNNING == 0`). Emitted big-endian by cmd 0x0F via `cmd_0f_report_u32` → `FUN_08003C68` → `FUN_08003C1C`. Reset to 0 by `sched_idle_reset` whenever the state machine transitions through `G_STATE_FC == 0`. |
+| `0x200000FC` | `uint8_t` | `G_STATE_FC` | Master state byte; values 0..6 select which round-robin task runs each tick. Read by `sched_pick_task`. Promoted 0→1 by `sched_idle_reset` (case-0 self-exit); demoted 2→1 by `motor_drive_step` after motion-reached; latched to 2 by `main`'s pre-loop sync the first time PA1 reads low. |
 | `0x20000100..02` | `uint8_t[3]` | `G_5C_REGS` | 3-byte register block written by cmd 0x5C / len 0x0F (from `G_RX_BUF[2,4,5]`); read back by cmd 0x5C / len 3. |
 | `0x20000104` | `uint32_t` | `G_TICK_A` | "Compare" tick counter advanced in lockstep with `G_TICK_B` by the super-loop. |
 | `0x20000108` | `uint32_t` | `G_TICK_PREV_B` | Last-iteration snapshot of `G_TICK_B`; used for the 2000-tick rollover detector. |
 | `0x20000110` | `uint32_t` | `G_5C_DEADLINE_BASE` | Tick value captured when the 5C-busy latch goes high; the consumer fires when `G_TICK_B - this == 0x32`. |
 | `0x20000114` | `uint8_t` | `G_DRIVE_DIR` | Active drive-direction byte, encoded as the H-bridge mask (`0xF0` = forward, `0x0F` = reverse, `0x00`/anything else = idle). Written by the round-robin task helpers (`sched_task_alpha/beta/extra`, `FUN_08003538`) when they queue a shift; consumed by `pos_encoder_tick` via the tri-state decoder `drive_dir_code` to know which direction each PA0 edge represents; cleared by `state_flags_reset` at end-of-task. |
 | `0x2000010C` | `uint32_t` | `G_MOTOR_RUN_START` | `G_TICK_B` snapshot at the moment the H-bridge was last energised. Used by `motor_h_bridge_set` to time the stall-timeout fallback. |
-| `0x20000115` | `uint8_t` | `G_STATE_115` | **Gear-position counter.** Latched to 1 during pre-loop sync the first time PA1 reads low; thereafter incremented (reverse drive) or decremented (forward drive) by `pos_encoder_tick` on each PA0 edge. The "motor arrived" path presumably compares this against a target value. |
+| `0x20000115` | `uint8_t` | `G_STATE_115` | **Gear-position counter.** Latched to 1 during pre-loop sync the first time PA1 reads low; reset back to 1 by `sched_idle_reset` whenever the state machine cycles through `G_STATE_FC == 0`; thereafter incremented (reverse drive) or decremented (forward drive) by `pos_encoder_tick` on each PA0 edge. The "motor arrived" path presumably compares this against a target value. |
 | `0x20000116` | `uint8_t` | `G_FLAG_116` | Snapshot of `G_FLAG_117` in the "extra task" branch of the round-robin. |
 | `0x20000117` | `uint8_t` | `G_FLAG_117` (a.k.a. `G_14_FLAG_A`) | Set to 1 by cmd 0x14 (when `G_MODE == 0`). |
 | `0x20000118` | `uint8_t` | `G_TASK_ID` | Stamped to one of {2, 4, 5, 7, 8} by the round-robin case handlers — a "what task ran this tick" marker. |
@@ -149,8 +150,8 @@ without a comment are still single-purpose unknowns.
 | `0x2000013D` | `uint8_t` | `G_FLAG_13D` (a.k.a. `G_14_FLAG_B`) | Set/cleared by cmd 0x14 depending on `G_MODE`; gates `sched_task_beta` in several round-robin cases. |
 | `0x2000013E` | `uint8_t` | `G_FLAG_13E` | Set to 1 by the "extra task" branch of the round-robin (case 1 epilogue). |
 | `0x2000013F..40` | `uint8_t[2]` | `G_OTA_OFF` | OTA staging offset (lo/hi). Reset on OTA-mode exit / timeout. |
-| `0x20000141` | `uint8_t` | `G_VERSION_BYTE` | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]` by `image_apply`. |
-| `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` | Pair of bytes assembled by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) for `report_image_status` to emit. |
+| `0x20000141` | `uint8_t` | `G_VERSION_BYTE` | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]` by `image_apply`; also overwritten by `cmd_5c_write3` (short-form cmd 0x5C) with `G_5C_REGS[0]`. Emitted as PDU byte 2 by `report_image_status`. |
+| `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` | Pair of bytes emitted as PDU bytes 3 and 4 by `report_image_status`. Written by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) post-validation, or by `cmd_5c_write3` with the trailing two bytes of `G_5C_REGS`. |
 | `0x20000148` | `uint32_t` | `G_HASH_SEED_PTR` | Pointer passed to `boot_hash(*, 100000)` during early boot. Likely a flash-resident integrity table. |
 
 The 0xC0-byte block at `0x20000000` is `.data`, copied by `main` from
