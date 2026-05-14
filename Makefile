@@ -4,7 +4,7 @@
 # file is a thin forwarder so you can run `make shifterware` (or just
 # `make`, which builds whatever is active) from the repo root.
 
-WARES        := shifterware
+WARES        := shifterware shifterboot
 ACTIVE_WARE  := shifterware
 
 .PHONY: all clean help $(WARES) all-wares compare size disasm
