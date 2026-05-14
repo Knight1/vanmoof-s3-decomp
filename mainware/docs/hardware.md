@@ -78,10 +78,12 @@ soft float for now.
 
 | Address | Size | Symbol | Module | Notes |
 | --- | --- | --- | --- | --- |
+| `0x2000010E` | ≥6 | `g_state` | (not yet decoded) | Status/console block. `g_state[5]` (byte at `0x20000113`) is the login state machine: `0xFA` = ready-to-accept password, non-`0xFA` = locked-out / scheduler-slot id. |
 | `0x20000014` | 1 | `g_systick_step` | `systick.c` | Muco-runtime SysTick increment-per-tick (initially 1). **Same SRAM address as in mainboot** — both wares' `.data` starts at +0x14 from SRAM base. |
 | `0x200004C0` | ~400 | `g_scheduler` | (not yet decoded) | Muco 48-slot one-shot scheduler table — `enabled_mask` bitmap at +0x08, callbacks at +0x10, counters at +0xD0. |
+| `0x20009368` | 4 | `g_app_ctx` | (not yet decoded) | pointer-to-application-context. Sub-object at `+0x2DC` holds (among others) `[0x2D9]` logged-in flag, `[0x2E0]` failed-login-attempt counter, `[0x398]` user-configurable service password. |
 | `0x20009704` | 4 | `g_systick_counter` | `systick.c` | free-running SysTick counter |
-| `0x20009D98` | 4 | `g_log_func` | (not yet decoded) | function pointer used by every system-exception handler — `(*g_log_func)(const char *fmt, …)`-style logger. |
+| `0x20009D98` | 4 | `g_log_func` | (not yet decoded) | function pointer used by every system-exception handler and the debug console — `(*g_log_func)(const char *fmt, …)`-style logger. |
 
 STM32F4 1 MB sector layout: sectors 0..3 = 16 KB each, sector 4 = 64 KB,
 sectors 5..7 = 128 KB each. Mainware's 213 KB image starts at sector

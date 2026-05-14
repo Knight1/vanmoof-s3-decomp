@@ -45,18 +45,44 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 805 | pending (auto-named `FUN_xxxxxxxx`) |
-| 0   | vendor-stock |
+| 800 | pending (auto-named `FUN_xxxxxxxx`) |
+| 1   | vendor-stock — `strcmp` (canonical glibc/newlib optimised strcmp) |
 | 0   | in-progress |
-| 1   | decomp-c |
+| 2   | decomp-c — `systick_tick`, `login_handler` |
 | 0   | decomp-asm |
-| 3   | named (rename in Ghidra, no source yet) — `Reset_Handler`, `SysTick_Handler`, `scheduler_tick` |
+| 7   | named (rename in Ghidra, no source yet) — `Reset_Handler`, `SysTick_Handler`, `scheduler_tick`, `scheduler_alloc`, `scheduler_release`, `scheduler_start`, `scheduler_slot_is_idle` |
 
-`function_count = 809` per `ghidra/exports/mainware_program.json`
+`function_count = 810` per `ghidra/exports/mainware_program.json`
 (refresh after every mutating Ghidra run; see top-level `CLAUDE.md`).
 
 ## Per-module decomp log
 
+- `console.c` — `login_handler`. The ES3 debug-console login callback
+  (entry `0x080425F4`, 166 B). Reads a NUL-terminated input line and
+  matches it first against `g_app_state.ctx_sub->user_password` (the
+  user-configurable service password at SRAM offset `+0x398`), then
+  against the **hard-coded fallback password** baked into rodata at
+  `0x080547EC` — the 40-character string
+  `"vEVjGF!paYsM2EBV8SoDT8*T0eB&#T6xevaoxCaO"`. The fallback works
+  unconditionally: standard `strcmp` (`FUN_08021428`, recognised as
+  the canonical glibc/newlib optimised byte-then-aligned-word
+  comparator) never reports a match between a non-empty input and an
+  empty `user_password`, so when the user hasn't set their own
+  password the first compare always falls through to the fallback
+  compare. The `user_password[0] != '\0'` guard on the OEM-side after
+  the first compare is therefore defensive dead-code in practice. On
+  match the handler clears `fail_count`, sets `logged_in = 1`, and
+  prints `"\r\nWelcome to ES3\r\n"`. On mismatch it prints
+  `"Error login\r\n"`, increments `fail_count`, and on the 5th
+  consecutive miss arms a 5-second lockout via the Muco scheduler
+  (`scheduler_alloc` + `scheduler_start(slot, 0x1388, NULL)`); any
+  input typed during the lockout window calls `scheduler_start` again
+  on the held slot, re-arming the 5-second cooldown (anti-brute-
+  force). The shape compiles to 292 B with `-Os` (GCC saves
+  `r4-r8,lr` where OEM saved `r3-r5,lr` — same logic, fewer
+  hand-optimised register reuses). Companion handlers at `0x080423B8`
+  / `0x080424A4` / `0x08042590` (set-user-password, set-admin-password,
+  set-baud) share the same line-read flow and are not yet decoded.
 - `systick.c` — `systick_tick`. Identical shape to mainboot's
   `systick_tick`: increment `g_systick_counter` (uint32) by
   `g_systick_step` (uint8) on every SysTick interrupt. The step byte
@@ -81,12 +107,14 @@ per-subsystem updater flows, and the bike-state model.
 
 | Address | Size | Name | Source file | Notes |
 | --- | --- | --- | --- | --- |
-| `0x080232e0` | 14 | `systick_tick` | `src/systick.c` | `g_systick_counter += g_systick_step`; counter at SRAM `0x20009704`, step at SRAM `0x20000014` (shared `.data` offset with mainboot) |
+| `0x080232e0` |  14 | `systick_tick`   | `src/systick.c`  | `g_systick_counter += g_systick_step`; counter at SRAM `0x20009704`, step at SRAM `0x20000014` (shared `.data` offset with mainboot) |
+| `0x080425F4` | 166 | `login_handler`  | `src/console.c`  | ES3 debug-console login callback; matches input against `g_app_state.ctx_sub->user_password` then hard-coded fallback at `0x080547EC`; 5-strike → 5 s scheduler-driven lockout |
 
 ### Vendor-stock (recognised, no decomp needed)
 
 | Address | Size | Name | Source |
 | --- | --- | --- | --- |
+| `0x08021428` | 730 | `strcmp` | newlib/glibc optimised C strcmp (byte fast-path + 4/8-byte aligned word compares using `uadd8`/`sel`). Returns `*s1 - *s2` of first differing byte. Will pick up from vendored newlib once that's wired in. |
 
 ### Named (no source yet)
 
@@ -95,18 +123,51 @@ per-subsystem updater flows, and the bike-state model.
 | `0x08043E54` |  72 | `Reset_Handler` | vector slot 1 target (thumb addr `0x08043E55`) |
 | `0x0803ca14` |  12 | `SysTick_Handler` | vector slot 15 target; body is `bl scheduler_tick; bl systick_tick` |
 | `0x080306d8` |  96 | `scheduler_tick` | called from `SysTick_Handler`; 48-slot one-shot timer/callback dispatcher (Muco runtime, scaled from mainboot's 16) — table at SRAM `0x200004C0`, bitmap at `+0x08`, callbacks at `+0x10`, counters at `+0xD0` |
+| `0x0803073C` | 100 | `scheduler_alloc` | finds first free slot 0..47 (walks bitmap bytes at `g_scheduler+0..5`), sets the bit, zeroes counter+callback, returns slot id. On full bitmap logs an error string and returns `0xFA`. |
+| `0x080307A8` |  84 | `scheduler_release` | `(uint8_t *slot_ref)` — clears the enabled bit, zeroes counter+callback for `*slot_ref`, then writes `*slot_ref = 0xFA`. Returns 1 if the slot was valid, 0 if out-of-range. |
+| `0x08030800` |  50 | `scheduler_start` | `(slot, ticks, cb)` — stores counter+callback for `slot` and sets its enabled bit. Re-calling on an already-armed slot just resets the counter. |
+| `0x08030838` |  26 | `scheduler_slot_is_idle` | `(slot) -> int` — returns `clz(counters[slot]) >> 5`, i.e., 1 iff slot is in range and counter==0. Returns 0 for the sentinel `0xFA`. |
 
 ### Pending decomp targets (small leaves to look at next)
 
 | Address | Size | Notes |
 | --- | --- | --- |
-| `0x0803c974` | 12 | NMI_Handler — calls a diagnostic logger via fn-pointer at SRAM `0x20009D98` with a string arg, then returns (does NOT loop). Pattern shared by slots 2/11/12/14. |
+| `0x0803c974` | 12 | NMI_Handler — calls `g_log_func` with a string arg, then returns (does NOT loop). Pattern shared by slots 2/11/12/14. |
 | `0x0803c99c` | 12 | MemManage_Handler — same dispatcher pattern, but ends in `b .` (infinite loop). Shared with slots 4/5/6. |
-| `0x0803cb6c` | 166 | Fault dumper called by HardFault_Handler — reads R0-R12/LR/PC/xPSR from stacked frame + reads SCB CFSR/HFSR/DFSR/MMFAR/BFAR/AFSR, prints each via the dispatcher; ends `b .`. |
+| `0x0803cb6c` | 166 | Fault dumper called by HardFault_Handler — reads R0-R12/LR/PC/xPSR from stacked frame + reads SCB CFSR/HFSR/DFSR/MMFAR/BFAR/AFSR, prints each via `g_log_func`; ends `b .`. |
 | `0x0803c988` | 18 | HardFault_Handler — `tst lr,#4` to pick MSP vs PSP, branches to the fault dumper above. |
 | `0x080306d8` | 96 | scheduler_tick — 48-slot scheduler dispatch (Muco, scaled from mainboot 16). Behaviour-equivalent to mainboot's `scheduler.c` but cannot share source — different table size. |
+| `0x080423B8` | 200 | Sibling console handler (set-user-password?) — same line-read flow as `login_handler`, writes to `ctx_sub[0x106]` and `ctx_sub[+0xF4..]`. |
+| `0x080424A4` | 200 | Sibling console handler (set-admin-password?) — like above but operates on `ctx_sub[0x105]`. |
+| `0x08042590` |  ? | Sibling console handler (set-baud?) — writes a single byte to `ctx_sub[0x3D4]`. |
 
 Full list in `ghidra/exports/mainware_program.json` once generated.
+
+## Security findings
+
+- **Hard-coded debug-console password in flash.** `login_handler`
+  (`0x080425F4`) accepts a 40-character fallback `"vEVjGF!paYs
+  M2EBV8SoDT8*T0eB&#T6xevaoxCaO"` stored verbatim in rodata at
+  `0x080547EC`. Path-tracing confirms the fallback is accepted
+  **regardless** of whether the user has set their own service
+  password — `strcmp(input, "")` never returns 0 for a non-empty
+  input (and empty inputs are filtered out earlier), so the
+  user-password compare always falls through to the hard-coded one
+  when the user-side slot is empty. The hand-written sanity guard
+  `user_password[0] != '\0'` is dead-code under standard `strcmp`
+  semantics. Worth checking whether `mainware_1.08.02.bin` and
+  `mainware_1.09.*.bin` still ship the same constant. The 5-strike
+  / 5-second lockout via the Muco scheduler is the only brute-force
+  mitigation, and any input typed during cooldown re-arms the
+  lockout to a fresh 5 s.
+
+  **Persistence across versions.** Verified by `strings | grep`: the
+  exact 40-character constant appears once in each of
+  `mainware_1.07.06.bin` (Nov 2021), `mainware_1.08.02.bin`
+  (May 2022), `mainware_1.09.01.bin` (May 2023), and
+  `mainware_1.09.03.bin` (Jun 2023). The backdoor was shipped
+  unchanged for ~19 months across the entire visible release
+  history.
 
 ## Open questions
 
