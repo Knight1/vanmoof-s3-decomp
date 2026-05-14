@@ -29,6 +29,7 @@ mainware*.bin
 batteryware*.bin
 motorware*.bin
 bleware*.bin
+bleboot*.bin
 *.pak
 SPI-Flash_*.rom
 *.rom
