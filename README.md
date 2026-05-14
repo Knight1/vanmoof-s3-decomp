@@ -10,7 +10,7 @@ behaviour-equivalent) images.
 | --- | --- | --- | --- | --- | --- |
 | [`shifterware/`](shifterware/) | `shifterware 0.237` | MM32F031F6U6 (Cortex-M0) | e-Shifter application (super-loop + Modbus bus protocol) | ~12 KB | active — `59 decomp-c / 6 named / 64 pending` |
 | [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | MM32F031F6U6 (Cortex-M0) | e-Shifter first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
-| [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | STM32F4/F7 (Cortex-M3+, 320 KB SRAM) | main-controller bootloader | 32 KB | active — scaffold only |
+| [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | ST STM32F413VGT6 (Cortex-M4) | main-controller bootloader (third-party Muco Technologies) | 32 KB | active — `2 decomp-c / 178 pending` |
 
 **Shifterboot lineage:** the bootloader's startup path is a lightly-customised
 MindMotion vendor template — `Reset_Handler`, the Cortex-M0 vector table, and
@@ -30,8 +30,18 @@ stock template has `B .` there; VanMoof installed real logic). See
 [`shifterboot/docs/progress.md`](shifterboot/docs/progress.md) for the
 per-function evidence.
 
-Other VanMoof S3 firmwares (motorware, batteryware, mainware, bleware,
-bmsboot, etc.) come later under the same project; they live in
+**Per-firmware MCU mapping** (loader + application share an MCU):
+
+| Firmware | MCU | Family |
+| --- | --- | --- |
+| `mainware` / `muco-boot`     | ST STM32F413VGT6        | Cortex-M4, 1 MB flash, 320 KB SRAM |
+| `bleware` / `bleboot`        | TI CC2642R1F            | Cortex-M4F, BLE 5.2 |
+| `motorware`                  | TI TMS320F28054F        | C2000 Piccolo (32-bit DSP — **not ARM**) |
+| `shifterware` / `shifterboot`| MindMotion MM32F031F6U6 | Cortex-M0 (STM32F031 clone) |
+| `batteryware` / `bmsboot`    | ST STM32L072CZT6        | Cortex-M0+, 192 KB flash, 20 KB SRAM |
+
+The remaining wares (mainware, bleware, bleboot, motorware,
+batteryware, bmsboot) come later under the same project; they live in
 sibling subdirectories once started.
 
 | | |

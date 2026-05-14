@@ -1,22 +1,15 @@
-/* linker_stm32f7.ld — mainboot
+/* linker_stm32f413.ld — mainboot
  *
- * Memory map derived from muco-boot.bin (the OEM image):
- *   FLASH : 0x08000000, 32 KB observed (this loader fits in the first
- *           sector of an STM32F7 — actual flash size is at least 256 KB
- *           on the candidate parts, but we only carve out what the
- *           bootloader uses).
- *   SRAM  : 0x20000000, 320 KB contiguous (DTCM+SRAM1+SRAM2 on F7;
- *           SRAM1+SRAM2+SRAM3 on F469/F479).
+ * Memory map for ST STM32F413VGT6 (Cortex-M4F):
+ *   FLASH : 0x08000000, 1 MB total — this loader uses the first 32 KB
+ *           (sectors 0+1 on the F4xx layout).
+ *   SRAM  : 0x20000000, 320 KB contiguous = SRAM1 (256 K) + SRAM2 (64 K).
  *
  * The bootloader's initial SP from the vector table is 0x20050000 — the
- * very top of the contiguous SRAM region. Reset_Handler clears .bss only
- * up to 0x20000950, so the upper bulk of SRAM is presumably reserved for
- * runtime allocations (stack growth, plus likely a fast-path region the
- * application reads back).
- *
- * NOTE: the exact STM32 part is not yet confirmed. The values below are
- * the observed OEM-image constants; tighten or replace once the part is
- * identified from RCC/peripheral literal pools.
+ * top of the contiguous SRAM region. Reset_Handler clears .bss only up
+ * to 0x20000950, so the upper bulk of SRAM is presumably reserved for
+ * runtime allocations (stack growth, plus an image-staging area for
+ * shadow-copy and inter-subsystem firmware blobs).
  */
 
 ENTRY(Reset_Handler)

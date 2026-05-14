@@ -43,32 +43,30 @@ bespoke layer is the application-level data that Muco's loader
 consumes (image table format, slot layout, version word
 encoding).
 
-## MCU identification
+## MCU
 
-Confirmed STM32F4 from in-binary strings (`"'MT' (@) 2019
-STM32F4, ..."`, `"No F4 code\r\n"`). Combined with the 320 KB
-contiguous SRAM (initial SP = `0x20050000`), the only STM32F4
-variants that match are:
+**ST STM32F413VGT6** (confirmed by Tobias). Cortex-M4F, 100-pin
+LQFP, 1 MB flash, 320 KB SRAM (256 K SRAM1 at `0x20000000` + 64 K
+SRAM2 at `0x20040000`, contiguous → top at `0x20050000`, matching
+the OEM initial SP).
 
-| Variant | SRAM layout | Status |
-| --- | --- | --- |
-| STM32F469/F479 | SRAM1 (160 K) + SRAM2 (32 K) + SRAM3 (128 K) at `0x20000000` = 320 K contiguous | ✅ best fit |
-| STM32F427/F429/F437/F439 | 192 K contiguous | ✗ |
-| STM32F405/F407/F415/F417 | 128 K contiguous | ✗ |
-| STM32F446 | 128 K contiguous | ✗ |
+The mainware application runs on the same MCU; the loader uses
+only the first 32 KB of flash and the bottom of SRAM.
 
-To distinguish F469 from F479 (the only F-class difference is
-crypto/hash hardware on F479 and TFT/DSI on both), look at
-peripheral literal pools during decomp. Either way, the
-Cortex-M4F core (with FPU and DSP extensions) is shared, so
-`-mcpu=cortex-m4 -mfloat-abi=soft` for now and reconsider
-`-mfpu=fpv4-sp-d16 -mfloat-abi=hard` if FPU-typed parameters
-turn up.
+In-binary corroboration:
+- Banner strings `"'MT' (@) 2019 STM32F4, ..."` and `"No F4
+  code\r\n"`.
+- Thumb-2 wide encodings (`ldr.w sp,[pc,#imm]` in `Reset_Handler`).
+- Distinct handlers populate the MemManage / BusFault / UsageFault /
+  DebugMon vector slots — all RESERVED on Cortex-M0/M0+, so this
+  must be M3+.
+- The vector table has a non-default handler at slot 98, consistent
+  with the F413's IRQ count (~97 used IRQs in the F413 SVD).
 
-Also confirmed: Thumb-2 wide encodings present (`ldr.w sp,[pc,#imm]`
-in `Reset_Handler`), and distinct handlers populate the MemManage /
-BusFault / UsageFault / DebugMon vector slots — all of which are
-RESERVED on Cortex-M0/M0+.
+Build flags: `-mcpu=cortex-m4`. Float ABI is `soft` for now — the
+F413 does have a single-precision FPU (FPv4-SP-D16) and we may
+need to switch to `-mfpu=fpv4-sp-d16 -mfloat-abi=hard` once a
+function with FPU prologue/epilogue surfaces.
 
 ## Memory map (provisional)
 

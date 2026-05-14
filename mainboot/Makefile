@@ -1,10 +1,6 @@
 # vanmoof-s3-decomp — build for the main controller bootloader
-# Target firmware: mainboot (muco-boot.bin, ARM Cortex-M3+).
-#
-# The exact STM32 variant is still being narrowed (320 KB SRAM at
-# 0x20000000 — candidates STM32F745/F746/F756 or STM32F469/F479);
-# the Makefile picks a conservative cortex-m4 baseline that any of
-# those parts can execute. Bump to cortex-m7 once confirmed.
+# Target firmware: mainboot (muco-boot.bin, ST STM32F413VGT6, Cortex-M4F).
+# 1 MB flash, 320 KB SRAM (256 + 64) contiguous at 0x20000000.
 
 PROJECT      := mainboot
 MCU          := cortex-m4
@@ -20,7 +16,7 @@ SIZE         := $(TOOLCHAIN)size
 BUILD_DIR    := build
 SRC_DIR      := src
 INC_DIR      := include
-LD_SCRIPT    := linker_stm32f7.ld
+LD_SCRIPT    := linker_stm32f413.ld
 
 OEM_IMAGE    ?= muco-boot.bin
 
