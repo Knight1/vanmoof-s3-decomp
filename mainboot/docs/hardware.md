@@ -16,39 +16,83 @@ Thumb-2 instruction set, real Cortex-M3+ system-exception slots).
 
 The hashes are the contract — if a future blob differs by a single byte, it is a different mainboot.
 
-## MCU identification (in-progress)
+## Provenance: Muco Technologies third-party bootloader
 
-Confirmed from the OEM image:
+This is **not VanMoof-written**. The image contains the banner
+string:
 
-- **ARM Cortex-M3 or higher.** Thumb-2 wide encodings present (`ldr.w sp,[pc,#imm]` in `Reset_Handler`), and distinct handlers populate the MemManage / BusFault / UsageFault / DebugMon vector slots (all of which are RESERVED on Cortex-M0/M0+).
-- **Soft-float ABI in the toolchain output** (no FPU prologue/epilogue observed in the few inspected functions — assumed; revisit when an FPU-relevant function is decoded).
-- **320 KB contiguous SRAM at `0x20000000` – `0x2004FFFF`** — initial SP is `0x20050000`, the byte after the last SRAM address. This narrows the part to:
+```
+'MT' (@) 2019 STM32F4, Start
+STM32 bootloader <%X.%02X> Muco Technologies (c)2019
+```
 
-| Family | Variant | SRAM layout | Match |
-| --- | --- | --- | --- |
-| STM32F4 | F469/F479 | SRAM1 (160 K) + SRAM2 (32 K) + SRAM3 (128 K) at `0x20000000` = 320 K contiguous | ✅ |
-| STM32F7 | F745/F746/F756 | DTCM (64 K) + SRAM1 (240 K) + SRAM2 (16 K) at `0x20000000` = 320 K contiguous | ✅ |
-| STM32F4 | F427/F429/F437/F439 | 192 K contiguous | ✗ (top would be 0x20030000) |
-| STM32F4 | F405/F407/F415/F417 | 128 K contiguous | ✗ |
-| STM32F4 | F446 | 128 K contiguous | ✗ |
+It is a commercial STM32F4 bootloader product from **Muco
+Technologies** (a Dutch firm; the same vendor identifier seen in
+the `Muco-` filename prefix). VanMoof appears to have licensed this
+loader and integrated it as the main-controller first-stage; the
+"customisation" likely comes from build-time configuration (image
+table layout, peripheral assignments, CRC seed) rather than source
+edits.
 
-The final pick will come from inspecting RCC and peripheral base
-addresses in literal pools post-Ghidra. RCC base is `0x40023800` on
-both F4 and F7, so it can't disambiguate by itself — USART instance
-addresses or FLASH interface offsets will.
+Consequence for the decomp scope policy: nearly the entire
+function set is third-party code, not bespoke. We still translate
+it (clean-room reconstruction, original behaviour described in
+sources we author), but expectations about which functions are
+"interesting" are inverted — *every* function is Muco IP, and the
+bespoke layer is the application-level data that Muco's loader
+consumes (image table format, slot layout, version word
+encoding).
+
+## MCU identification
+
+Confirmed STM32F4 from in-binary strings (`"'MT' (@) 2019
+STM32F4, ..."`, `"No F4 code\r\n"`). Combined with the 320 KB
+contiguous SRAM (initial SP = `0x20050000`), the only STM32F4
+variants that match are:
+
+| Variant | SRAM layout | Status |
+| --- | --- | --- |
+| STM32F469/F479 | SRAM1 (160 K) + SRAM2 (32 K) + SRAM3 (128 K) at `0x20000000` = 320 K contiguous | ✅ best fit |
+| STM32F427/F429/F437/F439 | 192 K contiguous | ✗ |
+| STM32F405/F407/F415/F417 | 128 K contiguous | ✗ |
+| STM32F446 | 128 K contiguous | ✗ |
+
+To distinguish F469 from F479 (the only F-class difference is
+crypto/hash hardware on F479 and TFT/DSI on both), look at
+peripheral literal pools during decomp. Either way, the
+Cortex-M4F core (with FPU and DSP extensions) is shared, so
+`-mcpu=cortex-m4 -mfloat-abi=soft` for now and reconsider
+`-mfpu=fpv4-sp-d16 -mfloat-abi=hard` if FPU-typed parameters
+turn up.
+
+Also confirmed: Thumb-2 wide encodings present (`ldr.w sp,[pc,#imm]`
+in `Reset_Handler`), and distinct handlers populate the MemManage /
+BusFault / UsageFault / DebugMon vector slots — all of which are
+RESERVED on Cortex-M0/M0+.
 
 ## Memory map (provisional)
 
 | Region | Start | End | Use |
 | --- | --- | --- | --- |
-| Flash (loader)    | `0x08000000` | `0x08007FFF` | mainboot — 32 KB |
-| Flash (app, TBC)  | `0x08008000` | … | mainware (assumed) |
+| Flash (loader)    | `0x08000000` | `0x08007FFF` | mainboot — 32 KB (= sectors 0+1 on F4) |
+| Flash (app)       | `0x08008000` | … | "Loaded Application" + per-subsystem firmware blobs |
+| Flash (shadow)    | … (TBC)      | … | "Shadow Application" staging slot for verified copies |
 | SRAM (loader)     | `0x20000000` | `0x2004FFFF` | mainboot working set, top of stack at `0x20050000` |
 
-The actual application offset is **not yet confirmed** — `0x08008000`
-is an STM32 sector-2 boundary on F4xx parts (sector 0 = 16 K, sector
-1 = 16 K, total 32 K). To confirm once `main` decodes far enough to
-expose the application jump.
+The mainboot doesn't host one application — it hosts **all** the
+S3 subsystems' firmware blobs. The strings expose at minimum:
+
+- *Loaded Application* (active, executable)
+- *Shadow Application* (staging copy that is CRC-verified, then
+  copied over the loaded slot — A/B updates with verify+commit)
+- *Shifter Application*, *Motor Application*, *Battery Application*
+  (per-subsystem firmware payloads, presumably delivered to the
+  eShifter / motor / battery MCUs over Modbus once mainboot
+  hands control to mainware)
+
+The exact slot offsets are TBC from decoding the image-table
+walker — the `"Erase sector %d"` and `"Erasing shadow flash..."`
+strings show that flash-sector erase happens here.
 
 ## Vector table (head, from raw bytes)
 
