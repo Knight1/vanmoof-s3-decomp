@@ -9,12 +9,13 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-3 decomp-c / 0 vendor-stock / 1 named / 58 pending
+3 decomp-c / 1 vendor-stock / 2 named / 57 pending
 ```
 
-(`62` total functions discovered by Ghidra auto-analysis at base
-`0x00056000`. `4` user-named so far: `Reset_Handler` + the three
-exception traps.)
+(`63` total functions in Ghidra at base `0x00056000` after the body
+of `ResetISR` was created at `0x56DD8` — Ghidra's auto-analysis
+missed it because the only inbound reference is a `b.w` (tail call)
+from the stub.)
 
 ## Per-module log
 
@@ -23,15 +24,39 @@ exception traps.)
   routed from the HardFault, default, and NMI vector slots
   respectively. Compiled back to `e7fe` per handler with the project
   CFLAGS (`-Os -mthumb -mcpu=cortex-m4`); byte-equivalent.
+- **Reset path identification (no module file yet)** — The
+  Reset_Handler at `0x57126` is the stock TI driverlib `ResetISR`
+  pattern, split across two physical entry points:
+    * `0x57126` (10 B "stub"): `push {r3,lr}; bl SetupTrimDevice;
+      b.w localProgramStart`. The 6 B at `0x57130..0x57135`
+      (`bl HardFault_Handler; pop {r3,pc}`) are GCC's defensive
+      epilogue — unreachable because `localProgramStart` is a
+      tail-call to a `noreturn`-style function.
+    * `0x56DD8` (52 B body, here named `ResetISR_body`): loads MSP
+      from the literal pool (`0x20014000` — VT[0] / top of SRAM),
+      enables the FPU (`SCB->CPACR |= 0xF00000`), runs two `nop`
+      barriers, then chains into `.data` copy / `.bss` zero /
+      `main` via the helpers at `0x571A0`, `0x56BF0`, `0x57000`,
+      and `0x571A4`.
+  Matches `source/ti/devices/cc13x2_cc26x2/startup_files/startup_gcc.c`
+  in the SimpleLink CC13x2/CC26x2 SDK 3.40.00.02 (April 2020 — the
+  TI release closest to bleboot's `Apr 23 2020` build date). No C
+  source written yet — deferred until the `0x56DD8` body's helpers
+  are decoded so we can either vendor TI's `startup_gcc.c` verbatim
+  or hand-write a single `Reset_Handler` whose lowered code matches
+  the OEM byte layout (the split entry is the GCC `-Os` artifact of
+  compiling a single C-level `ResetISR` with a noreturn tail-call).
 
 ## Function table
 
 | Status | Address | Size (B) | Name | Module | Notes |
 | --- | --- | --- | --- | --- | --- |
-| decomp-c | `0x000568A6` | 2 | `HardFault_Handler` | `exception.c` | `b .` trap loop |
-| decomp-c | `0x00056C76` | 2 | `Default_Handler` | `exception.c` | `b .` trap loop |
-| decomp-c | `0x00056DA2` | 2 | `NMI_Handler` | `exception.c` | `b .` trap loop |
-| named    | `0x00057126` | 62 | `Reset_Handler` | (startup) | C-runtime + BIM main; not yet decoded |
+| decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop |
+| decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop |
+| decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop |
+| vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit |
+| named        | `0x00056DD8` | 52  | `ResetISR_body`     | (startup) | Tail-called from Reset_Handler stub; sets MSP, enables FPU, jumps to main via four undecoded helpers |
+| named        | `0x00057126` | 10  | `Reset_Handler`     | (startup) | 10-byte stub: trim + tail-call to body; matches stock TI ResetISR layout |
 
 Status legend:
 
@@ -57,15 +82,21 @@ Status legend:
 
 | Address | Name | Size | Notes |
 | --- | --- | --- | --- |
-| `0x00057126` | `Reset_Handler` | 62 B | Cortex-M4 startup — copies `.data`, zeroes `.bss`, calls (presumably) `SystemInit` and the BIM `main`. |
+| `0x00057126` | `Reset_Handler` | 10 B | Stub: `push {r3,lr}; bl SetupTrimDevice; b.w ResetISR_body`. Bytes at `0x57130..0x57135` are GCC's dead `bl HardFault; pop` epilogue (unreachable). |
+| `0x00056DD8` | `ResetISR_body` | 52 B | MSP load + FPU enable + four helper calls (`0x571A0`, `0x56BF0`, `0x57000`, `0x571A4`). Last call is the application `main()`. |
 
 ## Vendor-stock functions
 
-_None identified yet. Candidates to check first when picking the next
-function: TI Driver-lib `FlashSectorErase`, `FlashProgram`,
-`HapiSectorErase`, `HapiProgramFlash`, the OAD CRC32 routine (TI's
-`crc32_v` variant) — and the SimpleLink ROM trampolines for any of
-those._
+| Address | Name | Size | Upstream |
+| --- | --- | --- | --- |
+| `0x0005667C` | `SetupTrimDevice` | 108 B | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — TI BSD-3 licensed. Called from the Reset_Handler stub *before* MSP/FPU init, which is the canonical TI BIM pattern (the stack pointer at vector-fetch is whatever the boot ROM left in MSP, but it's good enough for one call into trim because driverlib's trim stays under ~32 bytes of stack). Exits with a busy-wait on an unknown status word — likely the AON/MCU domain power-ready bit, also typical of `SetupTrimDevice`. |
+
+Other candidates to check next when picking helpers around the
+`ResetISR_body` call graph: the four functions it calls
+(`0x571A0`, `0x56BF0`, `0x57000`, `0x571A4`). `0x57000` is 24 B —
+the canonical TI `.data` copy + `.bss` zero block lowered to ~24
+bytes at `-Os`. `0x571A4` is only 4 B, so it's a jump trampoline
+to the real `main` rather than `main` itself.
 
 ## Open questions
 
