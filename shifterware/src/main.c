@@ -51,6 +51,7 @@
 #include "modbus.h"
 #include "util.h"
 #include "gpio.h"
+#include "flash_store.h"
 #include "mm32f031.h"
 #include <stdint.h>
 
@@ -250,13 +251,13 @@ static void motor_h_bridge_set(uint8_t mask)
 
 /* OEM @ 0x0800315E (26 B). Clear the shared per-task flag bytes once
  * the active state-task is done. Called by `motor_drive_step` at
- * arrival, `cmd_5c_consume` at end of its 3-byte register write, and
+ * arrival, `flash_settings_commit` at end of its 3-byte register write, and
  * the three round-robin task helpers (`sched_task_alpha`,
  * `sched_task_beta`, `FUN_08003538`) at their tails. Bytes cleared:
  * `G_DRIVE_DIR`, `G_MOTION_REACHED`, `G_FLAG_13D`, `G_FLAG_13E`, and
  * both bytes of the motor-run latch / 5C latch pair at
  * `0x20000130`/`0x20000131`. */
-static void state_flags_reset(void)
+void state_flags_reset(void)
 {
     G_DRIVE_DIR      = 0u;
     G_MOTION_REACHED = 0u;
@@ -293,26 +294,23 @@ static void motor_drive_step(uint8_t target)
         state_flags_reset();
     }
 }
-static void sched_5c_consume(void); /* fwd decl: stub lives below */
-
 /* OEM @ 0x080036BA (26 B). The case-0 epilogue of `sched_run_task`,
  * fired the iteration after `G_STATE_FC` lands at 0. Resets the
  * application state machine back to its initial "home" configuration
  * — promotes `G_STATE_FC` out of state 0, zeroes the cmd-0x14 counter,
- * latches the gear-position counter back to home (1), then drains
- * whatever payload `sched_5c_consume` had staged. Only caller is
- * main's `sched_run_task` (case 0); never invoked from anywhere else. */
+ * latches the gear-position counter back to home (1), then commits
+ * the snapshot to the settings flash page via `flash_settings_commit`.
+ * Only caller is main's `sched_run_task` (case 0). */
 static void sched_idle_reset(void)
 {
     G_STATE_FC  = 1u;
     G_COUNTER   = 0u;
     G_STATE_115 = 1u;
-    sched_5c_consume();
+    flash_settings_commit();
 }
 static void    sched_task_alpha(void)            { TRAP_VOID(); } /* OEM @ 0x08003608 (178 B) */
 static void    sched_task_beta(void)             { TRAP_VOID(); } /* OEM @ 0x080033E2 (196 B) */
 static void    sched_task_extra(void)            { TRAP_VOID(); } /* OEM @ 0x080034A6 (60 B) */
-static void    sched_5c_consume(void)            { TRAP_VOID(); } /* OEM @ 0x080031E6 (118 B) — also stubbed in modbus_dispatch.c */
 
 /* ---- round-robin task dispatch --------------------------------------
  *
@@ -432,7 +430,7 @@ int main(void)
                 G_5C_LATCH_BYTE    = 1u;
             }
             if (G_TICK_B - G_5C_DEADLINE_BASE == SCHED_5C_WAIT_TICKS) {
-                sched_5c_consume();
+                flash_settings_commit();
                 G_5C_LATCH_BYTE = 0u;
             }
         }

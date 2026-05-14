@@ -114,13 +114,6 @@ static void cmd_0f_report_u32(uint32_t value)
     emit_counter_status_pdu();
 }
 
-/* OEM @ 0x080031E6 (118 B). Case 0x5C, len==0x0F — after the
- * dispatcher has staged 3 bytes into G_5C_REGS, kick the consumer. */
-static void cmd_5c_consume(void)
-{
-    for (;;) { /* TODO: implement (decomp pending) */ }
-}
-
 /* OEM @ 0x08003BC4 (88 B). Case 0x5B — read PA0 and PA1 (the same two
  * GPIOA inputs used by the motor-position state machine in main.c) and
  * emit a 4-state status code that encodes the {PA0, PA1} pair:
@@ -198,7 +191,7 @@ void modbus_dispatch_pdu(uint8_t cmd, uint8_t len)
             G_5C_REGS[0] = G_RX_BUF[2];
             G_5C_REGS[1] = G_RX_BUF[4];
             G_5C_REGS[2] = G_RX_BUF[5];
-            cmd_5c_consume();
+            flash_settings_commit();
         }
         break;
 

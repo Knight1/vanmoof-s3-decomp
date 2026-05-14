@@ -28,10 +28,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  67 | ~60% |
+| pending      |  64 | ~58% |
 | in-progress  |   0 |   0 |
 | named        |   6 | ~4% |
-| decomp-c     |  56 | ~37% |
+| decomp-c     |  59 | ~39% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -44,11 +44,11 @@ Decomp'd so far:
 - **crc** (`src/crc.c`): `crc_reset` (8 B), `crc32_word` (24 B), `crc32_words` (32 B)
 - **util** (`src/util.c`): `memcpy` (36 B, non-standard `void` return)
 - **image** (`src/image.c`): `image_verify_crc` (100 B), `image_apply` (92 B), `report_image_status` (64 B), `cmd_5c_write3` (24 B, OEM @ 0x08003B86 — short-form cmd 0x5C: splice 3 register bytes into status-emit slots and fire `report_image_status`), `emit_image_status_payload` (38 B, OEM @ 0x08003B9E — cmd_5c_write3 variant: caller supplies the two pkt bytes; the version byte is derived inline from `(RX[5]&0x7F)<<1`. Called from `cmd_5b_selftest`.)
-- **flash_store** (`src/flash_store.c`): `flash_unlock` (12 B), `flash_lock` (14 B), `flash_clear_status` (6 B), `flash_erase_page` (32 B), `flash_erase_pages` (32 B), `flash_get_status` (54 B), `flash_busy_step` (26 B), `flash_wait_status` (44 B), `flash_do_page_erase` (72 B)
+- **flash_store** (`src/flash_store.c`): `flash_unlock` (12 B), `flash_lock` (14 B), `flash_clear_status` (6 B), `flash_erase_page` (32 B), `flash_erase_pages` (32 B), `flash_get_status` (54 B), `flash_busy_step` (26 B), `flash_wait_status` (44 B), `flash_do_page_erase` (72 B), `flash_program_halfword` (66 B, OEM @ 0x080049B2 — replaced the prior speculative shim; returns FLASH_ST_* status), `settings_set_halfword` (110 B, OEM @ 0x08003178 — RMW one halfword in `FLASH_SETTINGS_PAGE` at `0x08007800`; full 8-halfword read-erase-write per call), `flash_settings_commit` (118 B, OEM @ 0x080031E6 — persist G_STATE_FC + G_COUNTER (BE32) + G_5C_REGS[0..2] across 8 halfwords; clears G_5C_BUSY; called by cmd 0x5C long-form and by main's idle-reset/deferred-commit paths).
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
-- **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 2 case-helper stubs awaiting their own decomp (cmd_5c_write3 now lives in image.c; cmd_5b_selftest landed); `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher; `cmd_0f_report_u32` (50 B, OEM @ 0x08003C68 — case 0x0F: stage `(RX[5]&0x7F)<<1` and a BE32 value into the cmd-0x0F report slots) + helper `emit_counter_status_pdu` (76 B, OEM @ 0x08003C1C — emits the 9-byte response PDU); `cmd_5b_selftest` (88 B, OEM @ 0x08003BC4 — case 0x5B: encode {PA0,PA1} state as one of {0,0x32,0x64,0x96} and forward via `emit_image_status_payload`).
+- **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 1 case-helper stub awaiting its own decomp (cmd_5c_write3 lives in image.c; cmd_5b_selftest landed; cmd 0x5C long-form now calls `flash_settings_commit` in flash_store.c); `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher; `cmd_0f_report_u32` (50 B, OEM @ 0x08003C68 — case 0x0F: stage `(RX[5]&0x7F)<<1` and a BE32 value into the cmd-0x0F report slots) + helper `emit_counter_status_pdu` (76 B, OEM @ 0x08003C1C — emits the 9-byte response PDU); `cmd_5b_selftest` (88 B, OEM @ 0x08003BC4 — case 0x5B: encode {PA0,PA1} state as one of {0,0x32,0x64,0x96} and forward via `emit_image_status_payload`).
 - **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
-- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`), `pos_encoder_tick` (86 B, OEM @ 0x080032A4 — advances `G_STATE_115` on PA0 edges in the direction set by `G_DRIVE_DIR`, and resets the stall-timer latch each counted edge), `drive_dir_code` (28 B, OEM @ 0x08003288 — tri-state decode of the H-bridge mask byte), `pa0_changed` (22 B, OEM @ 0x08003272 — PA0 vs `G_STATE_13B` edge detect), `sched_idle_reset` (26 B, OEM @ 0x080036BA — case-0 handler: promote `G_STATE_FC` out of 0, reset cmd-0x14 counter, latch gear-position back to home, drain pending 5C work), `syscfg_set_mem_mode` (24 B, OEM @ 0x080052E8 — RMW low 2 bits of `SYSCFG_CFGR1`; called once from main's boot prologue with value 3). 8 helpers still trap-stubbed.
+- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`), `pos_encoder_tick` (86 B, OEM @ 0x080032A4 — advances `G_STATE_115` on PA0 edges in the direction set by `G_DRIVE_DIR`, and resets the stall-timer latch each counted edge), `drive_dir_code` (28 B, OEM @ 0x08003288 — tri-state decode of the H-bridge mask byte), `pa0_changed` (22 B, OEM @ 0x08003272 — PA0 vs `G_STATE_13B` edge detect), `sched_idle_reset` (26 B, OEM @ 0x080036BA — case-0 handler: promote `G_STATE_FC` out of 0, reset cmd-0x14 counter, latch gear-position back to home, drain pending 5C work), `syscfg_set_mem_mode` (24 B, OEM @ 0x080052E8 — RMW low 2 bits of `SYSCFG_CFGR1`; called once from main's boot prologue with value 3). 7 helpers still trap-stubbed (3 boot + 2 boot-hash + 3 sched-task; the prior sched_5c_consume stub is now wired through to `flash_settings_commit`).
 - **gpio** (`src/gpio.c`): five OEM-confirmed helpers added alongside the pre-existing speculative API — `gpio_idr_test` (20 B, OEM @ 0x08004DBC), `input_pa0` (22 B, OEM @ 0x0800325C), `input_pa1` (22 B, OEM @ 0x080033CC), `gpio_bsrr_write` (4 B, OEM @ 0x08004DF4 — raw BSRR set), `gpio_brr_write` (4 B, OEM @ 0x08004DF8 — raw BRR clear). All five use raw byte offsets, bypassing the still-broken speculative `gpio_t` struct (plan-2).
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
@@ -166,8 +166,8 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x080030e4` |    4 | `FUN_080030e4` |  | pending |  |
 | `0x080030f0` |  110 | `FUN_080030f0` |  | pending |  |
 | `0x0800315e` |   26 | `state_flags_reset` | main | decomp-c | clears 6 shared task-flag bytes; called by 5 different state-tasks at their tails |
-| `0x08003178` |  110 | `FUN_08003178` |  | pending |  |
-| `0x080031e6` |  118 | `FUN_080031e6` |  | pending |  |
+| `0x08003178` |  110 | `settings_set_halfword` | flash_store | decomp-c | RMW one halfword in settings page; full 8-HW read-erase-write per call |
+| `0x080031e6` |  118 | `flash_settings_commit` | flash_store | decomp-c | persist G_STATE_FC + G_COUNTER (BE32) + G_5C_REGS[0..2] to `0x08007800`; clears G_5C_BUSY |
 | `0x0800325c` |   22 | `input_pa0` | gpio | decomp-c | reads GPIOA IDR bit 0 |
 | `0x08003272` |   22 | `pa0_changed` | main | decomp-c | PA0 vs `G_STATE_13B` mirror; edge predicate for `pos_encoder_tick` |
 | `0x08003288` |   28 | `drive_dir_code` | main | decomp-c | decode `G_DRIVE_DIR` byte (`0xF0`/`0x0F`/else) to 0/1/2 |
@@ -225,7 +225,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08004840` |  150 | `FUN_08004840` |  | pending |  |
 | `0x080048d6` |  120 | `FUN_080048d6` |  | pending |  |
 | `0x0800494e` |  100 | `FUN_0800494e` |  | pending |  |
-| `0x080049b2` |   64 | `FUN_080049b2` |  | pending |  |
+| `0x080049b2` |   66 | `flash_program_halfword` | flash_store | decomp-c | program one halfword; returns FLASH_ST_*; PG cleared via mask `0x1FFE` |
 | `0x080049f2` |   74 | `FUN_080049f2` |  | pending |  |
 | `0x08004a3c` |  100 | `FUN_08004a3c` |  | pending |  |
 | `0x08004aa0` |  182 | `FUN_08004aa0` |  | pending |  |

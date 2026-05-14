@@ -10,6 +10,10 @@
 #include "flash_store.h"
 #include "mm32f031.h"
 
+/* Defined in main.c. Clears the shared per-task flag bytes; called at
+ * the tail of `flash_settings_commit`. */
+extern void state_flags_reset(void);
+
 /* ---- OEM-confirmed ------------------------------------------------- */
 
 /* OEM @ 0x0800471C (12 B). Unconditionally writes both keys; does not
@@ -60,16 +64,8 @@ void flash_erase_pages(uint32_t base_addr, int n_pages)
     }
 }
 
-/* Status codes returned by flash_get_status() / flash_wait_status().
- * The first four mirror FLASH->SR bit semantics; TIMEOUT is synthetic
- * (only flash_wait_status returns it). */
-#define FLASH_ST_BUSY       1
-#define FLASH_ST_PGERR      2
-#define FLASH_ST_WRPRTERR   3
-#define FLASH_ST_READY      4
-#define FLASH_ST_TIMEOUT    5
-
 #define FLASH_WAIT_LIMIT    0x0FFFu  /* OEM-chosen poll budget */
+#define FLASH_PG_WAIT_LIMIT 0x000Fu  /* shorter budget used per halfword program (OEM literal) */
 
 /* OEM @ 0x08004736 (54 B). */
 int flash_get_status(void)
@@ -130,34 +126,92 @@ int flash_do_page_erase(uint32_t page_addr)
     return status;
 }
 
-/* ---- Speculative (no OEM evidence yet) ----------------------------- */
-
-static void flash_wait_busy(void)
+/* OEM @ 0x080049B2 (66 B). Program a single halfword. Caller is
+ * expected to have already unlocked the flash. Mirrors the OEM's
+ * approach to clearing PG: literal pool entry `0x1FFD` shared with the
+ * page-erase helper, so the program path emits `mask = 0x1FFD + 1 =
+ * 0x1FFE` (clears bit 0 only). The "skip clearing PG on BUSY" branch
+ * preserves the OEM byte sequence even though `flash_wait_status`
+ * cannot actually return BUSY (it converts the busy state to TIMEOUT
+ * when the poll budget runs out). */
+int flash_program_halfword(uint32_t addr, uint16_t value)
 {
-    while ((FLASH->SR & FLASH_SR_BSY_Msk) != 0u) {
-        /* spin */
-    }
-}
-
-bool flash_program_halfword(uint32_t addr, uint16_t value)
-{
-    if ((addr & 0x1u) != 0u) return false;
-
-    flash_wait_busy();
-    flash_clear_status(FLASH_SR_EOP_Msk
-                     | FLASH_SR_PGERR_Msk
-                     | FLASH_SR_WRPRTERR_Msk);
+    int status = flash_wait_status(FLASH_PG_WAIT_LIMIT);
+    if (status != FLASH_ST_READY) return status;
 
     FLASH->CR |= FLASH_CR_PG_Msk;
     *(volatile uint16_t *)addr = value;
-    flash_wait_busy();
 
-    const bool ok = (FLASH->SR & (FLASH_SR_PGERR_Msk | FLASH_SR_WRPRTERR_Msk)) == 0u;
-    FLASH->CR &= ~FLASH_CR_PG_Msk;
+    status = flash_wait_status(FLASH_PG_WAIT_LIMIT);
+    if (status == FLASH_ST_BUSY) return status;
 
-    if (ok && *(volatile uint16_t *)addr != value) return false;
-    return ok;
+    FLASH->CR = FLASH->CR & 0x1FFEu;
+    return status;
 }
+
+/* OEM @ 0x08003178 (110 B). Read-modify-write of one halfword inside
+ * the settings page. The OEM emits this with a redundant second
+ * `flash_unlock` between the read-back loop and the erase — kept here
+ * to match. Each call performs a full page erase, so calling N times
+ * in a row (as `flash_settings_commit` does) costs N erases. Wasteful
+ * but matches the OEM byte sequence. */
+void settings_set_halfword(uint32_t offset, uint16_t value)
+{
+    uint16_t buf[8];
+
+    flash_unlock();
+    for (uint32_t i = 0u; i < 16u; i = (uint32_t)(uint16_t)(i + 2u)) {
+        buf[i >> 1] = *(volatile const uint16_t *)(FLASH_SETTINGS_PAGE + i);
+    }
+    buf[offset >> 1] = value;
+
+    flash_unlock();
+    flash_do_page_erase(FLASH_SETTINGS_PAGE);
+
+    for (uint32_t i = 0u; i < 16u; i = (uint32_t)(uint16_t)(i + 2u)) {
+        flash_program_halfword(FLASH_SETTINGS_PAGE + i, buf[i >> 1]);
+    }
+    flash_lock();
+}
+
+/* OEM @ 0x080031E6 (118 B). Persist the bus-writable shifter state to
+ * the settings page. Layout (8 halfwords, low byte = data, high byte
+ * = 0 on a fresh erase):
+ *
+ *     HW[0] = (int8_t)G_STATE_FC      — operating-mode state byte
+ *     HW[1] = (uint8_t)(G_COUNTER >> 24)
+ *     HW[2] = (uint8_t)(G_COUNTER >> 16)
+ *     HW[3] = (uint8_t)(G_COUNTER >>  8)
+ *     HW[4] = (uint8_t)(G_COUNTER >>  0)
+ *     HW[5] = G_5C_REGS[0]
+ *     HW[6] = G_5C_REGS[1]
+ *     HW[7] = G_5C_REGS[2]
+ *
+ * The OEM reads `*(int32_t*)0x200000FC` and takes `% 256` (signed) — a
+ * standard GCC pattern for `(int8_t)` truncation. For the documented
+ * value range of G_STATE_FC (0..2) this is the same as the low byte;
+ * we write it as a sign-extend cast to match OEM bytes for any value.
+ */
+void flash_settings_commit(void)
+{
+    const int32_t  state_fc = *(volatile const int32_t  *)0x200000FCu;
+    const uint32_t counter  = *(volatile const uint32_t *)0x200000F8u;
+    const volatile uint8_t *const regs = (const volatile uint8_t *)0x20000100u;
+
+    settings_set_halfword(0x0u, (uint16_t)(int16_t)(int8_t)(state_fc & 0xFF));
+    settings_set_halfword(0x2u, (uint16_t)(uint8_t)(counter >> 24));
+    settings_set_halfword(0x4u, (uint16_t)(uint8_t)(counter >> 16));
+    settings_set_halfword(0x6u, (uint16_t)(uint8_t)(counter >>  8));
+    settings_set_halfword(0x8u, (uint16_t)(uint8_t)(counter      ));
+    settings_set_halfword(0xAu, (uint16_t)regs[0]);
+    settings_set_halfword(0xCu, (uint16_t)regs[1]);
+    settings_set_halfword(0xEu, (uint16_t)regs[2]);
+
+    *(volatile uint8_t *)0x2000013Cu = 0u;   /* G_5C_BUSY */
+    state_flags_reset();
+}
+
+/* ---- Speculative (no OEM evidence yet) ----------------------------- */
 
 bool flash_program_block(uint32_t addr, const void *data, size_t len_bytes)
 {
@@ -167,12 +221,12 @@ bool flash_program_block(uint32_t addr, const void *data, size_t len_bytes)
     size_t i = 0u;
     while (i + 1u < len_bytes) {
         const uint16_t hw = (uint16_t)(p[i] | ((uint16_t)p[i + 1u] << 8));
-        if (!flash_program_halfword(addr + (uint32_t)i, hw)) return false;
+        if (flash_program_halfword(addr + (uint32_t)i, hw) != FLASH_ST_READY) return false;
         i += 2u;
     }
     if (i < len_bytes) {
         const uint16_t hw = (uint16_t)(p[i] | 0xFF00u);
-        if (!flash_program_halfword(addr + (uint32_t)i, hw)) return false;
+        if (flash_program_halfword(addr + (uint32_t)i, hw) != FLASH_ST_READY) return false;
     }
     return true;
 }

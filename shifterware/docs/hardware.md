@@ -158,13 +158,42 @@ without a comment are still single-purpose unknowns.
 The 0xC0-byte block at `0x20000000` is `.data`, copied by `main` from
 flash `0x08004828`. Many of the entries above sit inside it.
 
+## Persistent storage (on-chip flash)
+
+The MM32F031F6U6 has 32 KB of internal flash (`0x08000000..0x08008000`)
+split as follows in shifterware:
+
+| Range | Use | Owner |
+| ----- | --- | ----- |
+| `0x08000000..0x080017FF` (≈6 KB) | shifterboot loader | _out of scope_ |
+| `0x08001800..0x080037FF` (12 KB) | OTA receive slot | erased by `flash_erase_pages(0x08001800, 12)` (cmd 0x95); validated by `image_verify_crc`; latched on success by `image_apply` |
+| `0x08003800..0x080077FF` | shifterware code + read-only data | this image |
+| **`0x08007800..0x08007BFF`** (1 KB) | **settings page (`FLASH_SETTINGS_PAGE`)** | written by `flash_settings_commit` via `settings_set_halfword`; holds 8 halfwords (16 B used) carrying `G_STATE_FC` + BE32 `G_COUNTER` + `G_5C_REGS[0..2]` |
+| `0x08007C00..0x08007FFF` (1 KB) | **calibration page (`NVM_BASE`)** | speculative — read/written by `nvm.c`; **not yet observed in OEM image** |
+
+Notes:
+- The settings page uses one halfword per byte of payload (high byte
+  stays at `0x00` after erase = `0xFFFF`, then programmed to the data
+  byte | `0x0000`). That's 2:1 waste, but matches the OEM byte sequence.
+- Every call to `settings_set_halfword` does its own page erase before
+  reprogramming the full 8-halfword record, so a single
+  `flash_settings_commit` triggers **8 consecutive page erases** of
+  `0x08007800`. Flash-endurance hostile but verbatim from OEM.
+- `nvm.c`'s use of the last page (`0x08007C00`) is scaffolding from a
+  pre-decomp guess at how calibration would be stored; the OEM appears
+  to put everything bus-writable through the `0x08007800` page instead.
+  Don't take `nvm.c`'s layout as load-bearing.
+
 ## Booted-but-unidentified resources
 
 These are touched by the OEM but not yet placed:
 
-- `0x200000F9..0xFC` — bytes adjacent to `G_COUNTER` that may form
+- `0x200000F9..0xFB` — bytes adjacent to `G_COUNTER` that may form
   part of a larger telemetry struct. `G_COUNTER` itself is the 32-bit
-  value emitted by `cmd_0f_report_u32`.
+  value emitted by `cmd_0f_report_u32` and persisted big-endian by
+  `flash_settings_commit`. Byte `0x200000FC` is `G_STATE_FC` (the
+  operating-mode state byte; values 0..2), persisted as halfword 0
+  of the settings page.
 - `0x2000015C` and the surrounding 45 B are the long-frame buffer,
   but the OTA payload format inside it (after the 4-byte Modbus
   header) hasn't been mapped.
