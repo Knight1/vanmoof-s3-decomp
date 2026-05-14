@@ -110,7 +110,7 @@
     {"addr":"0x00056b1c","size":72,"name":"FUN_00056b1c","auto_named":true,"signature":"undefined FUN_00056b1c(void)","thunk":false,"external":false},
     {"addr":"0x00056b64","size":54,"name":"FUN_00056b64","auto_named":true,"signature":"undefined FUN_00056b64(void)","thunk":false,"external":false},
     {"addr":"0x00056bac","size":64,"name":"FUN_00056bac","auto_named":true,"signature":"undefined FUN_00056bac(void)","thunk":false,"external":false},
-    {"addr":"0x00056bf0","size":50,"name":"FUN_00056bf0","auto_named":true,"signature":"undefined FUN_00056bf0(void)","thunk":false,"external":false},
+    {"addr":"0x00056bf0","size":50,"name":"_auto_init_table","auto_named":false,"signature":"void _auto_init_table(void)","thunk":false,"external":false},
     {"addr":"0x00056c34","size":66,"name":"FUN_00056c34","auto_named":true,"signature":"undefined FUN_00056c34(void)","thunk":false,"external":false},
     {"addr":"0x00056c76","size":2,"name":"Default_Handler","auto_named":false,"signature":"void Default_Handler(void)","thunk":false,"external":false},
     {"addr":"0x00056c78","size":58,"name":"FUN_00056c78","auto_named":true,"signature":"undefined FUN_00056c78(void)","thunk":false,"external":false},
@@ -133,7 +133,7 @@
     {"addr":"0x00056f98","size":32,"name":"FUN_00056f98","auto_named":true,"signature":"undefined FUN_00056f98(void)","thunk":false,"external":false},
     {"addr":"0x00056fbc","size":34,"name":"FUN_00056fbc","auto_named":true,"signature":"undefined FUN_00056fbc(void)","thunk":false,"external":false},
     {"addr":"0x00056fe0","size":26,"name":"FUN_00056fe0","auto_named":true,"signature":"undefined FUN_00056fe0(void)","thunk":false,"external":false},
-    {"addr":"0x00057000","size":24,"name":"FUN_00057000","auto_named":true,"signature":"undefined FUN_00057000(void)","thunk":false,"external":false},
+    {"addr":"0x00057000","size":24,"name":"main","auto_named":false,"signature":"int main(void)","thunk":false,"external":false},
     {"addr":"0x00057020","size":24,"name":"FUN_00057020","auto_named":true,"signature":"undefined FUN_00057020(void)","thunk":false,"external":false},
     {"addr":"0x0005703c","size":18,"name":"FUN_0005703c","auto_named":true,"signature":"undefined FUN_0005703c(void)","thunk":false,"external":false},
     {"addr":"0x00057058","size":18,"name":"FUN_00057058","auto_named":true,"signature":"undefined FUN_00057058(void)","thunk":false,"external":false},
@@ -152,8 +152,8 @@
     {"addr":"0x0005717c","size":6,"name":"FUN_0005717c","auto_named":true,"signature":"undefined FUN_0005717c(void)","thunk":false,"external":false},
     {"addr":"0x00057188","size":8,"name":"FUN_00057188","auto_named":true,"signature":"undefined FUN_00057188(void)","thunk":false,"external":false},
     {"addr":"0x00057194","size":8,"name":"FUN_00057194","auto_named":true,"signature":"undefined FUN_00057194(void)","thunk":false,"external":false},
-    {"addr":"0x000571a0","size":4,"name":"FUN_000571a0","auto_named":true,"signature":"undefined FUN_000571a0(void)","thunk":false,"external":false},
-    {"addr":"0x000571a4","size":4,"name":"FUN_000571a4","auto_named":true,"signature":"undefined FUN_000571a4(void)","thunk":false,"external":false}
+    {"addr":"0x000571a0","size":4,"name":"_system_pre_init","auto_named":false,"signature":"int _system_pre_init(void)","thunk":false,"external":false},
+    {"addr":"0x000571a4","size":4,"name":"_exit","auto_named":false,"signature":"void _exit(int status)","thunk":false,"external":false}
   ],
   "string_count": 1,
   "strings": [

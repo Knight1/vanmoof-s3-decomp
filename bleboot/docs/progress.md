@@ -9,16 +9,42 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-3 decomp-c / 1 vendor-stock / 2 named / 57 pending
+6 decomp-c / 2 vendor-stock / 2 named / 53 pending
 ```
 
-(`63` total functions in Ghidra at base `0x00056000` after the body
-of `ResetISR` was created at `0x56DD8` — Ghidra's auto-analysis
-missed it because the only inbound reference is a `b.w` (tail call)
-from the stub.)
+(`63` total functions in Ghidra at base `0x00056000`.)
+
+**Toolchain identified**: the OEM image was built with the **TI ARM
+Compiler / CCS**, not GCC. Evidence: the `_auto_init_*` descriptor-
+table runtime init at `0x56BF0` (50 B walking 8-byte `{type, arg}`
+records through a function-pointer dispatch table) is TI CGT's
+canonical compiler-runtime pattern — GCC emits inline-asm
+.data/.bss copy loops instead. Also confirmed by the
+`_system_pre_init` weak hook at `0x571A0` and the BIM project
+layout in the TI SDK shipping CCS / IAR variants.
 
 ## Per-module log
 
+- **`rts_hooks.c`** — Two TI CCS RTS weak-default hooks the OEM
+  image kept unchanged: `_system_pre_init` at `0x000571A0`
+  (returns 1 to enable cinit; compiles to `movs r0, #1; bx lr` =
+  `2001 4770`) and `_exit` at `0x000571A4` (post-main trap;
+  compiles to `nop; b .` = `bf00 e7fe`). Both are byte-equivalent
+  to the OEM under the project CFLAGS.
+- **`main.c`** — BIM main at `0x00057000`. Reads low 4 bits of
+  the MMIO config register at `0x40032430`, caches `(val << 10)`
+  in the SRAM global at `0x20000400`, then tail-calls the (still
+  undecoded) BIM dispatcher at `0x56F2A`. Returns 0 to the
+  startup. Compiles to 24 B at `-Os`, same size as the OEM, but
+  **not byte-equivalent**: GCC reorders `(x & 0xF) << 10` into
+  `(x << 10) & 0x3C00`, which costs us one different 32-bit
+  encoding even though the count and registers are the same.
+  Behaviour is identical. Note: the exact identity of MMIO
+  `0x40032430` isn't yet pinned to a named CC2642R1F register
+  (it sits in the FLASH / VIMS controller band, `0x40030000..
+  0x40034000`); the low 4 bits look like a hardware-revision /
+  package code that downstream BIM logic consults to pick an
+  application slot.
 - **`exception.c`** — Three byte-identical 2-byte `b .` (Thumb
   `0xE7FE`) trap loops at `0x000568A6` / `0x00056C76` / `0x00056DA2`,
   routed from the HardFault, default, and NMI vector slots
@@ -51,12 +77,16 @@ from the stub.)
 
 | Status | Address | Size (B) | Name | Module | Notes |
 | --- | --- | --- | --- | --- | --- |
-| decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop |
-| decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop |
-| decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop |
-| vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit |
-| named        | `0x00056DD8` | 52  | `ResetISR_body`     | (startup) | Tail-called from Reset_Handler stub; sets MSP, enables FPU, jumps to main via four undecoded helpers |
-| named        | `0x00057126` | 10  | `Reset_Handler`     | (startup) | 10-byte stub: trim + tail-call to body; matches stock TI ResetISR layout |
+| decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop, byte-equivalent |
+| decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
+| decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
+| decomp-c     | `0x00057000` | 24  | `main`              | `main.c`      | BIM main — caches `(MMIO[0x40032430] & 0xF) << 10` at SRAM `0x20000400`, calls BIM dispatcher. Behaviour-equivalent only. |
+| decomp-c     | `0x000571A0` | 4   | `_system_pre_init`  | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`2001 4770`) |
+| decomp-c     | `0x000571A4` | 4   | `_exit`             | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`bf00 e7fe`) |
+| vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit. Upstream linked, not vendored. |
+| vendor-stock | `0x00056BF0` | 50  | `_auto_init_table`  | (TI CGT RTS)  | TI compiler-runtime cinit descriptor-table walker. Upstream linked, not vendored. |
+| named        | `0x00056DD8` | 52  | `ResetISR_body`     | (startup)     | Tail-called from Reset_Handler stub; sets MSP, enables FPU, calls `_system_pre_init` → `_auto_init_table` → `main` → `_exit` |
+| named        | `0x00057126` | 10  | `Reset_Handler`     | (startup)     | 10-byte stub: trim + tail-call to body; matches stock TI ResetISR layout |
 
 Status legend:
 
