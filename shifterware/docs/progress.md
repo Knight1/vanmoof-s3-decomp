@@ -28,10 +28,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  77 | ~65% |
+| pending      |  74 | ~64% |
 | in-progress  |   0 |   0 |
 | named        |   6 | ~4% |
-| decomp-c     |  46 | ~33% |
+| decomp-c     |  49 | ~34% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -48,7 +48,7 @@ Decomp'd so far:
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
 - **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 5 case-helper stubs awaiting their own decomp; `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher. Caller of `modbus_rx_poll` is at `0x08004366` (currently in no enclosing function — the main scheduler isn't decomp'd yet).
 - **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
-- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`). 11 helpers still trap-stubbed; `motor_aux_kick` (86 B, OEM @ 0x080032A4) is the newest stub (reads position sensor + bumps `G_STATE_115`).
+- **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`), `pos_encoder_tick` (86 B, OEM @ 0x080032A4 — advances `G_STATE_115` on PA0 edges in the direction set by `G_DRIVE_DIR`, and resets the stall-timer latch each counted edge), `drive_dir_code` (28 B, OEM @ 0x08003288 — tri-state decode of the H-bridge mask byte), `pa0_changed` (22 B, OEM @ 0x08003272 — PA0 vs `G_STATE_13B` edge detect). 10 helpers still trap-stubbed.
 - **gpio** (`src/gpio.c`): five OEM-confirmed helpers added alongside the pre-existing speculative API — `gpio_idr_test` (20 B, OEM @ 0x08004DBC), `input_pa0` (22 B, OEM @ 0x0800325C), `input_pa1` (22 B, OEM @ 0x080033CC), `gpio_bsrr_write` (4 B, OEM @ 0x08004DF4 — raw BSRR set), `gpio_brr_write` (4 B, OEM @ 0x08004DF8 — raw BRR clear). All five use raw byte offsets, bypassing the still-broken speculative `gpio_t` struct (plan-2).
 - **uart** (`src/uart.c`): `uart1_send_byte` (28 B), `uart1_init` (150 B), `USART1_IRQHandler` (62 B); file-static helpers: `usart_write_data`, `usart_test_flag`, `usart_check_status`, `usart_read_data`, `usart_clear_flag`, `usart_init`, `usart_ier_bits`, `usart_set_enable`, `nvic_configure`, `rcc_apb2en_bits`, `rcc_ahben_bits`, `gpio_set_af`, `gpio_pin_configure`. Real wiring is **PB6/PB7 AF0**, not PA9/PA10 as the speculative original assumed.
 
@@ -169,9 +169,9 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08003178` |  110 | `FUN_08003178` |  | pending |  |
 | `0x080031e6` |  118 | `FUN_080031e6` |  | pending |  |
 | `0x0800325c` |   22 | `input_pa0` | gpio | decomp-c | reads GPIOA IDR bit 0 |
-| `0x08003272` |   22 | `FUN_08003272` |  | pending |  |
-| `0x08003288` |   28 | `FUN_08003288` |  | pending |  |
-| `0x080032a4` |   86 | `FUN_080032a4` |  | pending |  |
+| `0x08003272` |   22 | `pa0_changed` | main | decomp-c | PA0 vs `G_STATE_13B` mirror; edge predicate for `pos_encoder_tick` |
+| `0x08003288` |   28 | `drive_dir_code` | main | decomp-c | decode `G_DRIVE_DIR` byte (`0xF0`/`0x0F`/else) to 0/1/2 |
+| `0x080032a4` |   86 | `pos_encoder_tick` | main | decomp-c | bump `G_STATE_115` ±1 on PA0 edge per `G_DRIVE_DIR`; resets stall latch |
 | `0x080032fa` |  210 | `motor_h_bridge_set` | main | decomp-c | PA9/PA10 H-bridge driver with stall-timeout fallback |
 | `0x080033cc` |   22 | `input_pa1` | gpio | decomp-c | reads GPIOA IDR bit 1 |
 | `0x080033e2` |  196 | `FUN_080033e2` |  | pending |  |

@@ -86,6 +86,15 @@
 #define G_MOTOR_RUN_START   (*(volatile uint32_t *)0x2000010Cu)  /* G_TICK_B at the moment the motor was last energised */
 #define G_MOTOR_RUN_LATCH   (*(volatile uint8_t  *)0x20000130u)  /* 1 once G_MOTOR_RUN_START has been captured this run */
 
+/* Drive-direction byte. Written by the round-robin task helpers
+ * (`sched_task_alpha/beta/extra`, `FUN_08003538`) when they queue a
+ * shift, valued `0xF0` for forward or `0x0F` for reverse so it mirrors
+ * the H-bridge mask. Consumed by `pos_encoder_tick` to know which way
+ * to tick `G_STATE_115` (the gear-position counter) on each PA0 edge.
+ * Cleared by `state_flags_reset` once the task finishes.
+ */
+#define G_DRIVE_DIR         (*(volatile uint8_t  *)0x20000114u)
+
 #define RX_TICK_ROLLOVER    2000u   /* OEM literal: movs r1,#0x7d; lsls r1,#4 → 0x7D0 = 2000 */
 #define SCHED_5C_WAIT_TICKS 0x32u   /* ~50 ticks before firing the 5C consumer */
 
@@ -122,10 +131,56 @@ static uint8_t sched_pick_task(void)
     const uint8_t v = G_STATE_FC;
     return v > 6u ? 6u : v;
 }
-/* OEM @ 0x080032A4 (86 B). Auxiliary motor-step kicker — reads the
- * position sensor (via input_pa0 + FUN_08003272/FUN_08003288 chain)
- * and advances G_STATE_115 (gear position counter). Pending. */
-static void motor_aux_kick(void) { TRAP_VOID(); } /* OEM @ 0x080032A4 (86 B) */
+/* OEM @ 0x08003288 (28 B). Decode the drive-direction byte at
+ * `G_DRIVE_DIR` (valued `0xF0` forward, `0x0F` reverse, anything else
+ * idle) into a small tri-state index (0 / 1 / 2). Used exclusively
+ * by `pos_encoder_tick` below. */
+static uint32_t drive_dir_code(void)
+{
+    const uint8_t v = G_DRIVE_DIR;
+    if (v == 0xF0u) return 0u;
+    if (v == 0x0Fu) return 1u;
+    return 2u;
+}
+
+/* OEM @ 0x08003272 (22 B). Detect a level change on PA0 since the
+ * mirror byte `G_STATE_13B` (`0x2000013B`) was last refreshed.
+ * `main()` seeds the mirror once before entering the super-loop;
+ * thereafter `pos_encoder_tick` is responsible for re-syncing it on
+ * each detected edge. */
+static bool pa0_changed(void)
+{
+    return (uint8_t)input_pa0() != G_STATE_13B;
+}
+
+/* OEM @ 0x080032A4 (86 B). Position-encoder tick: when PA0 toggles,
+ * advance the gear-position counter `G_STATE_115` in whichever
+ * direction the active task has queued via `G_DRIVE_DIR`. The
+ * direction byte mirrors the H-bridge mask (`0xF0` → decrement,
+ * `0x0F` → increment); any other value leaves the counter untouched
+ * but the mirror at `G_STATE_13B` is still re-synced so the next
+ * edge is timed from the new level. The motor-run latch is also
+ * cleared on a counted edge so `motor_h_bridge_set` re-snapshots
+ * `G_MOTOR_RUN_START` from this tick onward — each detected edge
+ * effectively resets the stall-timeout window. Called from
+ * `motor_h_bridge_set` immediately after the forward/reverse half
+ * of the bridge is energised. */
+static void pos_encoder_tick(void)
+{
+    const uint32_t dir = drive_dir_code();
+    if (!pa0_changed()) return;
+
+    int8_t gear = (int8_t)G_STATE_115;
+    if (dir == 0u) {
+        gear = gear - 1;
+        G_MOTOR_RUN_LATCH = 0u;
+    } else if (dir == 1u) {
+        gear = gear + 1;
+        G_MOTOR_RUN_LATCH = 0u;
+    }
+    G_STATE_115  = (uint8_t)gear;
+    G_STATE_13B  = (uint8_t)input_pa0();
+}
 
 /* OEM @ 0x080032FA (210 B). H-bridge mask driver.
  *
@@ -153,12 +208,12 @@ static void motor_h_bridge_set(uint8_t mask)
     if (mask == 0x0Fu) {
         gpio_brr_write (gpioa, 1u << 9);   /* PA9 LOW  */
         gpio_bsrr_write(gpioa, 1u << 10);  /* PA10 HIGH */
-        motor_aux_kick();
+        pos_encoder_tick();
         G_MOTOR_RUNNING = 1u;
     } else if (mask == 0xF0u) {
         gpio_bsrr_write(gpioa, 1u << 9);   /* PA9 HIGH */
         gpio_brr_write (gpioa, 1u << 10);  /* PA10 LOW  */
-        motor_aux_kick();
+        pos_encoder_tick();
         G_MOTOR_RUNNING = 1u;
     } else if (mask == 0xFFu) {
         gpio_bsrr_write(gpioa, 1u << 9);   /* PA9 HIGH */
@@ -184,17 +239,17 @@ static void motor_h_bridge_set(uint8_t mask)
  * arrival, `cmd_5c_consume` at end of its 3-byte register write, and
  * the three round-robin task helpers (`sched_task_alpha`,
  * `sched_task_beta`, `FUN_08003538`) at their tails. Bytes cleared:
- * `G_FLAG_114` (0x20000114, purpose TBD), `G_MOTION_REACHED`,
- * `G_FLAG_13D`, `G_FLAG_13E`, and both bytes of `G_5C_LATCH_PAIR`
- * (`0x20000130`/`0x20000131`). */
+ * `G_DRIVE_DIR`, `G_MOTION_REACHED`, `G_FLAG_13D`, `G_FLAG_13E`, and
+ * both bytes of the motor-run latch / 5C latch pair at
+ * `0x20000130`/`0x20000131`. */
 static void state_flags_reset(void)
 {
-    *(volatile uint8_t *)0x20000114u = 0u;
+    G_DRIVE_DIR      = 0u;
     G_MOTION_REACHED = 0u;
     G_FLAG_13D       = 0u;
     G_FLAG_13E       = 0u;
-    *(volatile uint8_t *)0x20000131u = 0u;
-    *(volatile uint8_t *)0x20000130u = 0u;
+    G_5C_LATCH_BYTE   = 0u;
+    G_MOTOR_RUN_LATCH = 0u;
 }
 
 /* OEM @ 0x080036D4 (74 B). Per-iteration motor servoing step.
