@@ -28,10 +28,10 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-12
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  71 | ~62% |
+| pending      |  69 | ~61% |
 | in-progress  |   0 |   0 |
 | named        |   6 | ~4% |
-| decomp-c     |  52 | ~35% |
+| decomp-c     |  54 | ~36% |
 | byte-eq      |   0 |   0 |
 | deferred     |   0 |   0 |
 
@@ -46,7 +46,7 @@ Decomp'd so far:
 - **image** (`src/image.c`): `image_verify_crc` (100 B), `image_apply` (92 B), `report_image_status` (64 B), `cmd_5c_write3` (24 B, OEM @ 0x08003B86 — short-form cmd 0x5C: splice 3 register bytes into status-emit slots and fire `report_image_status`)
 - **flash_store** (`src/flash_store.c`): `flash_unlock` (12 B), `flash_lock` (14 B), `flash_clear_status` (6 B), `flash_erase_page` (32 B), `flash_erase_pages` (32 B), `flash_get_status` (54 B), `flash_busy_step` (26 B), `flash_wait_status` (44 B), `flash_do_page_erase` (72 B)
 - **modbus** (`src/modbus.c`): `modbus_crc16_compute` (64 B), `modbus_send_bytes` (28 B), `modbus_tx_finalize` (54 B), `modbus_tick` (20 B), `modbus_reply_passthrough` (70 B)
-- **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 4 case-helper stubs awaiting their own decomp (cmd_5c_write3 now lives in image.c); `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher.
+- **modbus_dispatch** (`src/modbus_dispatch.c`): `modbus_dispatch_pdu` (278 B) — switch over cmd byte (0x0F / 0x14 / 0x5A / 0x5B / 0x5C / 0x81 / 0x82 / 0x95) with 3 case-helper stubs awaiting their own decomp (cmd_5c_write3 now lives in image.c); `modbus_rx_poll` (366 B) — FSM that accepts 8-byte short / 45-byte long frames from the IRQ scratch at 0x200001B2, CRC-validates, and hands off to the dispatcher; `cmd_0f_report_u32` (50 B, OEM @ 0x08003C68 — case 0x0F: stage `(RX[5]&0x7F)<<1` and a BE32 value into the cmd-0x0F report slots) + helper `emit_counter_status_pdu` (76 B, OEM @ 0x08003C1C — emits the 9-byte response PDU).
 - **uart** (`src/uart.c`): `USART1_IRQHandler` **rewritten** to match OEM exactly — appends bytes to `0x200001B2[*0x200000E4++]`, resets the end-of-frame wait counter at `0x200000DC`, caps at 45 bytes. The earlier speculative `s_rx_buf` ring + `uart1_rx_*` API is no longer on the OEM RX path; it stays as scaffolding for the (still-speculative) `protocol.c` and is gc-sections'd away from the final image.
 - **main** (`src/main.c`, replaces speculative version saved as `main.c.bak`): `main` (484 B, OEM @ 0x080042D6), `sched_pick_task` (74 B, OEM @ 0x080035BE — `min(G_STATE_FC, 6)`), `motor_drive_step` (74 B, OEM @ 0x080036D4 — H-bridge per `G_5A_TARGET`, brake+latch on motion-reached), `state_flags_reset` (26 B, OEM @ 0x0800315E — clears per-task flags at tail), `motor_h_bridge_set` (210 B, OEM @ 0x080032FA — PA9/PA10 drive table + stall timeout fallback that synthesizes `G_MOTION_REACHED`), `pos_encoder_tick` (86 B, OEM @ 0x080032A4 — advances `G_STATE_115` on PA0 edges in the direction set by `G_DRIVE_DIR`, and resets the stall-timer latch each counted edge), `drive_dir_code` (28 B, OEM @ 0x08003288 — tri-state decode of the H-bridge mask byte), `pa0_changed` (22 B, OEM @ 0x08003272 — PA0 vs `G_STATE_13B` edge detect), `sched_idle_reset` (26 B, OEM @ 0x080036BA — case-0 handler: promote `G_STATE_FC` out of 0, reset cmd-0x14 counter, latch gear-position back to home, drain pending 5C work), `syscfg_set_mem_mode` (24 B, OEM @ 0x080052E8 — RMW low 2 bits of `SYSCFG_CFGR1`; called once from main's boot prologue with value 3). 8 helpers still trap-stubbed.
 - **gpio** (`src/gpio.c`): five OEM-confirmed helpers added alongside the pre-existing speculative API — `gpio_idr_test` (20 B, OEM @ 0x08004DBC), `input_pa0` (22 B, OEM @ 0x0800325C), `input_pa1` (22 B, OEM @ 0x080033CC), `gpio_bsrr_write` (4 B, OEM @ 0x08004DF4 — raw BSRR set), `gpio_brr_write` (4 B, OEM @ 0x08004DF8 — raw BRR clear). All five use raw byte offsets, bypassing the still-broken speculative `gpio_t` struct (plan-2).
@@ -199,9 +199,9 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08003b86` |   24 | `cmd_5c_write3` | image | decomp-c | short-form cmd 0x5C: splice version + 2 packet bytes into emit slots, fire `report_image_status` |
 | `0x08003b9e` |   38 | `FUN_08003b9e` |  | pending |  |
 | `0x08003bc4` |   88 | `FUN_08003bc4` |  | pending |  |
-| `0x08003c1c` |   76 | `FUN_08003c1c` |  | pending |  |
-| `0x08003c68` |   50 | `FUN_08003c68` |  | pending |  |
-| `0x08003c9a` |  278 | `modbus_dispatch_pdu` | modbus_dispatch | decomp-c | switch on cmd byte; 5 case helpers stubbed pending decomp |
+| `0x08003c1c` |   76 | `emit_counter_status_pdu` | modbus_dispatch | decomp-c | builds 9-byte cmd 0x0F response: echo RX[0..1], sub-id, BE32 value, CRC |
+| `0x08003c68` |   50 | `cmd_0f_report_u32` | modbus_dispatch | decomp-c | case 0x0F: stage `(RX[5]&0x7F)<<1` + BE32 `value`, then emit |
+| `0x08003c9a` |  278 | `modbus_dispatch_pdu` | modbus_dispatch | decomp-c | switch on cmd byte; 3 case helpers stubbed pending decomp |
 | `0x08003eda` |  366 | `modbus_rx_poll` | modbus_dispatch | decomp-c | RX FSM: assembles short/long frames, CRC, hands off to dispatcher |
 | `0x08004048` |   96 | `FUN_08004048` |  | pending |  |
 | `0x080040a8` |   10 | `FUN_080040a8` |  | pending |  |

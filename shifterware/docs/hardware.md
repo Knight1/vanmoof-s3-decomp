@@ -150,8 +150,9 @@ without a comment are still single-purpose unknowns.
 | `0x2000013D` | `uint8_t` | `G_FLAG_13D` (a.k.a. `G_14_FLAG_B`) | Set/cleared by cmd 0x14 depending on `G_MODE`; gates `sched_task_beta` in several round-robin cases. |
 | `0x2000013E` | `uint8_t` | `G_FLAG_13E` | Set to 1 by the "extra task" branch of the round-robin (case 1 epilogue). |
 | `0x2000013F..40` | `uint8_t[2]` | `G_OTA_OFF` | OTA staging offset (lo/hi). Reset on OTA-mode exit / timeout. |
-| `0x20000141` | `uint8_t` | `G_VERSION_BYTE` | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]` by `image_apply`; also overwritten by `cmd_5c_write3` (short-form cmd 0x5C) with `G_5C_REGS[0]`. Emitted as PDU byte 2 by `report_image_status`. |
-| `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` | Pair of bytes emitted as PDU bytes 3 and 4 by `report_image_status`. Written by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) post-validation, or by `cmd_5c_write3` with the trailing two bytes of `G_5C_REGS`. |
+| `0x20000141` | `uint8_t` | `G_VERSION_BYTE` (a.k.a. `G_0F_SUBID` in the cmd 0x0F path) | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]`. Written by `image_apply`, `cmd_5c_write3` (with `G_5C_REGS[0]`), and `cmd_0f_report_u32`. Emitted as PDU byte 2 by both `report_image_status` (7-byte) and `emit_counter_status_pdu` (9-byte). |
+| `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` (also the first 2 bytes of `G_0F_VALUE_BE` in the cmd 0x0F path) | Pair of bytes emitted as PDU bytes 3 and 4 by `report_image_status`. Written by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) or by `cmd_5c_write3` with the trailing two bytes of `G_5C_REGS`. Clobbered by `cmd_0f_report_u32` (which writes a 4-byte BE32 value spanning `0x20000142..0x20000145`). |
+| `0x20000144..45` | `uint8_t[2]` | tail of `G_0F_VALUE_BE` | Upper two bytes of the BE32 value staged by `cmd_0f_report_u32`. Not used by the image-status path. Emitted as PDU bytes 5 and 6 of the 9-byte cmd 0x0F response. |
 | `0x20000148` | `uint32_t` | `G_HASH_SEED_PTR` | Pointer passed to `boot_hash(*, 100000)` during early boot. Likely a flash-resident integrity table. |
 
 The 0xC0-byte block at `0x20000000` is `.data`, copied by `main` from
@@ -161,9 +162,9 @@ flash `0x08004828`. Many of the entries above sit inside it.
 
 These are touched by the OEM but not yet placed:
 
-- `0x200000F8` and a handful of bytes between it and `0x200000FC` —
-  likely a small struct of telemetry values published by the 0x0F
-  cmd handler.
+- `0x200000F9..0xFC` — bytes adjacent to `G_COUNTER` that may form
+  part of a larger telemetry struct. `G_COUNTER` itself is the 32-bit
+  value emitted by `cmd_0f_report_u32`.
 - `0x2000015C` and the surrounding 45 B are the long-frame buffer,
   but the OTA payload format inside it (after the 4-byte Modbus
   header) hasn't been mapped.

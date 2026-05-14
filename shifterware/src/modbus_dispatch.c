@@ -50,10 +50,13 @@
 #define G_14_FLAG_B     (*(volatile uint8_t  *)0x2000013Du)
 #define G_OTA_OFF_LO    (*(volatile uint8_t  *)0x2000013Fu) /* OTA staging offset (lo) */
 #define G_OTA_OFF_HI    (*(volatile uint8_t  *)0x20000140u) /* OTA staging offset (hi) */
+#define G_0F_SUBID      (*(volatile uint8_t  *)0x20000141u) /* cmd 0x0F: 7-bit sub-id echo (RX[5]&0x7F)<<1 */
+#define G_0F_VALUE_BE   ((volatile uint8_t   *)0x20000142u) /* cmd 0x0F: 4-byte BE value (typically G_COUNTER) */
 
 #define G_RX_BUF        ((volatile uint8_t   *)0x200000C8u) /* short-frame post-validate buffer (8 B) */
 #define G_LONG_BUF      ((volatile uint8_t   *)0x2000015Cu) /* long-frame post-validate buffer (45 B) */
 #define G_RX_SCRATCH    ((const volatile uint8_t *)0x200001B2u) /* IRQ-filled inbound scratch */
+#define G_TX_BUF        ((volatile uint8_t   *)0x200001A9u) /* shared TX scratch (same as MODBUS_TX_BUF in modbus.c) */
 
 #define G_RX_WAIT_MAX   0x00249F00u   /* end-of-frame wait threshold (~2,400,000 ticks) */
 
@@ -68,11 +71,46 @@
  * proper module.
  */
 
-/* OEM @ 0x08003C68 (50 B). Case 0x0F — emit a uint32_t report. */
+/* OEM @ 0x08003C1C (76 B). Build and transmit the cmd 0x0F response PDU:
+ * 9 bytes = [slave, len, sub-id, value_be[0..3], crc_lo, crc_hi]. The
+ * first two bytes are echoed from the inbound RX[0..1]; the sub-id and
+ * BE-encoded value are read from the staging slots set up by
+ * cmd_0f_report_u32. */
+static void emit_counter_status_pdu(void)
+{
+    volatile uint8_t *const tx = G_TX_BUF;
+
+    tx[0] = G_RX_BUF[0];
+    tx[1] = G_RX_BUF[1];
+    tx[2] = G_0F_SUBID;
+    tx[3] = G_0F_VALUE_BE[0];
+    tx[4] = G_0F_VALUE_BE[1];
+    tx[5] = G_0F_VALUE_BE[2];
+    tx[6] = G_0F_VALUE_BE[3];
+
+    modbus_crc16_compute((const uint8_t *)tx, 7);
+
+    tx[7] = G_CRC_LO;
+    tx[8] = G_CRC_HI;
+
+    modbus_tx_finalize(9u);
+}
+
+/* OEM @ 0x08003C68 (50 B). Case 0x0F — emit a uint32_t report. Stage a
+ * 7-bit sub-id from RX[5] (low 7 bits, shifted up by 1) and the 32-bit
+ * `value` (big-endian) into the cmd 0x0F report slots, then emit the
+ * 9-byte response PDU. */
 static void cmd_0f_report_u32(uint32_t value)
 {
-    (void)value;
-    for (;;) { /* TODO: implement (decomp pending) */ }
+    const uint16_t rx_45 = (uint16_t)(((uint16_t)G_RX_BUF[4] << 8) | G_RX_BUF[5]);
+    G_0F_SUBID = (uint8_t)((rx_45 & 0x7Fu) << 1);
+
+    G_0F_VALUE_BE[0] = (uint8_t)(value >> 24);
+    G_0F_VALUE_BE[1] = (uint8_t)(value >> 16);
+    G_0F_VALUE_BE[2] = (uint8_t)(value >>  8);
+    G_0F_VALUE_BE[3] = (uint8_t)value;
+
+    emit_counter_status_pdu();
 }
 
 /* OEM @ 0x080031E6 (118 B). Case 0x5C, len==0x0F — after the
