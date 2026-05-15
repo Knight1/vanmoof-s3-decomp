@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-17 decomp-c / 2 vendor-stock / 2 named / 42 pending
+18 decomp-c / 2 vendor-stock / 2 named / 41 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -45,6 +45,32 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
+- **`flash.c`** — `bim_flash_prepare` at `0x00056A88`. 64 B in
+  both OEM and ours (+ 12 B of literal pool in both). Same size,
+  behaviour-equivalent. Universal flash-session opener: every BIM
+  call that reads or writes flash (`bim_full_scan_and_launch`,
+  `bim_verify_and_launch_image`, `bim_crc32_image` in the
+  `use_flash` path) calls this first and bails if it returns 0.
+  Sequence is: (1) `FUN_000563C8(4_000_000, 9)` — likely a 4 MHz
+  reference-clock or timing setup; (2) two ROM-API dispatch calls
+  via the table at ROM `0x100001B4` (4 bytes earlier than
+  `bim_panic_prep`'s `0x100001B8`, so an adjacent sub-table in
+  TI's standard `ROM_API_TABLE` array) with `index 15`, args `4`
+  then `3` — likely a wake-from-low-power + arm-sense-amplifier
+  pair; (3) light DIO3 (`1<<3` to `GPIO_DOUTSET31_0`) — a
+  flash-busy indicator; (4) call `FUN_00057138`, which is known
+  to light DIO4 (`1<<4` to the same DOUTSET register) — so the
+  combination DIO3+DIO4 is the BLE PCB's "flash session active"
+  display; (5) two-stage probe `FUN_00056D6A` then
+  `FUN_0005698C`. The OEM's `0x400220A0` literal + `subs r0, #16`
+  hints that `0x400220A0` (= `GPIO_DOUTCLR31_0`) is a
+  literal-pool-shared constant across many call sites in this
+  image; the OEM saves bytes globally by reusing it and adjusting
+  per-site. GCC stores the exact `0x40022090` it needs without
+  the subtract — different code shape, same byte count overall.
+  The complementary "flash session end" routine is `FUN_000570AC`,
+  called by every flash-using path (and by this function on the
+  failure branch).
 - **`crc.c`** — Now hosts two functions: `bim_crc32_image` at
   `0x000560D8` (the outer CRC compute) and `crc32_ieee_byte_step`
   at `0x00056F50` (the per-byte polynomial step). Together they
@@ -279,6 +305,7 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x000560D8` | 376 | `bim_crc32_image`            | `crc.c`       | CRC32-IEEE over an OAD image. Polynomial `0xEDB88320`, init `0xFFFFFFFF`, final XOR `0xFFFFFFFF`, first 12 bytes skipped. Uses a 256-byte SRAM scratch at `0x20000300`; reads via flash (dead path in this build) or alt source. Behaviour-equivalent (+8 B vs OEM). |
+| decomp-c     | `0x00056A88` | 64  | `bim_flash_prepare`          | `flash.c`     | Universal "flash session begin" precheck. Sets up clock/timing (`FUN_000563C8(4_000_000, 9)`), runs two ROM-API calls through the table at ROM `0x100001B4` (idx 15, args 4 then 3), lights DIO3 + DIO4 as a "flash busy" indicator, then runs a two-stage probe (`FUN_00056D6A` + `FUN_0005698C`). Returns 1 ready, 0 not. Same total size as OEM (64 B + 12 B literal pool). |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
 | decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
 | decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
@@ -348,13 +375,17 @@ Mirrors with browseable trees:
   — anyone who can write the image bytes can write a matching
   CRC32.
 - The remaining undecoded helpers around the OAD path:
-  `FUN_00056A88` (precheck), `FUN_000569E4` (flash read),
-  `FUN_00056CB8` (image-base derivation), `FUN_00056714` (secondary
-  CRC check), `FUN_000567A0` (short flash write), `FUN_00056E40`
-  (small flash read), `FUN_00056E72` (flash program),
-  `FUN_00057156` (image launcher), `FUN_000570AC` (post-flash
-  cleanup), `FUN_000570FA` (alt-source read), `FUN_00056D30`
-  (flash-page read).
+  `FUN_000569E4` (flash read), `FUN_00056CB8` (image-base
+  derivation), `FUN_00056714` (secondary CRC check),
+  `FUN_000567A0` (short flash write), `FUN_00056E40` (small flash
+  read), `FUN_00056E72` (flash program), `FUN_00057156` (image
+  launcher), `FUN_000570AC` (post-flash cleanup; the "flash
+  session end" complement to `bim_flash_prepare`), `FUN_000570FA`
+  (alt-source read), `FUN_00056D30` (flash-page read), and the
+  helpers internal to `bim_flash_prepare` itself: `FUN_000563C8`
+  (clock/timing setup), `FUN_00056D6A` (first-stage probe),
+  `FUN_0005698C` (second-stage probe), `FUN_00057138` (DIO4 set;
+  small leaf with a paired DIO4-clear at `FUN_00057188`).
 - The OAD image header bytes around file offset `0x1FA8` aren't
   yet parsed; the two `OAD NVM1` markers visible via `strings -t x`
   weren't auto-tagged by Ghidra because they sit inside a packed

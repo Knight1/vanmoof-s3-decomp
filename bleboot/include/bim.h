@@ -78,6 +78,15 @@ int oad_magic_match(const uint8_t *hdr8);
  * `oad_magic_match`. Semantically a no-op alias. */
 int oad_magic_match2(const uint8_t *hdr8);
 
+/* Flash-session begin — universal precheck at every BIM entry
+ * point that touches flash. Returns 1 if the flash subsystem is
+ * ready (caller proceeds), 0 if not (caller bails). Also lights
+ * DIO3 + DIO4 as a "flash busy" indicator on the BLE PCB. The
+ * complementary "release" call is `FUN_000570AC` (still pending),
+ * which every flash-using path invokes after the operation
+ * completes. */
+int bim_flash_prepare(void);
+
 /* Slot iterator — finds the next slot (4 KB stride) starting at
  * `start_slot` whose first 8 bytes match "OAD NVM1". Returns the
  * slot index (0..43) on a hit, `~1` (-2) once `slot` advances past

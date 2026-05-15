@@ -18,7 +18,7 @@
  * is filled by either:
  *
  *   - `FUN_000569e4` — flash read with TI's flash precheck
- *     dance (`FUN_00056a88`, `FUN_000570ac` epilogue). Used when
+ *     dance (`bim_flash_prepare`, `FUN_000570ac` epilogue). Used when
  *     the caller passes `use_flash != 0`. Both call sites in this
  *     BIM build pass `use_flash == 0`, so this path is dead in the
  *     compiled image.
@@ -88,7 +88,6 @@ uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
     return crc;
 }
 
-extern int      FUN_00056a88(void);
 extern void     FUN_000569e4(uint32_t flash_addr, uint32_t n, void *dst);
 extern void     FUN_000570fa(void *dst, uint32_t source_offset, uint32_t n);
 extern void     FUN_00056d30(uint32_t page, uint32_t off, void *dst, uint32_t n);
@@ -115,7 +114,7 @@ uint32_t bim_crc32_image(uint32_t start_page,
     /* Initial fill of the scratch buffer — one of the two sources,
      * 256 bytes starting at the start_page-relative origin. */
     if (use_flash != 0u) {
-        if (FUN_00056a88() != 1) {
+        if (bim_flash_prepare() != 1) {
             return 0u;
         }
         FUN_000569e4(start_page << 12, BIM_BUF_BYTES, buf);

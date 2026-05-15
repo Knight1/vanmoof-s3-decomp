@@ -105,7 +105,7 @@
     {"addr":"0x0005698c","size":74,"name":"FUN_0005698c","auto_named":true,"signature":"undefined FUN_0005698c(void)","thunk":false,"external":false},
     {"addr":"0x000569e4","size":84,"name":"FUN_000569e4","auto_named":true,"signature":"undefined FUN_000569e4(void)","thunk":false,"external":false},
     {"addr":"0x00056a38","size":68,"name":"FUN_00056a38","auto_named":true,"signature":"undefined FUN_00056a38(void)","thunk":false,"external":false},
-    {"addr":"0x00056a88","size":64,"name":"FUN_00056a88","auto_named":true,"signature":"undefined FUN_00056a88(void)","thunk":false,"external":false},
+    {"addr":"0x00056a88","size":64,"name":"bim_flash_prepare","auto_named":false,"signature":"int bim_flash_prepare(void)","thunk":false,"external":false},
     {"addr":"0x00056ad4","size":68,"name":"FUN_00056ad4","auto_named":true,"signature":"undefined FUN_00056ad4(void)","thunk":false,"external":false},
     {"addr":"0x00056b1c","size":72,"name":"bim_slot_iterator","auto_named":false,"signature":"int bim_slot_iterator(int start_slot)","thunk":false,"external":false},
     {"addr":"0x00056b64","size":54,"name":"bim_panic_prep","auto_named":false,"signature":"void bim_panic_prep(void)","thunk":false,"external":false},

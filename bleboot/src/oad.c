@@ -56,7 +56,6 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  * next decomp pass can rename in place without grep-replace
  * collisions. Roles below are inferred from call-site shape:
  *
- *   FUN_00056a88 — "is the BIM allowed to run a scan now?" precheck.
  *   FUN_000569e4 — flash read; (slot_anchor, n_bytes, dst).
  *   FUN_00056cb8 — derives an image-base address from the header's
  *                  `image_size`. Return shifted right by 13 = page.
@@ -73,7 +72,6 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *                  same word — see panic.c notes). Treated as
  *                  returning normally in case the launch is staged
  *                  rather than terminal. */
-extern int      FUN_00056a88(void);
 extern void     FUN_000569e4(uint32_t off, uint32_t n, void *dst);
 extern uint32_t FUN_00056cb8(uint32_t slot_base, uint32_t image_size);
 extern int      FUN_00056714(uint32_t slot_base, uint32_t image_size, uint32_t image_base);
@@ -178,7 +176,7 @@ int bim_slot_iterator(int start_slot)
 
 void bim_verify_and_launch_image(void)
 {
-    if (FUN_00056a88() == 0) {
+    if (bim_flash_prepare() == 0) {
         return;
     }
 
@@ -293,7 +291,7 @@ void bim_quick_scan_and_launch(int start_slot)
  *      `FUN_00057156(hdr2[28])`.
  *   6. On hash mismatch: writes `0xFC` to slot+17 (rejected).
  *
- * Returns -1 if the initial precheck `FUN_00056a88` fails, otherwise
+ * Returns -1 if `bim_flash_prepare` fails, otherwise
  * 0 after walking every slot the iterator surfaces.
  *
  * Note on `slot_base`: in this build, the value the OEM derives as
@@ -306,7 +304,7 @@ void bim_quick_scan_and_launch(int start_slot)
  * decoded. */
 int bim_full_scan_and_launch(void)
 {
-    if (FUN_00056a88() == 0) {
+    if (bim_flash_prepare() == 0) {
         return -1;
     }
 
