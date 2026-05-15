@@ -50,7 +50,44 @@
 #define BIM_MAX_FLASH_SIZE 0x100000u   /* 1 MB upper bound, use_flash path */
 #define BIM_MAX_ALT_SIZE   0x58000u    /*   352 KB upper bound, alt path  */
 
-extern uint32_t FUN_00056f50(uint32_t mixed_byte);
+/* CRC32-IEEE per-byte polynomial step (`FUN_00056F50` in the OEM).
+ *
+ * Performs 8 iterations of the canonical reflected CRC32 update:
+ * shift the accumulator right by one, and XOR with the polynomial
+ * `0xEDB88320` if the bit that fell off the LSB was 1. After 8
+ * iterations the result is the CRC32 contribution of one byte of
+ * input — equivalent to `crc32_table[mixed_byte]` for the standard
+ * IEEE table, but materialised on demand instead of stored.
+ *
+ * Picking byte-step over table-lookup saves ~1 KB of flash (no
+ * 256-entry table) at the cost of ~8 cycles per byte. The BIM is
+ * size-constrained (8 KB flash page) and only CRCs at boot, so
+ * the trade is sensible.
+ *
+ * Pure textbook algorithm — the polynomial constant is the only
+ * thing in the function that identifies it; everything else is
+ * the obvious 8-iteration loop. */
+static __attribute__((noinline))
+uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
+{
+    uint32_t crc = mixed_byte;
+    int      n   = 8;
+
+    if (n == 0) {
+        return crc;
+    }
+    do {
+        if (crc & 1u) {
+            crc = (crc >> 1) ^ 0xEDB88320u;
+        } else {
+            crc = crc >> 1;
+        }
+        n = (uint8_t)(n - 1);
+    } while (n != 0);
+
+    return crc;
+}
+
 extern int      FUN_00056a88(void);
 extern void     FUN_000569e4(uint32_t flash_addr, uint32_t n, void *dst);
 extern void     FUN_000570fa(void *dst, uint32_t source_offset, uint32_t n);
@@ -159,7 +196,7 @@ uint32_t bim_crc32_image(uint32_t start_page,
              * table entry by per-bit polynomial division. */
             for (uint32_t i = start_offset; i < byte_count; i++) {
                 uint32_t mixed = (crc ^ (uint32_t)buf[i]) & 0xFFu;
-                crc = FUN_00056f50(mixed) ^ (crc >> 8);
+                crc = crc32_ieee_byte_step(mixed) ^ (crc >> 8);
             }
         }
     }

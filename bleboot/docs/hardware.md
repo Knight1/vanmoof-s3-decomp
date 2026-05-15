@@ -127,10 +127,13 @@ identifier block at the tail and two copies of the OAD NVM marker:
   (BVER magic + `__DATE__` literal + `__TIME__` literal). The four
   bytes after the time string are the version word `0x00000100`
   ("1.0.0" packed little-endian).
-- `OAD NVM1` × 2 — TI OAD image identifier. One copy lives in the
-  OAD image header (the BIM's own header, since the BIM is itself
-  flashable like an application), and the second copy is likely a
-  comparison string for matching uploaded images.
+- `OAD NVM1` × 2 — TI OAD image identifier. The copy at flash
+  `0x000571E8` is the **comparison string** consumed by
+  `oad_magic_match` (`0x00056F74`); call sites are the
+  quick-scan slot sniff and the slot iterator. The second copy
+  lives in the BIM's own OAD image header near the tail of the
+  flash page (the BIM is itself a flashable image, so it carries
+  its own header).
 
 ## Provenance
 

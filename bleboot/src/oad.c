@@ -83,10 +83,39 @@ extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n)
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
 extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
 extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
-extern int      FUN_00056f74(void *hdr_8b);
 extern int      FUN_00056b1c(int slot);
 extern void     FUN_000570ac(void);
 extern void     FUN_00057156(uint32_t entry);
+
+/* "OAD NVM1" — the TI OAD image-identifier magic string that
+ * tags every legitimate OAD image header. The OEM keeps a
+ * comparison copy in .rodata (visible at flash `0x000571E8`)
+ * separate from the copy inside the BIM's own OAD header near
+ * the tail of the flash page. */
+static const uint8_t OAD_MAGIC[8] = "OAD NVM1";
+
+int oad_magic_match(const uint8_t *hdr8)
+{
+    /* Walk the 8 bytes from index 7 down to 0. Iterating high-to-low
+     * lets the loop terminate naturally on the `subs r1, r1, #1`
+     * setting N — no separate compare-with-bound. The OEM emits a
+     * defensive `bmi` immediately after `movs r1, #7` even though
+     * that branch is unreachable when the bound is the constant 7;
+     * presence in the OEM suggests the source was a generic memcmp
+     * with a signed count parameter. */
+    int i = 7;
+    if (i < 0) {
+        return 1;
+    }
+    do {
+        if (OAD_MAGIC[i] != hdr8[i]) {
+            return 0;
+        }
+        i = (int8_t)(i - 1);
+    } while (i >= 0);
+
+    return 1;
+}
 
 void bim_verify_and_launch_image(void)
 {
@@ -153,7 +182,7 @@ void bim_quick_scan_and_launch(int start_slot)
         uint32_t slot_anchor = (uint32_t)slot << 13;
 
         FUN_00056e40(slot_anchor, &buf, 8);
-        if (FUN_00056f74(&buf) != 1) {
+        if (oad_magic_match(buf.sniff) != 1) {
             goto next;
         }
 

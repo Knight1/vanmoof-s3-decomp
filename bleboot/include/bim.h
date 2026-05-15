@@ -63,4 +63,13 @@ uint32_t bim_crc32_image(uint32_t start_page,
                           uint32_t image_size,
                           uint8_t  use_flash);
 
+/* OAD magic check — returns 1 if the 8 bytes pointed to by `hdr8`
+ * match the constant ASCII string "OAD NVM1", else 0. Called by
+ * the quick-scan sniff and the slot iterator to recognise
+ * candidate OAD image headers. The reference string lives at flash
+ * `0x000571E8` (one of two "OAD NVM1" occurrences in the BIM
+ * image; the other is inside the BIM's own OAD header near the
+ * tail of the page). */
+int oad_magic_match(const uint8_t *hdr8);
+
 #endif

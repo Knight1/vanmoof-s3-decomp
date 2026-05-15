@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-13 decomp-c / 2 vendor-stock / 2 named / 46 pending
+15 decomp-c / 2 vendor-stock / 2 named / 44 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -45,8 +45,29 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
-- **`crc.c`** — `bim_crc32_image` at `0x000560D8`. 376 B (OEM) /
-  384 B (ours, `-Os`) — behaviour-equivalent. **Confirmed**:
+- **`crc.c`** — Now hosts two functions: `bim_crc32_image` at
+  `0x000560D8` (the outer CRC compute) and `crc32_ieee_byte_step`
+  at `0x00056F50` (the per-byte polynomial step). Together they
+  implement standard CRC32-IEEE (polynomial `0xEDB88320`,
+  init/final XOR `0xFFFFFFFF`) without a precomputed table — the
+  step function materialises one table entry on demand by 8-bit
+  polynomial division. Trades ~8 cycles per byte for ~1 KB of
+  flash savings, which fits the BIM's 8 KB budget.
+- **`crc32_ieee_byte_step` (`0x00056F50`)** — 32 B (OEM) / 22 B
+  (ours, `-Os`, +4 B literal). Pure textbook 8-iteration loop;
+  the polynomial constant in the literal pool is the only thing
+  that identifies it. GCC's compiled shape uses
+  `and r1, r0, #1; lsrs r0, r0, #1; cbz r1, ...; eors r0, r2`
+  where the OEM uses `lsrs r3, r1, #1; bcs/bcc; ...; eor.w r1, r2,
+  r1, lsr #1` (carry-flag-driven). Both compute the same CRC.
+  The OEM also emits a dead `beq` at the loop entry (`beq.n
+  0x56f6c` immediately after `movs r0, #8` — Z is clear, so the
+  branch is never taken); suggests the original C source had an
+  `if (count == 0) return crc;` guard that the compiler kept
+  defensively. Preserved in our source for fidelity, although
+  GCC `-Os` strips it.
+- **`bim_crc32_image` (`0x000560D8`)** — 376 B (OEM) / 384 B
+  (ours, `-Os`) — behaviour-equivalent. **Confirmed**:
   the BIM's "hash" verification is just **CRC32-IEEE** (reflected
   polynomial `0xEDB88320`, initial `0xFFFFFFFF`, final XOR
   `0xFFFFFFFF`) — not a cryptographic hash. The first 12 bytes
@@ -72,6 +93,22 @@ layout in the TI SDK shipping CCS / IAR variants.
   the docs and code (renamed `g_hw_id_cached` →
   `g_oad_chunk_size`, `image_hash` → `image_crc`, `image_addr` →
   `image_size`).
+- **`oad_magic_match` (`0x00056F74`)** — 32 B (OEM) / 32 B (ours,
+  `-Os`) — both with a 4-byte literal pool entry pointing at the
+  reference string. Walks 8 byte positions and returns `1` only
+  on full match against `"OAD NVM1"`. The OEM iterates `i` from 7
+  down to 0 via `subs r1, r1, #1; sxtb r1, r1; cmp r1, #0; bpl`,
+  indexing both the reference string and the input by `r1`. GCC
+  rewrites the same algorithm as a pointer walk (`ldrb.w [r2],
+  #-1` on the reference, `ldrb.w [r3, #-1]!` on the input,
+  terminating when the input pointer hits its original base via
+  `cmp r3, r0`) — a textbook example of how `-Os` will rewrite a
+  counted loop into a pointer-walk when the trip count is
+  compile-time constant. Behaviour-equivalent. The OEM keeps an
+  unreachable `bmi` guard immediately after `movs r1, #7` — same
+  defensive shape we saw in `crc32_ieee_byte_step`, suggesting
+  the source was a generic `memcmp_count`-style helper used at
+  multiple call sites with constant and variable counts.
 - **`oad.c`** — Now hosts three sibling functions:
   `bim_verify_and_launch_image` at `0x000568A8`,
   `bim_quick_scan_and_launch` at `0x00056824`, and
@@ -221,6 +258,8 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x000560D8` | 376 | `bim_crc32_image`            | `crc.c`       | CRC32-IEEE over an OAD image. Polynomial `0xEDB88320`, init `0xFFFFFFFF`, final XOR `0xFFFFFFFF`, first 12 bytes skipped. Uses a 256-byte SRAM scratch at `0x20000300`; reads via flash (dead path in this build) or alt source. Behaviour-equivalent (+8 B vs OEM). |
+| decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
+| decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against the ASCII string "OAD NVM1" stored at flash `0x000571E8`. Called by `bim_quick_scan_and_launch`'s slot sniff and by `FUN_00056B1C` (the slot iterator). Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
 | decomp-c     | `0x00056254` | 366 | `bim_full_scan_and_launch`  | `oad.c`       | First-boot scan: iterates slots, runs primary CRC + secondary CRC + CRC32 over the image body, promotes a match with `0xFE` markers + launches. Returns 0 normally, -1 on precheck fail. Behaviour-equivalent; `-Os` trims 42 B vs OEM. |
 | decomp-c     | `0x00056824` | 130 | `bim_quick_scan_and_launch` | `oad.c`       | Subsequent-boot fast scan: walks slots 0..43, launches the first slot whose status byte is already `0xFE`/`0xFF`. Behaviour-equivalent; `-Os` trims 28 B vs OEM by merging flag and status compare chains. |
 | decomp-c     | `0x000568A8` | 120 | `bim_verify_and_launch_image` | `oad.c` | OAD header read → magic check → hash compute (uses `g_hw_id_cached` as salt) → flash-program verified marker → jump-to-entry. Size-equivalent (120 B); stack layout differs. |
@@ -286,15 +325,14 @@ Mirrors with browseable trees:
   — anyone who can write the image bytes can write a matching
   CRC32.
 - The remaining undecoded helpers around the OAD path:
-  `FUN_00056F50` (per-byte CRC32 step using polynomial division —
-  trivial, ~32 B leaf), `FUN_00056A88` (precheck), `FUN_000569E4`
-  (flash read), `FUN_00056CB8` (image-base derivation),
-  `FUN_00056714` (secondary CRC check), `FUN_000567A0` (short
-  flash write), `FUN_00056E40` (small flash read), `FUN_00056E72`
-  (flash program), `FUN_00056B1C` (slot iterator), `FUN_00057156`
-  (image launcher), `FUN_000570AC` (post-flash cleanup),
-  `FUN_000570FA` (alt-source read), `FUN_00056D30` (flash-page
-  read), `FUN_00056F74` (8-byte header sniff).
+  `FUN_00056A88` (precheck), `FUN_000569E4` (flash read),
+  `FUN_00056CB8` (image-base derivation), `FUN_00056714` (secondary
+  CRC check), `FUN_000567A0` (short flash write), `FUN_00056E40`
+  (small flash read), `FUN_00056E72` (flash program), `FUN_00056B1C`
+  (slot iterator — now known to consume `oad_magic_match`),
+  `FUN_00057156` (image launcher), `FUN_000570AC` (post-flash
+  cleanup), `FUN_000570FA` (alt-source read), `FUN_00056D30`
+  (flash-page read).
 - The OAD image header bytes around file offset `0x1FA8` aren't
   yet parsed; the two `OAD NVM1` markers visible via `strings -t x`
   weren't auto-tagged by Ghidra because they sit inside a packed
