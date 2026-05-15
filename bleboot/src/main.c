@@ -1,11 +1,7 @@
 #include <stdint.h>
 
+#include "bim.h"
 #include "main.h"
-
-/* The BIM dispatcher — undecoded yet. Defined elsewhere (currently
- * inside the OEM image as FUN_00056F2A) and called from main()
- * after the hardware-id stash below. */
-extern void bim_dispatch(void);
 
 /* MMIO config word; low 4 bits are a hardware-revision / package
  * code that the BIM dispatcher consults to decide which flash

@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-6 decomp-c / 2 vendor-stock / 2 named / 53 pending
+7 decomp-c / 2 vendor-stock / 2 named / 52 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -31,6 +31,19 @@ layout in the TI SDK shipping CCS / IAR variants.
   `2001 4770`) and `_exit` at `0x000571A4` (post-main trap;
   compiles to `nop; b .` = `bf00 e7fe`). Both are byte-equivalent
   to the OEM under the project CFLAGS.
+- **`bim.c`** — `bim_dispatch` at `0x00056F2A`. 38 B (OEM) / 34 B
+  (ours, `-Os`) — behaviour-equivalent, not byte-equivalent.
+  Three-way fan-out on the return of an as-yet-undecoded
+  image-scan helper (`FUN_00056254`): scan returns `0` → call
+  `FUN_00056824(0)` to prep a fallback image; scan returns `-1`
+  → panic path (`FUN_00056B64`, `FUN_00057194`, then trap);
+  anything else (a valid slot index) → continue. An always-run
+  successor `FUN_000568A8` (probably "jump to selected image")
+  runs in every non-trap case. The OEM divergence is GCC noticing
+  it can replace `adds r4,r0,#0; bne` with a `cbnz r0` (no need
+  for the explicit `movs r0,#0` on the fall-through, since r0 is
+  already 0 there), and `cmp.w r4,#-1; bne` with `adds r4,#1; bne`
+  (mutates r4 but it's dead after) — saving 4 B total.
 - **`main.c`** — BIM main at `0x00057000`. Reads low 4 bits of
   the MMIO config register at `0x40032430`, caches `(val << 10)`
   in the SRAM global at `0x20000400`, then tail-calls the (still
@@ -80,7 +93,8 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
-| decomp-c     | `0x00057000` | 24  | `main`              | `main.c`      | BIM main — caches `(MMIO[0x40032430] & 0xF) << 10` at SRAM `0x20000400`, calls BIM dispatcher. Behaviour-equivalent only. |
+| decomp-c     | `0x00056F2A` | 38  | `bim_dispatch`      | `bim.c`       | 3-way dispatcher on image-scan return (`0` → fallback prep, `-1` → panic trap, other → continue). Behaviour-equivalent; GCC trims 4 B vs OEM. |
+| decomp-c     | `0x00057000` | 24  | `main`              | `main.c`      | BIM main — caches `(MMIO[0x40032430] & 0xF) << 10` at SRAM `0x20000400`, calls `bim_dispatch`. Behaviour-equivalent only. |
 | decomp-c     | `0x000571A0` | 4   | `_system_pre_init`  | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`2001 4770`) |
 | decomp-c     | `0x000571A4` | 4   | `_exit`             | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`bf00 e7fe`) |
 | vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit. Upstream linked, not vendored. |
