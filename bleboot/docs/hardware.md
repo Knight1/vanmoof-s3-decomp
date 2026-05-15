@@ -112,6 +112,9 @@ and Reset is the application entry point.
 | --- | --- | --- | --- | --- |
 | `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits are a hardware-revision / package code; bits 31:4 unused at this call site. Confirmed by `bim_verify_and_launch_image` to be consumed downstream as a per-bike salt fed into the 376 B hash routine at `0x560D8`. Exact register identity not yet pinned to a named CC2642R1F TRM register. |
 | `0x40022090` | 32 b | write | `bim_panic_indicate` | `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` — set-only alias for `DOUT31_0`. Writes `1<<2` to drive DIO2 high (panic LED) without disturbing the other 31 pins. |
+| `0x42441A08` | 32 b | write | `bim_panic_prep` | Bit-band alias of bit 2 of `GPIO_DOE31_0` at `GPIO_BASE + 0xD0 = 0x400220D0`. Writes `1` to switch DIO2 from input (reset default) to output, so the `DOUTSET31_0` write that follows actually drives the pin. |
+| `0x40082028` / `0x60082028` | 32 b | write + poll | `bim_panic_prep` | `PRCM_BASE (0x40082000) + 0x28` — `PRCM_GPIOCLKGR`. The `0x60082028` alias is the write-through path used to set the run-mode GPIO clock gate; the `0x40082028` alias is read to poll bit 1 (the AHB-side `LOAD_DONE`-equivalent ack). After this handshake, GPIO MMIO is safe to touch. |
+| `0x100001B8` | 32 b | read (ptr-to-table) | `bim_panic_prep` | ROM-region dispatch slot — holds a pointer to a TI ROM API function table. Indices 5, 7, 13 are called with arguments `4`, `0x500`, `4`. Likely `ROM_API_TABLE[14]` (`ROM_API_UART_TABLE`) in the SimpleLink CC13x2/CC26x2 SDK standard ordering, but the argument values don't fit UART semantics — exact identity left open. |
 | `0xE000ED88` | 32 b | read-modify-write | `ResetISR_body` | `SCB->CPACR` — the Reset path sets bits 20–23 (CP10/CP11 full access) to enable the FPU. Standard Cortex-M4F boilerplate. |
 
 ## Strings of interest

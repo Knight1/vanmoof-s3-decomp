@@ -12,7 +12,7 @@ behaviour-equivalent) images.
 | [`shifterboot/`](shifterboot/) | `shifterboot` (unversioned) | MM32F031F6U6 (Cortex-M0) | e-Shifter first-stage bootloader at flash base | 6 KB | active — `4 named+asm / 74 pending` |
 | [`mainboot/`](mainboot/) | `muco-boot` (unversioned) | ST STM32F413VGT6 (Cortex-M4) | main-controller bootloader (third-party Muco Technologies) | 32 KB | active — `7 decomp-c / 1 decomp-asm / 1 vendor-stock / 1 named / 170 pending` |
 | [`mainware/`](mainware/) | `mainware 1.07.06` | ST STM32F413VGT6 (Cortex-M4) | main-controller application (BLE, modem, kick-lock, sound, power state, subsystem updaters) | ~213 KB | active — `6 decomp-c / 3 vendor-stock / 8 named / 794 pending` |
-| [`bleboot/`](bleboot/)   | `bleboot 1.0.0`    | TI CC2642R1F (Cortex-M4F)    | BLE-MCU bootloader (TI BIM — image select + verify + jump, occupies last 8 KB flash page incl. CCFG) | 8 KB | active — `9 decomp-c / 2 vendor-stock / 2 named / 50 pending` |
+| [`bleboot/`](bleboot/)   | `bleboot 1.0.0`    | TI CC2642R1F (Cortex-M4F)    | BLE-MCU bootloader (TI BIM — image select + verify + jump, occupies last 8 KB flash page incl. CCFG) | 8 KB | active — `12 decomp-c / 2 vendor-stock / 2 named / 47 pending` |
 
 **Shifterboot lineage:** the bootloader's startup path is a lightly-customised
 MindMotion vendor template — `Reset_Handler`, the Cortex-M0 vector table, and

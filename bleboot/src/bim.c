@@ -1,30 +1,32 @@
 #include "bim.h"
 
-/* Three helpers still undecoded as of this commit. The return
- * value of FUN_00056254 is the bus that drives the rest of the
- * dispatcher: zero triggers the fallback-prepare path,
- * negative-one triggers the panic path, anything else just falls
- * through. Names mirror Ghidra's still-`FUN_*` symbols so a future
- * decomp pass can drop in real names without grep-replace
- * collisions. The other two helpers
- * (`bim_verify_and_launch_image`, `bim_panic_indicate`) are decoded
- * and declared in `bim.h`. */
-extern int  FUN_00056254(void);  /* returns 0, -1, or a slot index */
-extern void FUN_00056824(int);   /* called with r0=0 when scan returned 0 */
-extern void FUN_00056B64(void);  /* panic cleanup */
-
+/* Top-level boot decision. Dispatcher contract:
+ *
+ *   bim_full_scan_and_launch()  →  -1  → precheck failed → panic
+ *                              →   0   → fall through to quick scan
+ *
+ * On success, neither scan returns (control is transferred to the
+ * launched image via FUN_00057156). When both scans fail to launch,
+ * `bim_verify_and_launch_image` is the last-ditch attempt to boot
+ * the BIM's own header before the panic path lights DIO2.
+ *
+ * The OEM dispatcher only checks the precheck failure and the
+ * "did the full scan return 0" case, so we preserve that exact
+ * decision shape: any other return value would route to the
+ * "anything else → continue" branch, which in this build is dead
+ * code (bim_full_scan_and_launch only returns 0 or -1). */
 void bim_dispatch(void)
 {
-    int slot = FUN_00056254();
+    int scan_result = bim_full_scan_and_launch();
 
-    if (slot == 0) {
-        FUN_00056824(0);
+    if (scan_result == 0) {
+        bim_quick_scan_and_launch(0);
     }
 
     bim_verify_and_launch_image();
 
-    if (slot == -1) {
-        FUN_00056B64();
+    if (scan_result == -1) {
+        bim_panic_prep();
         bim_panic_indicate();
         for (;;) {
         }
