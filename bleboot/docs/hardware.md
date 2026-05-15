@@ -100,6 +100,19 @@ Most slots route to a shared trap handler at `0x00056C76`
 (`b .` — infinite loop). Only NMI/HardFault have distinct entries,
 and Reset is the application entry point.
 
+## Known SRAM globals (from decomp)
+
+| Address | Size | Symbol | Module | Notes |
+| --- | --- | --- | --- | --- |
+| `0x20000400` | 4 | `g_hw_id_cached` | `main.c` | Pre-shifted hardware-revision / package code, cached at boot from MMIO `0x40032430`'s low 4 bits (`(reg & 0xF) << 10`). Read later by the (still-undecoded) BIM dispatcher to pick an application slot. |
+
+## Known MMIO accesses (from decomp)
+
+| Address | Width | Direction | Accessor | Notes |
+| --- | --- | --- | --- | --- |
+| `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits are a hardware-revision / package code; bits 31:4 unused at this call site. Exact register identity not yet pinned to a named CC2642R1F TRM register. |
+| `0xE000ED88` | 32 b | read-modify-write | `ResetISR_body` | `SCB->CPACR` — the Reset path sets bits 20–23 (CP10/CP11 full access) to enable the FPU. Standard Cortex-M4F boilerplate. |
+
 ## Strings of interest
 
 The image is mostly code — the only ASCII strings are the build

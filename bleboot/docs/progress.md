@@ -100,49 +100,47 @@ Status legend:
 - **named** — renamed in Ghidra but not yet translated.
 - **pending** — still `FUN_xxxxxxxx`.
 
-## Decoded functions
+(The function table above is the single source of truth — the per-
+bucket subsections that used to follow have been folded into it.)
 
-| Address | Name | Size | Notes |
-| --- | --- | --- | --- |
-| `0x000568A6` | `HardFault_Handler` | 2 B | `b .` — vendor template's default for the HardFault slot. Surprising that there's no register dump given that mainware's HardFault path does dump faults, but the BIM is tiny and has no UART or RAM-log to dump to. |
-| `0x00056C76` | `Default_Handler`   | 2 B | `b .` — catch-all for every unused vector slot (MemManage/BusFault/UsageFault/SVCall/DebugMon/PendSV/SysTick + every IRQ). |
-| `0x00056DA2` | `NMI_Handler`       | 2 B | `b .` — distinct symbol so the VT keeps three independent entries, even though all three are byte-identical. |
+## Upstream linkage
 
-## Named (in Ghidra) but not yet decompiled
+Both vendor-stock entries point at the TI SimpleLink CC13x2/CC26x2
+SDK (release 3.40.00.02 brackets the OEM's `Apr 23 2020` build
+date). The upstream is **linked from this doc, not vendored into
+this repo** at this time; revisit once enough helpers are decoded
+that vendoring saves more friction than it costs:
 
-| Address | Name | Size | Notes |
-| --- | --- | --- | --- |
-| `0x00057126` | `Reset_Handler` | 10 B | Stub: `push {r3,lr}; bl SetupTrimDevice; b.w ResetISR_body`. Bytes at `0x57130..0x57135` are GCC's dead `bl HardFault; pop` epilogue (unreachable). |
-| `0x00056DD8` | `ResetISR_body` | 52 B | MSP load + FPU enable + four helper calls (`0x571A0`, `0x56BF0`, `0x57000`, `0x571A4`). Last call is the application `main()`. |
+- `SetupTrimDevice` → `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c`
+- `_auto_init_table` → TI CGT compiler runtime (`<ccs_install>/tools/compiler/ti-cgt-arm_*/lib/src/_auto_init.c` or similar; not in the SimpleLink SDK itself but ships with the TI ARM Compiler).
 
-## Vendor-stock functions
-
-| Address | Name | Size | Upstream |
-| --- | --- | --- | --- |
-| `0x0005667C` | `SetupTrimDevice` | 108 B | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — TI BSD-3 licensed. Called from the Reset_Handler stub *before* MSP/FPU init, which is the canonical TI BIM pattern (the stack pointer at vector-fetch is whatever the boot ROM left in MSP, but it's good enough for one call into trim because driverlib's trim stays under ~32 bytes of stack). Exits with a busy-wait on an unknown status word — likely the AON/MCU domain power-ready bit, also typical of `SetupTrimDevice`. |
-
-Other candidates to check next when picking helpers around the
-`ResetISR_body` call graph: the four functions it calls
-(`0x571A0`, `0x56BF0`, `0x57000`, `0x571A4`). `0x57000` is 24 B —
-the canonical TI `.data` copy + `.bss` zero block lowered to ~24
-bytes at `-Os`. `0x571A4` is only 4 B, so it's a jump trampoline
-to the real `main` rather than `main` itself.
+Mirrors with browseable trees:
+[`jeandudey/simplelink_cc13x2_26x2_sdk`](https://github.com/jeandudey/simplelink_cc13x2_26x2_sdk)
+(SDK 3.40 — closest to the OEM build),
+[`nanoframework/SimpleLink_CC13xx_26xx_SDK`](https://github.com/nanoframework/SimpleLink_CC13xx_26xx_SDK)
+(SDK 5.40 — broader, later),
+[`contiki-ng/cc26xxware`](https://github.com/contiki-ng/cc26xxware)
+(older CC26x0 driverlib but same `SetupTrimDevice` semantics).
 
 ## Open questions
 
-- Is `Reset_Handler` (62 B) calling a `SystemInit`-style helper, or
-  does it inline the clock-tree configuration? At 62 bytes it's most
-  likely just `.data` copy + `.bss` zero + `bl main` — the CC2642R1F
-  ROM does the clock-tree setup itself.
-- The 376-byte `FUN_000560D8` is the largest function in the image
-  and lives near the top of `.text`; almost certainly the BIM `main`
-  / image-selection routine. Walk into it once a few of the leaf
-  helpers around it are recognised.
-- One auto-discovered string only (`"BVERApr 23 2020"`). The OAD
-  signature words `"OAD NVM1"` show up in the binary but Ghidra
-  didn't tag them as strings — likely because they're inside a
-  packed image-header struct and not 4-byte aligned. Worth a manual
-  `DefineString` pass later.
+- The MMIO register at `0x40032430` that `main()` reads — sits in
+  the `0x40030000..0x40034000` band between the FLASH controller
+  and VIMS. Low 4 bits look like a hardware-revision / package
+  code. Pin the exact register identity once we cross-reference
+  the CC2642R1F TRM (or any TI sample that touches a similar
+  address).
+- `FUN_000560D8` (376 B) is the largest function in the image and
+  lives near the top of `.text`. Likely the **BIM dispatcher**
+  (the thing `FUN_00056F2A`, called by `main`, chains into via
+  `bl 0x56254` + `bl 0x56824` + `bl 0x568A8`). Walk into it once
+  the smaller helpers around the call path are recognised.
+- The OAD image header bytes around file offset `0x1FA8` aren't
+  yet parsed; the two `OAD NVM1` markers visible via `strings -t x`
+  weren't auto-tagged by Ghidra because they sit inside a packed
+  image-header struct that's not 4-byte aligned. A manual
+  `DefineString` + struct overlay pass would surface the version /
+  length / CRC fields cleanly.
 
 ## Decomp policy reminders
 
