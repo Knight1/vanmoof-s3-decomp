@@ -66,7 +66,7 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *   FUN_00056e40 — small flash read; (addr, dst, n_bytes).
  *   FUN_00056f74 — 8-byte header sniff; returns 1 if it looks like
  *                  a real OAD header start.
- *   FUN_000570ac — common epilogue (probably watchdog kick).
+ *   bim_flash_release — the flash-session-end epilogue (now decoded).
  *   FUN_00057156 — image launcher / entry handoff; ABI is unusual
  *                  (loads SP from `*(entry + 4)` and `blx`-es the
  *                  same word — see panic.c notes). Treated as
@@ -79,7 +79,6 @@ extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n)
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
 extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
 extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
-extern void     FUN_000570ac(void);
 extern void     FUN_00057156(uint32_t entry);
 
 /* "OAD NVM1" — the TI OAD image-identifier magic string that
@@ -189,7 +188,7 @@ void bim_verify_and_launch_image(void)
 
     uint32_t image_base = FUN_00056cb8(0, hdr.image_size);
     if (FUN_00056714(0, hdr.image_size, image_base) != 0) {
-        FUN_000570ac();
+        bim_flash_release();
         return;
     }
 
@@ -212,7 +211,7 @@ void bim_verify_and_launch_image(void)
         FUN_00057156(hdr.entry);
     }
 
-    FUN_000570ac();
+    bim_flash_release();
 }
 
 /* Quick scan — walks slots 0..43 (stride = 1<<13 = 8 KB = one
@@ -401,7 +400,7 @@ int bim_full_scan_and_launch(void)
              * this build — kept for OEM fidelity. */
             uint8_t f = flags_sec;
             if ((f & ~1u) == 0u || f == 3u || f == 7u) {
-                FUN_000570ac();
+                bim_flash_release();
                 FUN_00057156(entry_sec);
             }
         } else {
@@ -413,6 +412,6 @@ int bim_full_scan_and_launch(void)
         FUN_000567a0(slot_base + 16u, 1u, &status);
     }
 
-    FUN_000570ac();
+    bim_flash_release();
     return 0;
 }

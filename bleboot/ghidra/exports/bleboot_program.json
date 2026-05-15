@@ -139,7 +139,7 @@
     {"addr":"0x00057058","size":18,"name":"FUN_00057058","auto_named":true,"signature":"undefined FUN_00057058(void)","thunk":false,"external":false},
     {"addr":"0x00057074","size":28,"name":"FUN_00057074","auto_named":true,"signature":"undefined FUN_00057074(void)","thunk":false,"external":false},
     {"addr":"0x00057090","size":18,"name":"FUN_00057090","auto_named":true,"signature":"undefined FUN_00057090(void)","thunk":false,"external":false},
-    {"addr":"0x000570ac","size":22,"name":"FUN_000570ac","auto_named":true,"signature":"undefined FUN_000570ac(void)","thunk":false,"external":false},
+    {"addr":"0x000570ac","size":22,"name":"bim_flash_release","auto_named":false,"signature":"void bim_flash_release(void)","thunk":false,"external":false},
     {"addr":"0x000570c8","size":26,"name":"FUN_000570c8","auto_named":true,"signature":"undefined FUN_000570c8(void)","thunk":false,"external":false},
     {"addr":"0x000570e2","size":24,"name":"FUN_000570e2","auto_named":true,"signature":"undefined FUN_000570e2(void)","thunk":false,"external":false},
     {"addr":"0x000570fa","size":22,"name":"FUN_000570fa","auto_named":true,"signature":"undefined FUN_000570fa(void)","thunk":false,"external":false},

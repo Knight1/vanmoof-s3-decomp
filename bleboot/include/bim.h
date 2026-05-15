@@ -82,10 +82,18 @@ int oad_magic_match2(const uint8_t *hdr8);
  * point that touches flash. Returns 1 if the flash subsystem is
  * ready (caller proceeds), 0 if not (caller bails). Also lights
  * DIO3 + DIO4 as a "flash busy" indicator on the BLE PCB. The
- * complementary "release" call is `FUN_000570AC` (still pending),
- * which every flash-using path invokes after the operation
- * completes. */
+ * complementary "release" call is `bim_flash_release`, which
+ * every flash-using path invokes after the operation completes
+ * (and which `bim_flash_prepare` itself invokes on the
+ * probe-failure branch). */
 int bim_flash_prepare(void);
+
+/* Flash-session end — clears the flash-op LED, runs the flash
+ * controller drain loop, issues a "session closing" marker write,
+ * and tears down the PRCM clock state that `bim_flash_prepare`
+ * brought up. Called by every flash-using BIM path; treated as
+ * fire-and-forget (no status return). */
+void bim_flash_release(void);
 
 /* Slot iterator — finds the next slot (4 KB stride) starting at
  * `start_slot` whose first 8 bytes match "OAD NVM1". Returns the
