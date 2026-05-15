@@ -67,8 +67,6 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *   FUN_00056e40 — small flash read; (addr, dst, n_bytes).
  *   FUN_00056f74 — 8-byte header sniff; returns 1 if it looks like
  *                  a real OAD header start.
- *   FUN_00056b1c — slot iterator state machine; (current_slot) →
- *                  next slot index, or -1 to stop.
  *   FUN_000570ac — common epilogue (probably watchdog kick).
  *   FUN_00057156 — image launcher / entry handoff; ABI is unusual
  *                  (loads SP from `*(entry + 4)` and `blx`-es the
@@ -83,7 +81,6 @@ extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n)
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
 extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
 extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
-extern int      FUN_00056b1c(int slot);
 extern void     FUN_000570ac(void);
 extern void     FUN_00057156(uint32_t entry);
 
@@ -92,11 +89,20 @@ extern void     FUN_00057156(uint32_t entry);
  * comparison copy in .rodata (visible at flash `0x000571E8`)
  * separate from the copy inside the BIM's own OAD header near
  * the tail of the flash page. */
-static const uint8_t OAD_MAGIC[8] = "OAD NVM1";
+/* The OEM has two adjacent copies of the magic string at flash
+ * `0x000571E0` and `0x000571E8` — `"OAD NVM1OAD NVM1"`. Each one is
+ * referenced from its own byte-identical match function (this one
+ * and `oad_magic_match2` below). The duplication is a TI CCS
+ * artifact: two translation units each emitted a static inline
+ * memcmp plus a private copy of the constant, and the linker kept
+ * all four pieces. Preserved here so the call graph in
+ * `bim_slot_iterator` matches the OEM `bl` sequence. */
+static const uint8_t OAD_MAGIC_A[8] = "OAD NVM1";
+static const uint8_t OAD_MAGIC_B[8] = "OAD NVM1";
 
-int oad_magic_match(const uint8_t *hdr8)
+static int oad_magic_walk(const uint8_t *hdr8, const uint8_t *ref)
 {
-    /* Walk the 8 bytes from index 7 down to 0. Iterating high-to-low
+    /* Walk 8 bytes from index 7 down to 0. Iterating high-to-low
      * lets the loop terminate naturally on the `subs r1, r1, #1`
      * setting N — no separate compare-with-bound. The OEM emits a
      * defensive `bmi` immediately after `movs r1, #7` even though
@@ -108,13 +114,66 @@ int oad_magic_match(const uint8_t *hdr8)
         return 1;
     }
     do {
-        if (OAD_MAGIC[i] != hdr8[i]) {
+        if (ref[i] != hdr8[i]) {
             return 0;
         }
         i = (int8_t)(i - 1);
     } while (i >= 0);
 
     return 1;
+}
+
+int oad_magic_match(const uint8_t *hdr8)
+{
+    return oad_magic_walk(hdr8, OAD_MAGIC_A);
+}
+
+int oad_magic_match2(const uint8_t *hdr8)
+{
+    return oad_magic_walk(hdr8, OAD_MAGIC_B);
+}
+
+/* Slot iterator — walks slots `start_slot..43` (4 KB stride;
+ * `slot << 12`), sniffs the first 8 bytes of each via
+ * `FUN_000569E4`, and returns:
+ *
+ *   - the slot index (>= 0) when `oad_magic_match2` matches —
+ *     i.e., "this slot has an OAD NVM1 header, the caller should
+ *     process it";
+ *   - `-1` when `oad_magic_match` matches — semantically a
+ *     different sentinel ("found an OAD image, stop scanning"),
+ *     but since `oad_magic_match2` and `oad_magic_match` test the
+ *     identical byte string, this branch is unreachable in
+ *     practice (if the first call matched, the second would too).
+ *     Preserved for OEM-faithful structure;
+ *   - `~1` (= -2) when `slot` advances past 43 without ever
+ *     matching the magic — "scan exhausted, no candidate."
+ *
+ * The OEM's stack frame allocates 44 bytes despite only using 8
+ * for the sniff buffer; preserved as a 44-byte local to match. */
+int bim_slot_iterator(int start_slot)
+{
+    int     slot    = start_slot;
+    int     running = 1;
+    uint8_t buf[44];
+
+    do {
+        FUN_000569e4((uint32_t)slot << 12, 8, buf);
+
+        if (oad_magic_match2(buf) == 1) {
+            return (int)(int8_t)slot;
+        }
+        if (oad_magic_match(buf) == 1) {
+            return -1;
+        }
+
+        slot = (uint8_t)(slot + 1);
+        if (slot >= 44) {
+            running = 0;
+        }
+    } while (running);
+
+    return ~1;
 }
 
 void bim_verify_and_launch_image(void)
@@ -212,8 +271,8 @@ void bim_quick_scan_and_launch(int start_slot)
 }
 
 /* Full scan — the first-boot or post-OAD-update path. Iterates slots
- * through the helper state machine `FUN_00056b1c` (which returns the
- * next slot to consider, or `-1` to stop), and for each slot:
+ * through `bim_slot_iterator` (which returns the next slot to
+ * consider, or a negative sentinel to stop), and for each slot:
  *
  *   1. Reads the 56-byte primary header at slot-anchor (stride 4 KB
  *      here, not 8 KB — the BIM keeps headers on a tighter grid than
@@ -255,7 +314,7 @@ int bim_full_scan_and_launch(void)
     int slot = 0;
 
     for (;;) {
-        slot = FUN_00056b1c((int)(uint8_t)slot);
+        slot = bim_slot_iterator((int)(uint8_t)slot);
         if (slot < 0) {
             break;
         }

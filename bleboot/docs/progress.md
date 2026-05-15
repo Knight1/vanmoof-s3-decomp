@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-15 decomp-c / 2 vendor-stock / 2 named / 44 pending
+17 decomp-c / 2 vendor-stock / 2 named / 42 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -93,22 +93,43 @@ layout in the TI SDK shipping CCS / IAR variants.
   the docs and code (renamed `g_hw_id_cached` →
   `g_oad_chunk_size`, `image_hash` → `image_crc`, `image_addr` →
   `image_size`).
-- **`oad_magic_match` (`0x00056F74`)** — 32 B (OEM) / 32 B (ours,
-  `-Os`) — both with a 4-byte literal pool entry pointing at the
-  reference string. Walks 8 byte positions and returns `1` only
-  on full match against `"OAD NVM1"`. The OEM iterates `i` from 7
-  down to 0 via `subs r1, r1, #1; sxtb r1, r1; cmp r1, #0; bpl`,
-  indexing both the reference string and the input by `r1`. GCC
-  rewrites the same algorithm as a pointer walk (`ldrb.w [r2],
-  #-1` on the reference, `ldrb.w [r3, #-1]!` on the input,
-  terminating when the input pointer hits its original base via
-  `cmp r3, r0`) — a textbook example of how `-Os` will rewrite a
-  counted loop into a pointer-walk when the trip count is
-  compile-time constant. Behaviour-equivalent. The OEM keeps an
-  unreachable `bmi` guard immediately after `movs r1, #7` — same
-  defensive shape we saw in `crc32_ieee_byte_step`, suggesting
-  the source was a generic `memcmp_count`-style helper used at
-  multiple call sites with constant and variable counts.
+- **`oad_magic_match` (`0x00056F74`) + `oad_magic_match2`
+  (`0x00056F98`)** — Each 32 B + 4 B literal in both OEM and ours;
+  the two are **byte-identical** in the OEM, differing only in
+  which copy of the reference string their literal pool points
+  at: `oad_magic_match` references `0x000571E8`,
+  `oad_magic_match2` references `0x000571E0`. The two strings
+  sit back-to-back forming `"OAD NVM1OAD NVM1"` at flash
+  `0x000571E0..0x000571EF`. The duplication is a TI CCS artifact
+  — two translation units each emitted their own static-inlined
+  memcmp plus their own private copy of the constant, and the
+  linker kept all four pieces. Both walk 8 byte positions
+  high-to-low; the OEM uses an indexed counter (`ldrb [r2, r1]`
+  on each side, walking `r1` from 7 down) while GCC rewrites the
+  same algorithm as a pointer walk via post-decrement addressing
+  modes — a textbook example of how `-Os` rewrites a counted
+  loop into a pointer walk when the trip count is compile-time
+  constant. The OEM keeps an unreachable `bmi` guard immediately
+  after `movs r1, #7` — same defensive shape as
+  `crc32_ieee_byte_step`, suggesting the source was a generic
+  `memcmp_count`-style helper used at multiple call sites with
+  constant and variable counts. In `bim_slot_iterator` the two
+  match functions are called back-to-back on the same buffer, so
+  the second call's result is determined by the first
+  (functionally the second is dead code), but both `bl` sites
+  are preserved in our reconstruction for OEM call-graph fidelity.
+- **`bim_slot_iterator` (`0x00056B1C`)** — 72 B (OEM) / 62 B
+  (ours, `-Os`) — behaviour-equivalent. Walks slots from
+  `start_slot` to 43, reads 8 bytes from `(slot << 12)` via
+  `FUN_000569E4`, and returns the slot index on a magic match
+  or `-2` (`~1`) on exhaustion. The OEM's `-1` return is
+  guarded behind `oad_magic_match` (the second of two identical
+  checks) and is therefore unreachable in practice; preserved
+  in the reconstruction. GCC saves 10 B by eliminating the
+  `r5` running-flag local and merging the loop-end test into
+  the loop tail via fall-through. The 44-byte stack frame
+  (only 8 used for the sniff buffer) is preserved as a 44-byte
+  local for OEM fidelity.
 - **`oad.c`** — Now hosts three sibling functions:
   `bim_verify_and_launch_image` at `0x000568A8`,
   `bim_quick_scan_and_launch` at `0x00056824`, and
@@ -259,7 +280,9 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x000560D8` | 376 | `bim_crc32_image`            | `crc.c`       | CRC32-IEEE over an OAD image. Polynomial `0xEDB88320`, init `0xFFFFFFFF`, final XOR `0xFFFFFFFF`, first 12 bytes skipped. Uses a 256-byte SRAM scratch at `0x20000300`; reads via flash (dead path in this build) or alt source. Behaviour-equivalent (+8 B vs OEM). |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
-| decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against the ASCII string "OAD NVM1" stored at flash `0x000571E8`. Called by `bim_quick_scan_and_launch`'s slot sniff and by `FUN_00056B1C` (the slot iterator). Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
+| decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
+| decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
+| decomp-c     | `0x00056F98` | 32  | `oad_magic_match2`           | `oad.c`       | Byte-identical duplicate of `oad_magic_match`, references the adjacent "OAD NVM1" copy at flash `0x000571E0`. Called only from `bim_slot_iterator`. Duplication is a TI CCS artifact (two translation units each emitted their own static-inlined memcmp + private string copy). Same 32 B + 4 B literal as OEM. |
 | decomp-c     | `0x00056254` | 366 | `bim_full_scan_and_launch`  | `oad.c`       | First-boot scan: iterates slots, runs primary CRC + secondary CRC + CRC32 over the image body, promotes a match with `0xFE` markers + launches. Returns 0 normally, -1 on precheck fail. Behaviour-equivalent; `-Os` trims 42 B vs OEM. |
 | decomp-c     | `0x00056824` | 130 | `bim_quick_scan_and_launch` | `oad.c`       | Subsequent-boot fast scan: walks slots 0..43, launches the first slot whose status byte is already `0xFE`/`0xFF`. Behaviour-equivalent; `-Os` trims 28 B vs OEM by merging flag and status compare chains. |
 | decomp-c     | `0x000568A8` | 120 | `bim_verify_and_launch_image` | `oad.c` | OAD header read → magic check → hash compute (uses `g_hw_id_cached` as salt) → flash-program verified marker → jump-to-entry. Size-equivalent (120 B); stack layout differs. |
@@ -328,8 +351,7 @@ Mirrors with browseable trees:
   `FUN_00056A88` (precheck), `FUN_000569E4` (flash read),
   `FUN_00056CB8` (image-base derivation), `FUN_00056714` (secondary
   CRC check), `FUN_000567A0` (short flash write), `FUN_00056E40`
-  (small flash read), `FUN_00056E72` (flash program), `FUN_00056B1C`
-  (slot iterator — now known to consume `oad_magic_match`),
+  (small flash read), `FUN_00056E72` (flash program),
   `FUN_00057156` (image launcher), `FUN_000570AC` (post-flash
   cleanup), `FUN_000570FA` (alt-source read), `FUN_00056D30`
   (flash-page read).

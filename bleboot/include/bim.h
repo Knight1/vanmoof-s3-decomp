@@ -65,11 +65,25 @@ uint32_t bim_crc32_image(uint32_t start_page,
 
 /* OAD magic check — returns 1 if the 8 bytes pointed to by `hdr8`
  * match the constant ASCII string "OAD NVM1", else 0. Called by
- * the quick-scan sniff and the slot iterator to recognise
- * candidate OAD image headers. The reference string lives at flash
- * `0x000571E8` (one of two "OAD NVM1" occurrences in the BIM
- * image; the other is inside the BIM's own OAD header near the
- * tail of the page). */
+ * the quick-scan sniff and by `bim_slot_iterator`. The reference
+ * string lives at flash `0x000571E8`. */
 int oad_magic_match(const uint8_t *hdr8);
+
+/* Byte-identical duplicate of `oad_magic_match` at flash
+ * `0x00056F98`, referencing the adjacent "OAD NVM1" copy at flash
+ * `0x000571E0`. Exists because two source-file translation units
+ * each emitted their own static-inlined memcmp + their own
+ * private copy of the constant; the linker kept all four pieces.
+ * Called only from `bim_slot_iterator`, alongside
+ * `oad_magic_match`. Semantically a no-op alias. */
+int oad_magic_match2(const uint8_t *hdr8);
+
+/* Slot iterator — finds the next slot (4 KB stride) starting at
+ * `start_slot` whose first 8 bytes match "OAD NVM1". Returns the
+ * slot index (0..43) on a hit, `~1` (-2) once `slot` advances past
+ * 43 without a hit, or `-1` on the "duplicate match" branch (dead
+ * code in this build). Drives `bim_full_scan_and_launch`'s outer
+ * loop. */
+int bim_slot_iterator(int start_slot);
 
 #endif
