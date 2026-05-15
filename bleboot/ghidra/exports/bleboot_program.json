@@ -91,7 +91,7 @@
   ],
   "function_count": 63,
   "functions": [
-    {"addr":"0x000560d8","size":376,"name":"FUN_000560d8","auto_named":true,"signature":"undefined FUN_000560d8(undefined param_1, undefined param_2, undefined param_3, undefined param_4, undefined1 param_5)","thunk":false,"external":false},
+    {"addr":"0x000560d8","size":376,"name":"bim_crc32_image","auto_named":false,"signature":"uint bim_crc32_image(uint start_page, uint chunk_size, uint skip_offset_base, uint image_size, uchar use_flash)","thunk":false,"external":false},
     {"addr":"0x00056254","size":366,"name":"bim_full_scan_and_launch","auto_named":false,"signature":"int bim_full_scan_and_launch(void)","thunk":false,"external":false},
     {"addr":"0x000563c8","size":172,"name":"FUN_000563c8","auto_named":true,"signature":"undefined FUN_000563c8(void)","thunk":false,"external":false},
     {"addr":"0x00056490","size":148,"name":"FUN_00056490","auto_named":true,"signature":"undefined FUN_00056490(void)","thunk":false,"external":false},

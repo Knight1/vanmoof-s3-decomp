@@ -104,13 +104,14 @@ and Reset is the application entry point.
 
 | Address | Size | Symbol | Module | Notes |
 | --- | --- | --- | --- | --- |
-| `0x20000400` | 4 | `g_hw_id_cached` | `main.c` | Pre-shifted hardware-revision / package code, cached at boot from MMIO `0x40032430`'s low 4 bits (`(reg & 0xF) << 10`). Read later by the (still-undecoded) BIM dispatcher to pick an application slot. |
+| `0x20000300` | 256 | `(crc scratch)` | `crc.c` | 256-byte scratch buffer used by `bim_crc32_image` to stage flash- or RAM-source bytes before the CRC32 inner loop. Adjacent to `g_oad_chunk_size`; the two globals form a contiguous 260-byte block at the start of the BIM's SRAM data. |
+| `0x20000400` | 4 | `g_oad_chunk_size` | `main.c` | OAD chunk-size selector — `(MMIO[0x40032430] & 0xF) << 10` cached at boot. Read by `bim_crc32_image` as the outer-loop partition size. Originally misnamed `g_hw_id_cached` (the assumption that it was a per-bike salt turned out to be wrong; it's a per-board configuration selector, not a device identity). |
 
 ## Known MMIO accesses (from decomp)
 
 | Address | Width | Direction | Accessor | Notes |
 | --- | --- | --- | --- | --- |
-| `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits are a hardware-revision / package code; bits 31:4 unused at this call site. Confirmed by `bim_verify_and_launch_image` to be consumed downstream as a per-bike salt fed into the 376 B hash routine at `0x560D8`. Exact register identity not yet pinned to a named CC2642R1F TRM register. |
+| `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits select an OAD chunk size (the value is left-shifted by 10 before caching, giving 1024-byte steps from 1 KB to 15 KB). Consumed by `bim_crc32_image` as the outer-loop chunk stride. Probably keyed off a board-revision pad rather than a hardware identity. |
 | `0x40022090` | 32 b | write | `bim_panic_indicate` | `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` — set-only alias for `DOUT31_0`. Writes `1<<2` to drive DIO2 high (panic LED) without disturbing the other 31 pins. |
 | `0x42441A08` | 32 b | write | `bim_panic_prep` | Bit-band alias of bit 2 of `GPIO_DOE31_0` at `GPIO_BASE + 0xD0 = 0x400220D0`. Writes `1` to switch DIO2 from input (reset default) to output, so the `DOUTSET31_0` write that follows actually drives the pin. |
 | `0x40082028` / `0x60082028` | 32 b | write + poll | `bim_panic_prep` | `PRCM_BASE (0x40082000) + 0x28` — `PRCM_GPIOCLKGR`. The `0x60082028` alias is the write-through path used to set the run-mode GPIO clock gate; the `0x40082028` alias is read to poll bit 1 (the AHB-side `LOAD_DONE`-equivalent ack). After this handshake, GPIO MMIO is safe to touch. |
@@ -161,15 +162,18 @@ VanMoof's customisations are likely confined to:
   The remaining 36 bytes are still opaque; walking the BIM's own
   header at `0x00057FA8` against TI's 56-byte `imgHdr_t` should
   surface field names cleanly.
-- Are images verified by CRC only, or by ECDSA signature?
-  `bim_verify_and_launch_image` compares a single 32-bit hash word —
-  too short to be an ECDSA signature, so the gate is either a CRC32
-  or a truncated hash. The hash routine is fed `g_hw_id_cached`
-  alongside the image, so the result is **per-bike** rather than
-  per-image — bricking the image on one bike does not invalidate
-  the same image on another bike. Decode the 376 B routine at
-  `0x560D8` next to confirm whether it's CRC32-with-salt, a hashed
-  MAC, or something custom.
+- ~~Are images verified by CRC only, or by ECDSA signature?~~
+  **Resolved**: it's plain CRC32-IEEE (polynomial `0xEDB88320`,
+  init/final XOR `0xFFFFFFFF`, first 12 bytes skipped). No
+  per-bike binding, no signing, no MAC. The integrity gate is
+  bypassable by anyone who can write the image bytes — a forged
+  image with a recomputed CRC32 word will pass the BIM's check.
+  Authentication, if it exists at all, has to be enforced by a
+  higher layer (the OAD reception path that ingests images from
+  mainware over the inter-MCU bus, before they reach this CRC
+  gate). Decoding `FUN_00056F50` (the per-byte polynomial step)
+  is the only remaining piece to fully document the CRC stack;
+  the algorithm is universal.
 - Which UART/SPI/Modbus path is used to receive an update — TI's
   reference is either USB-CDC (CC2652R8 family) or UART; VanMoof
   almost certainly removed both and routed updates via the on-chip

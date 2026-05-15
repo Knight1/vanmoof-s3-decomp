@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-12 decomp-c / 2 vendor-stock / 2 named / 47 pending
+13 decomp-c / 2 vendor-stock / 2 named / 46 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -45,6 +45,33 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
+- **`crc.c`** — `bim_crc32_image` at `0x000560D8`. 376 B (OEM) /
+  384 B (ours, `-Os`) — behaviour-equivalent. **Confirmed**:
+  the BIM's "hash" verification is just **CRC32-IEEE** (reflected
+  polynomial `0xEDB88320`, initial `0xFFFFFFFF`, final XOR
+  `0xFFFFFFFF`) — not a cryptographic hash. The first 12 bytes
+  of the image are skipped (the OAD identifier + length fields,
+  which can't self-cover). Image bytes are pulled into a 256-byte
+  SRAM scratch buffer at `0x20000300` via one of two sources: a
+  flash path (`FUN_000569e4` with TI-style precheck via
+  `FUN_00056a88`) or an alt path (`FUN_000570fa`, addressed by
+  byte offset only — likely the OAD reception staging buffer in
+  RAM). Both BIM call sites pass `use_flash = 0`, so the flash
+  path is dead code in this build. The outer loop partitions the
+  image into chunks of `g_oad_chunk_size` bytes (cached from
+  MMIO `0x40032430` at boot); the middle loop iterates 256-byte
+  blocks within each chunk; the inner loop runs the textbook
+  CRC32 byte step `crc = TABLE[(crc^byte)&0xFF] ^ (crc>>8)`
+  via the per-byte polynomial-division helper at `FUN_00056F50`
+  (still `pending`). **Security implication**: this verification
+  gate provides integrity but not authenticity — any image whose
+  bytes produce the matching CRC32 word passes. There's no
+  per-bike binding; `g_oad_chunk_size` is a per-board configuration
+  selector, not a per-device secret. The earlier "per-bike hash
+  salt" interpretation was wrong; that has been corrected through
+  the docs and code (renamed `g_hw_id_cached` →
+  `g_oad_chunk_size`, `image_hash` → `image_crc`, `image_addr` →
+  `image_size`).
 - **`oad.c`** — Now hosts three sibling functions:
   `bim_verify_and_launch_image` at `0x000568A8`,
   `bim_quick_scan_and_launch` at `0x00056824`, and
@@ -59,17 +86,17 @@ layout in the TI SDK shipping CCS / IAR variants.
 - **`bim_verify_and_launch_image` (`0x000568A8`)** — 120 B in both
   OEM and ours — size-equivalent but not byte-equivalent. Reads
   the 56-byte primary OAD header at flash address 0 via
-  `FUN_000569e4(0, 56, &hdr)`, bails if `hdr[17] != 0xFE`, computes
-  an image-base word via `FUN_00056cb8(0, hdr[24])`, runs
-  `FUN_00056714(0, hdr[24], base)` as a secondary geometry check,
-  then feeds `(base>>13)&0xff` (page number), `g_hw_id_cached`,
-  and `hdr[24]` into the 376 B hash routine at `0x560D8`. On hash
-  match it writes a 1-byte `0xFE` marker into flash at offset 17
-  of the image's own page via `FUN_00056e72` and jumps to
-  `hdr[28]` (entry word) via `FUN_00057156`. The `0xFC` write to
-  the local `status` byte preceding the compare is dead on the
-  mismatch path but materialised by `-Os` because the C source
-  has the default value inline with the declaration.
+  `FUN_000569e4(0, 56, &hdr)`, bails if `hdr.status != 0xFE`,
+  computes an image-base word via `FUN_00056cb8(0, hdr.image_size)`,
+  runs `FUN_00056714(0, hdr.image_size, base)` as a secondary
+  geometry check, then computes the CRC32 over the image body
+  via `bim_crc32_image(page, g_oad_chunk_size, 0, hdr.image_size, 0)`.
+  On match against `hdr.image_crc`, writes a 1-byte `0xFE` marker
+  into flash at offset 17 of the image's own page via
+  `FUN_00056e72` and jumps to `hdr.entry` via `FUN_00057156`. The
+  `0xFC` write to the local `status` byte preceding the compare
+  is dead on the mismatch path but materialised by `-Os` because
+  the C source has the default value inline with the declaration.
 - **`bim_quick_scan_and_launch` (`0x00056824`)** — 130 B (OEM) /
   102 B (ours, `-Os`) — behaviour-equivalent. Lazy fast-path
   scanner: walks slots `start_slot..43` (8 KB stride), reads an
@@ -98,8 +125,9 @@ layout in the TI SDK shipping CCS / IAR variants.
   single global metadata buffer, not the slot itself); (c) derives
   the image base via `FUN_00056cb8`, runs secondary CRC via
   `FUN_00056714`, writes a transient `0xFC` to `slot+16`; (d)
-  hashes the image via `FUN_000560d8(page, g_hw_id_cached, 0, 0)`
-  and compares against `hdr2[8]`; (e) **promotes** by writing
+  computes CRC32 over the image body via
+  `bim_crc32_image(page, g_oad_chunk_size, slot_base, derived_len,
+  0)` and compares against `hdr2[8]`; (e) **promotes** by writing
   `0xFE` to both the slot's `+17` byte (in metadata) and the
   image-page's `+17` byte (in flash), then launches via
   `FUN_00057156(hdr2[28])` if the flags byte at offset 18 is in
@@ -192,7 +220,8 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
-| decomp-c     | `0x00056254` | 366 | `bim_full_scan_and_launch`  | `oad.c`       | First-boot scan: iterates slots, runs primary CRC + secondary CRC + hash with hw-id salt, promotes a match with `0xFE` markers + launches. Returns 0 normally, -1 on precheck fail. Behaviour-equivalent; `-Os` trims 42 B vs OEM. |
+| decomp-c     | `0x000560D8` | 376 | `bim_crc32_image`            | `crc.c`       | CRC32-IEEE over an OAD image. Polynomial `0xEDB88320`, init `0xFFFFFFFF`, final XOR `0xFFFFFFFF`, first 12 bytes skipped. Uses a 256-byte SRAM scratch at `0x20000300`; reads via flash (dead path in this build) or alt source. Behaviour-equivalent (+8 B vs OEM). |
+| decomp-c     | `0x00056254` | 366 | `bim_full_scan_and_launch`  | `oad.c`       | First-boot scan: iterates slots, runs primary CRC + secondary CRC + CRC32 over the image body, promotes a match with `0xFE` markers + launches. Returns 0 normally, -1 on precheck fail. Behaviour-equivalent; `-Os` trims 42 B vs OEM. |
 | decomp-c     | `0x00056824` | 130 | `bim_quick_scan_and_launch` | `oad.c`       | Subsequent-boot fast scan: walks slots 0..43, launches the first slot whose status byte is already `0xFE`/`0xFF`. Behaviour-equivalent; `-Os` trims 28 B vs OEM by merging flag and status compare chains. |
 | decomp-c     | `0x000568A8` | 120 | `bim_verify_and_launch_image` | `oad.c` | OAD header read → magic check → hash compute (uses `g_hw_id_cached` as salt) → flash-program verified marker → jump-to-entry. Size-equivalent (120 B); stack layout differs. |
 | decomp-c     | `0x00056B64` | 54  | `bim_panic_prep`    | `panic.c`     | 3-step ROM-API handshake + PRCM GPIO clock enable + GPIO_DOE bit-band write to make DIO2 an output. Behaviour-equivalent (+2 B vs OEM). |
@@ -249,14 +278,23 @@ Mirrors with browseable trees:
   `(val<<10)` value is fed into the 376 B hash routine at
   `0x560D8` as a per-device salt. Pin the exact register identity
   once we cross-reference the CC2642R1F TRM.
-- `FUN_000560D8` (376 B) is the largest function in the image and
-  is the **hash routine** called from both `bim_verify_and_launch_image`
-  and `bim_full_scan_and_launch`. Fed with the page number,
-  `g_hw_id_cached` as a per-bike salt, and the image body anchor.
-  Returns a 32-bit value compared against the header's
-  `image_hash` field. Likely CRC32-with-salt or a truncated hash
-  MAC (too short to be ECDSA); decoding it should determine
-  whether the BIM's per-bike trust gate is reversible.
+- ~~`FUN_000560D8` is a hash routine~~ — **resolved**: it's
+  `bim_crc32_image`, a plain CRC32-IEEE compute (polynomial
+  `0xEDB88320`, init/final XOR `0xFFFFFFFF`). The 2nd argument
+  (`g_oad_chunk_size`) is a per-board chunk-size selector, not a
+  per-bike salt. The BIM's integrity gate is **not authenticated**
+  — anyone who can write the image bytes can write a matching
+  CRC32.
+- The remaining undecoded helpers around the OAD path:
+  `FUN_00056F50` (per-byte CRC32 step using polynomial division —
+  trivial, ~32 B leaf), `FUN_00056A88` (precheck), `FUN_000569E4`
+  (flash read), `FUN_00056CB8` (image-base derivation),
+  `FUN_00056714` (secondary CRC check), `FUN_000567A0` (short
+  flash write), `FUN_00056E40` (small flash read), `FUN_00056E72`
+  (flash program), `FUN_00056B1C` (slot iterator), `FUN_00057156`
+  (image launcher), `FUN_000570AC` (post-flash cleanup),
+  `FUN_000570FA` (alt-source read), `FUN_00056D30` (flash-page
+  read), `FUN_00056F74` (8-byte header sniff).
 - The OAD image header bytes around file offset `0x1FA8` aren't
   yet parsed; the two `OAD NVM1` markers visible via `strings -t x`
   weren't auto-tagged by Ghidra because they sit inside a packed
