@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-7 decomp-c / 2 vendor-stock / 2 named / 52 pending
+9 decomp-c / 2 vendor-stock / 2 named / 50 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -36,14 +36,45 @@ layout in the TI SDK shipping CCS / IAR variants.
   Three-way fan-out on the return of an as-yet-undecoded
   image-scan helper (`FUN_00056254`): scan returns `0` → call
   `FUN_00056824(0)` to prep a fallback image; scan returns `-1`
-  → panic path (`FUN_00056B64`, `FUN_00057194`, then trap);
-  anything else (a valid slot index) → continue. An always-run
-  successor `FUN_000568A8` (probably "jump to selected image")
-  runs in every non-trap case. The OEM divergence is GCC noticing
-  it can replace `adds r4,r0,#0; bne` with a `cbnz r0` (no need
-  for the explicit `movs r0,#0` on the fall-through, since r0 is
-  already 0 there), and `cmp.w r4,#-1; bne` with `adds r4,#1; bne`
-  (mutates r4 but it's dead after) — saving 4 B total.
+  → panic path (`FUN_00056B64`, `bim_panic_indicate`, then trap);
+  anything else (a valid slot index) → continue. The always-run
+  successor `bim_verify_and_launch_image` runs in every non-trap
+  case. The OEM divergence is GCC noticing it can replace
+  `adds r4,r0,#0; bne` with a `cbnz r0` (no need for the explicit
+  `movs r0,#0` on the fall-through, since r0 is already 0 there),
+  and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
+  it's dead after) — saving 4 B total.
+- **`oad.c`** — `bim_verify_and_launch_image` at `0x000568A8`.
+  120 B in both OEM and ours — size-equivalent but not byte-
+  equivalent (GCC laid the 56-byte header + 1-byte status local
+  out in a different stack order, so most loads use different
+  immediate offsets even though every external call site matches
+  in argument shape). The function reads the 56-byte OAD image
+  header out of flash via `FUN_000569e4(0, 56, &hdr)`, bails if
+  `hdr[17] != 0xFE`, computes an image-base word via
+  `FUN_00056cb8(0, hdr[24])`, runs `FUN_00056714(0, hdr[24], base)`
+  as a secondary geometry check, then feeds `(base>>13)&0xff`
+  (page number), `g_hw_id_cached`, and `hdr[24]` into the 376 B
+  hash routine at `0x560D8`. On hash match it writes a 1-byte
+  `0xFE` verified-marker back into flash at offset 17 of that
+  same page via `FUN_00056e72(page, 17, &status, 1)` and jumps
+  to `hdr[28]` (entry word) via `FUN_00057156`; on any failure
+  it falls through to the common epilogue `FUN_000570ac` and
+  returns. The `0xFC` write to the local `status` byte preceding
+  the hash compare is dead on the mismatch path but materialised
+  by `-Os` because the C source has the default value inline with
+  the declaration. Header struct named per TI SDK's `imgHdr_t`
+  fields only where forced by call sites.
+- **`panic.c`** — `bim_panic_indicate` at `0x00057194`. 12 B in
+  both OEM and ours (8 B code + 4 B literal) — behaviour-
+  equivalent but not byte-equivalent: GCC chose registers `r2/r3`
+  where TI CCS chose `r0/r1`. The function is a single write of
+  `1<<2` to `0x40022090`, which is
+  `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` on CC13x2/CC26x2
+  — i.e. it drives DIO2 high without disturbing other pins.
+  Called from `bim_dispatch`'s panic branch right before the
+  spin-forever, so it lights an error LED to externalise a
+  silent halt.
 - **`main.c`** — BIM main at `0x00057000`. Reads low 4 bits of
   the MMIO config register at `0x40032430`, caches `(val << 10)`
   in the SRAM global at `0x20000400`, then tail-calls the (still
@@ -93,8 +124,10 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000568A6` | 2   | `HardFault_Handler` | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056C76` | 2   | `Default_Handler`   | `exception.c` | `b .` trap loop, byte-equivalent |
 | decomp-c     | `0x00056DA2` | 2   | `NMI_Handler`       | `exception.c` | `b .` trap loop, byte-equivalent |
+| decomp-c     | `0x000568A8` | 120 | `bim_verify_and_launch_image` | `oad.c` | OAD header read → magic check → hash compute (uses `g_hw_id_cached` as salt) → flash-program verified marker → jump-to-entry. Size-equivalent (120 B); stack layout differs. |
 | decomp-c     | `0x00056F2A` | 38  | `bim_dispatch`      | `bim.c`       | 3-way dispatcher on image-scan return (`0` → fallback prep, `-1` → panic trap, other → continue). Behaviour-equivalent; GCC trims 4 B vs OEM. |
 | decomp-c     | `0x00057000` | 24  | `main`              | `main.c`      | BIM main — caches `(MMIO[0x40032430] & 0xF) << 10` at SRAM `0x20000400`, calls `bim_dispatch`. Behaviour-equivalent only. |
+| decomp-c     | `0x00057194` | 8   | `bim_panic_indicate`| `panic.c`     | Single write of `1<<2` to `GPIO_DOUTSET31_0` at `0x40022090` — drives DIO2 (panic LED) high. Behaviour-equivalent (GCC chose `r2/r3` where TI CCS chose `r0/r1`). |
 | decomp-c     | `0x000571A0` | 4   | `_system_pre_init`  | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`2001 4770`) |
 | decomp-c     | `0x000571A4` | 4   | `_exit`             | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`bf00 e7fe`) |
 | vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit. Upstream linked, not vendored. |
@@ -141,9 +174,10 @@ Mirrors with browseable trees:
 - The MMIO register at `0x40032430` that `main()` reads — sits in
   the `0x40030000..0x40034000` band between the FLASH controller
   and VIMS. Low 4 bits look like a hardware-revision / package
-  code. Pin the exact register identity once we cross-reference
-  the CC2642R1F TRM (or any TI sample that touches a similar
-  address).
+  code, and `bim_verify_and_launch_image` confirms the cached
+  `(val<<10)` value is fed into the 376 B hash routine at
+  `0x560D8` as a per-device salt. Pin the exact register identity
+  once we cross-reference the CC2642R1F TRM.
 - `FUN_000560D8` (376 B) is the largest function in the image and
   lives near the top of `.text`. Likely the **BIM dispatcher**
   (the thing `FUN_00056F2A`, called by `main`, chains into via

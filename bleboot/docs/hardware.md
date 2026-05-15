@@ -110,7 +110,8 @@ and Reset is the application entry point.
 
 | Address | Width | Direction | Accessor | Notes |
 | --- | --- | --- | --- | --- |
-| `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits are a hardware-revision / package code; bits 31:4 unused at this call site. Exact register identity not yet pinned to a named CC2642R1F TRM register. |
+| `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits are a hardware-revision / package code; bits 31:4 unused at this call site. Confirmed by `bim_verify_and_launch_image` to be consumed downstream as a per-bike salt fed into the 376 B hash routine at `0x560D8`. Exact register identity not yet pinned to a named CC2642R1F TRM register. |
+| `0x40022090` | 32 b | write | `bim_panic_indicate` | `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` — set-only alias for `DOUT31_0`. Writes `1<<2` to drive DIO2 high (panic LED) without disturbing the other 31 pins. |
 | `0xE000ED88` | 32 b | read-modify-write | `ResetISR_body` | `SCB->CPACR` — the Reset path sets bits 20–23 (CP10/CP11 full access) to enable the FPU. Standard Cortex-M4F boilerplate. |
 
 ## Strings of interest
@@ -148,12 +149,24 @@ VanMoof's customisations are likely confined to:
 
 ## Open questions
 
-- Exact OAD header offset and field layout — TI's `OAD ImageHdr` is
-  88 bytes for newer SDKs and 16 bytes for older ones; need to walk
-  the bytes around `0x00057FA8` to confirm.
-- Are images verified by CRC only, or by ECDSA signature? The header
-  has both fields; check whether the BIM actually calls the
-  signature-verify ROM helper.
+- Exact OAD header offset and field layout — `bim_verify_and_launch_image`
+  reads the candidate image's header as a 56-byte block (not 88 — that
+  matches the older `imgHdr_t` layout from the CC2640R2 SDK rather
+  than the newer CC13x2/CC26x2 SDK's 88-byte struct). Confirmed
+  fields: `magic` byte (0xFE) at offset 17, `image_addr` u32 at
+  offset 24, `entry` u32 at offset 28, `image_hash` u32 at offset 8.
+  The remaining 36 bytes are still opaque; walking the BIM's own
+  header at `0x00057FA8` against TI's 56-byte `imgHdr_t` should
+  surface field names cleanly.
+- Are images verified by CRC only, or by ECDSA signature?
+  `bim_verify_and_launch_image` compares a single 32-bit hash word —
+  too short to be an ECDSA signature, so the gate is either a CRC32
+  or a truncated hash. The hash routine is fed `g_hw_id_cached`
+  alongside the image, so the result is **per-bike** rather than
+  per-image — bricking the image on one bike does not invalidate
+  the same image on another bike. Decode the 376 B routine at
+  `0x560D8` next to confirm whether it's CRC32-with-salt, a hashed
+  MAC, or something custom.
 - Which UART/SPI/Modbus path is used to receive an update — TI's
   reference is either USB-CDC (CC2652R8 family) or UART; VanMoof
   almost certainly removed both and routed updates via the on-chip

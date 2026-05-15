@@ -101,7 +101,7 @@
     {"addr":"0x000567a0","size":132,"name":"FUN_000567a0","auto_named":true,"signature":"undefined FUN_000567a0(void)","thunk":false,"external":false},
     {"addr":"0x00056824","size":130,"name":"FUN_00056824","auto_named":true,"signature":"undefined FUN_00056824(void)","thunk":false,"external":false},
     {"addr":"0x000568a6","size":2,"name":"HardFault_Handler","auto_named":false,"signature":"void HardFault_Handler(void)","thunk":false,"external":false},
-    {"addr":"0x000568a8","size":120,"name":"FUN_000568a8","auto_named":true,"signature":"undefined FUN_000568a8(void)","thunk":false,"external":false},
+    {"addr":"0x000568a8","size":120,"name":"bim_verify_and_launch_image","auto_named":false,"signature":"void bim_verify_and_launch_image(void)","thunk":false,"external":false},
     {"addr":"0x0005698c","size":74,"name":"FUN_0005698c","auto_named":true,"signature":"undefined FUN_0005698c(void)","thunk":false,"external":false},
     {"addr":"0x000569e4","size":84,"name":"FUN_000569e4","auto_named":true,"signature":"undefined FUN_000569e4(void)","thunk":false,"external":false},
     {"addr":"0x00056a38","size":68,"name":"FUN_00056a38","auto_named":true,"signature":"undefined FUN_00056a38(void)","thunk":false,"external":false},
@@ -151,7 +151,7 @@
     {"addr":"0x00057170","size":8,"name":"FUN_00057170","auto_named":true,"signature":"undefined FUN_00057170(void)","thunk":false,"external":false},
     {"addr":"0x0005717c","size":6,"name":"FUN_0005717c","auto_named":true,"signature":"undefined FUN_0005717c(void)","thunk":false,"external":false},
     {"addr":"0x00057188","size":8,"name":"FUN_00057188","auto_named":true,"signature":"undefined FUN_00057188(void)","thunk":false,"external":false},
-    {"addr":"0x00057194","size":8,"name":"FUN_00057194","auto_named":true,"signature":"undefined FUN_00057194(void)","thunk":false,"external":false},
+    {"addr":"0x00057194","size":8,"name":"bim_panic_indicate","auto_named":false,"signature":"void bim_panic_indicate(void)","thunk":false,"external":false},
     {"addr":"0x000571a0","size":4,"name":"_system_pre_init","auto_named":false,"signature":"int _system_pre_init(void)","thunk":false,"external":false},
     {"addr":"0x000571a4","size":4,"name":"_exit","auto_named":false,"signature":"void _exit(int status)","thunk":false,"external":false}
   ],
