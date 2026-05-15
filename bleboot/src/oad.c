@@ -14,11 +14,11 @@
  * the SDK would be guesswork until those call sites get decoded. */
 typedef struct __attribute__((packed)) {
     uint8_t  reserved_0[8];   /* offset  0 — OAD identifier + format */
-    uint32_t image_hash;      /* offset  8 — expected value from hash compute */
+    uint32_t image_crc;       /* offset  8 — expected CRC32-IEEE value */
     uint8_t  reserved_1[5];   /* offset 12 */
     uint8_t  status;          /* offset 17 — 0xFE = verified */
     uint8_t  reserved_2[6];   /* offset 18 */
-    uint32_t image_addr;      /* offset 24 — input to size/hash helpers */
+    uint32_t image_size;      /* offset 24 — image length in bytes */
     uint32_t entry;           /* offset 28 — branch target on success */
     uint8_t  reserved_3[24];  /* offset 32..55 — vendor ID + signing block */
 } oad_image_header_t;
@@ -36,7 +36,7 @@ _Static_assert(sizeof(oad_image_header_t) == 56,
  * in the scanners below. */
 typedef struct __attribute__((packed)) {
     uint8_t  reserved_0[8];
-    uint32_t image_hash;      /* offset  8 */
+    uint32_t image_crc;       /* offset  8 — expected CRC32 */
     uint8_t  magic_a;         /* offset 12 — must be 3 */
     uint8_t  magic_b;         /* offset 13 — must be 1 */
     uint8_t  reserved_1[2];
@@ -44,7 +44,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  status;          /* offset 17 — 0xFE/0xFF accept, 0xFC reject */
     uint8_t  flags;           /* offset 18 — must be in {1,3,7} (quick-scan view) */
     uint8_t  reserved_2[5];
-    uint32_t image_addr;      /* offset 24 */
+    uint32_t image_size;      /* offset 24 */
     uint32_t entry;           /* offset 28 */
     uint8_t  reserved_3[12];  /* offset 32..43 */
 } oad_short_header_t;
@@ -59,10 +59,8 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *   FUN_00056a88 — "is the BIM allowed to run a scan now?" precheck.
  *   FUN_000569e4 — flash read; (slot_anchor, n_bytes, dst).
  *   FUN_00056cb8 — derives an image-base address from the header's
- *                  `image_addr`. Return shifted right by 13 = page.
+ *                  `image_size`. Return shifted right by 13 = page.
  *   FUN_00056714 — secondary CRC check over the image body.
- *   FUN_000560d8 — the 376-byte hash function (likely SHA-256-ish,
- *                  fed with `g_hw_id_cached` as a per-bike salt).
  *   FUN_00056e72 — flash program; (page, offset, src, n_bytes).
  *   FUN_0005653c — primary CRC compute; (dst_buf, src_addr, len).
  *   FUN_000567a0 — short flash write; (addr, n_bytes, src).
@@ -79,9 +77,8 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *                  rather than terminal. */
 extern int      FUN_00056a88(void);
 extern void     FUN_000569e4(uint32_t off, uint32_t n, void *dst);
-extern uint32_t FUN_00056cb8(uint32_t slot_base, uint32_t image_addr);
-extern int      FUN_00056714(uint32_t slot_base, uint32_t image_addr, uint32_t size);
-extern uint32_t FUN_000560d8(uint32_t page, uint32_t hw_id, uint32_t image_addr, uint32_t z);
+extern uint32_t FUN_00056cb8(uint32_t slot_base, uint32_t image_size);
+extern int      FUN_00056714(uint32_t slot_base, uint32_t image_size, uint32_t image_base);
 extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n);
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
 extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
@@ -104,14 +101,18 @@ void bim_verify_and_launch_image(void)
         return;
     }
 
-    uint32_t image_base = FUN_00056cb8(0, hdr.image_addr);
-    if (FUN_00056714(0, hdr.image_addr, image_base) != 0) {
+    uint32_t image_base = FUN_00056cb8(0, hdr.image_size);
+    if (FUN_00056714(0, hdr.image_size, image_base) != 0) {
         FUN_000570ac();
         return;
     }
 
     uint32_t page = (image_base >> 13) & 0xFFu;
-    uint32_t hash = FUN_000560d8(page, g_hw_id_cached, hdr.image_addr, 0);
+    uint32_t crc  = bim_crc32_image(page,
+                                     g_oad_chunk_size,
+                                     0,
+                                     hdr.image_size,
+                                     0);
 
     /* `status` is laid out so that &status can be passed to the flash
      * programmer as a 1-byte source. The default 0xFC is what the
@@ -119,7 +120,7 @@ void bim_verify_and_launch_image(void)
      * with the declaration — the value is dead on the mismatch path
      * but the store is unconditional in the assembly. */
     uint8_t status = 0xFCu;
-    if (hdr.image_hash == hash) {
+    if (hdr.image_crc == crc) {
         status = 0xFEu;
         FUN_00056e72(page, 17, &status, 1);
         FUN_00057156(hdr.entry);
@@ -168,11 +169,11 @@ void bim_quick_scan_and_launch(int start_slot)
             goto next;
         }
         if (buf.hdr.status == 0xFFu) {
-            FUN_00057156(buf.hdr.image_addr);
+            FUN_00057156(buf.hdr.entry);
             goto next;
         }
         if (buf.hdr.status == 0xFEu) {
-            FUN_00057156(buf.hdr.image_addr);
+            FUN_00057156(buf.hdr.entry);
             /* fall through to next */
         }
 
@@ -244,13 +245,13 @@ int bim_full_scan_and_launch(void)
         if (hdr1[13] != 1u)    continue;
         if (hdr1[17] == 0xFCu) continue;
 
-        uint32_t image_addr_primary = *(const uint32_t *)&hdr1[24];
-        uint32_t image_hash_primary = *(const uint32_t *)&hdr1[8];
+        uint32_t image_size_primary = *(const uint32_t *)&hdr1[24];
+        uint32_t image_crc_primary  = *(const uint32_t *)&hdr1[8];
 
         uint32_t crc1 = FUN_0005653c(slot_base + 12,
-                                      image_addr_primary - 12,
+                                      image_size_primary - 12,
                                       1u);
-        if (image_hash_primary != crc1) {
+        if (image_crc_primary != crc1) {
             continue;
         }
         /* The OEM re-checks `hdr1[16] == 0xFE` here — defensive
@@ -264,23 +265,23 @@ int bim_full_scan_and_launch(void)
         uint8_t hdr2[44];
         FUN_000569e4(slot_base, sizeof hdr2, hdr2);
 
-        uint32_t image_addr_sec = *(const uint32_t *)&hdr2[24];
-        uint32_t image_size_sec = *(const uint32_t *)&hdr2[36];
-        uint32_t image_hash_sec = *(const uint32_t *)&hdr2[8];
+        uint32_t image_size_sec = *(const uint32_t *)&hdr2[24];
+        uint32_t image_end_sec  = *(const uint32_t *)&hdr2[36];
+        uint32_t image_crc_sec  = *(const uint32_t *)&hdr2[8];
         uint32_t entry_sec      = *(const uint32_t *)&hdr2[28];
         uint8_t  flags_sec      = hdr2[18];
 
-        uint32_t image_base = FUN_00056cb8(slot_base, image_addr_sec);
+        uint32_t image_base = FUN_00056cb8(slot_base, image_size_sec);
         if (image_base == (uint32_t)-1) {
             continue;
         }
 
-        /* The OEM rewrites the in-buffer copy of `image_addr_sec`
+        /* The OEM rewrites the in-buffer copy of `image_size_sec`
          * with a derived length before the next CRC call. We mirror
          * that side-effect with a local — the in-memory buffer
          * rewrite is a compiler artifact of the local variable; the
          * derived length is what FUN_00056714 actually consumes. */
-        uint32_t derived_len = image_size_sec - image_base + 1u;
+        uint32_t derived_len = image_end_sec - image_base + 1u;
         *(uint32_t *)&hdr2[24] = derived_len;
 
         int crc2_status =
@@ -294,13 +295,14 @@ int bim_full_scan_and_launch(void)
         }
 
         uint32_t page = (image_base >> 13) & 0xFFu;
-        uint32_t hash = FUN_000560d8(page,
-                                      g_hw_id_cached,
-                                      slot_base,
-                                      slot_base);
+        uint32_t crc  = bim_crc32_image(page,
+                                         g_oad_chunk_size,
+                                         slot_base,
+                                         derived_len,
+                                         0);
 
         status = 0xFEu;
-        if (image_hash_sec == hash) {
+        if (image_crc_sec == crc) {
             /* Promote: write 0xFE both to the slot's metadata
              * (slot << 13 stride here, not 4 KB — the BIM's two
              * grids differ) and to the image's own header at

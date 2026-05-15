@@ -3,11 +3,13 @@
 
 #include <stdint.h>
 
-/* Cached low 4 bits of the MMIO config word at 0x40032430, shifted
- * left by 10. Written by `main()` once at boot and read by the
- * image-hash function downstream — acts as a per-bike salt for
- * whatever derivation `FUN_000560d8` performs. Defined in main.c. */
-extern volatile uint32_t g_hw_id_cached;
+/* Cached chunk-size selector — low 4 bits of MMIO 0x40032430,
+ * shifted left by 10 (so the field encodes {1024, 2048, ..., 15360}
+ * in 1024-byte steps). Written by `main()` once at boot and read
+ * by `bim_crc32_image` as the outer-loop block stride. Defined in
+ * main.c. The "hw_id" name used during the first decomp pass was
+ * misleading — this is a configuration selector, not an identity. */
+extern volatile uint32_t g_oad_chunk_size;
 
 /* Top-level boot-decision state machine. Called from `main()` and
  * never returns on the panic branch; falls through to `main`'s
@@ -44,5 +46,21 @@ void bim_panic_prep(void);
 /* Panic indicator — drives DIO2 high via the GPIO controller's
  * set-only DOUTSET register. */
 void bim_panic_indicate(void);
+
+/* CRC32-IEEE over an OAD image — the verification primitive used
+ * by both `bim_verify_and_launch_image` and
+ * `bim_full_scan_and_launch`. Standard reflected polynomial
+ * `0xEDB88320`, initial value `0xFFFFFFFF`, final XOR
+ * `0xFFFFFFFF`. The first 12 bytes of the image are skipped (those
+ * carry the OAD identifier + length fields which CRC over
+ * themselves would change the result on every increment). Reads
+ * the image via flash (`FUN_000569e4`) when `use_flash != 0`, or
+ * via an alt source (`FUN_000570fa`, likely the OAD reception
+ * staging buffer in RAM) when `use_flash == 0`. */
+uint32_t bim_crc32_image(uint32_t start_page,
+                          uint32_t chunk_size,
+                          uint32_t skip_offset_base,
+                          uint32_t image_size,
+                          uint8_t  use_flash);
 
 #endif
