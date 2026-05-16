@@ -64,6 +64,46 @@
 
 #define BIM_FLASH_ROM_TABLE   (*(const uintptr_t *const *)0x100001B4u)
 
+/* TI CC2642R1F ROM-API sub-table pointers. `ROM_API_TABLE` lives at
+ * `0x10000180` and is an array of 32 `uint32_t` slots; each slot is
+ * a *pointer* to a per-peripheral function-pointer table elsewhere
+ * in ROM. The two used by the internal-flash program/blank-check
+ * stack:
+ *
+ *   ROM_API_TABLE[10] (= 0x100001A8) → FLASH_TABLE
+ *   ROM_API_TABLE[22] (= 0x100001D8) → VIMS_TABLE
+ *
+ * The slot indexes the BIM exercises:
+ *
+ *   FLASH_TABLE[5] — called with `(uint32_t addr)` returning a
+ *                    blank-check status (signature matches TI's
+ *                    `FlashEfuseReadRow`-style 1-arg dispatcher;
+ *                    the BIM uses it as a "is this 8 KB page all
+ *                    0xFF?" probe via `bim_iflash_rom_blank_check`).
+ *   FLASH_TABLE[6] — called with `(uint8_t *src, uint32_t addr,
+ *                    uint32_t count)` returning a program status —
+ *                    TI's `FlashProgram` driverlib equivalent
+ *                    (called via `bim_iflash_program_via_rom`).
+ *   VIMS_TABLE[1]  — `VIMSModeSet(base, mode)` (no return).
+ *   VIMS_TABLE[2]  — `VIMSModeGet(base)` returns current mode.
+ *
+ * VIMS (Versatile Instruction Memory System) sits at `0x40034000`
+ * and gates the CPU's instruction cache against the FLASH module.
+ * Programming or erasing internal flash while the cache is enabled
+ * risks stale cache lines, so the BIM forces VIMS into MODE_OFF
+ * (mode 0) before any flash op and restores it to MODE_ENABLED
+ * (mode 1, cache-enabled) afterwards — `bim_iflash_session_begin`
+ * / `bim_iflash_session_end` implement that bracket.
+ *
+ * The post-op write to MMIO `0x42600484` (bit-banded clear of bit 1
+ * at FLASH+0x24) is a "FSM done" / "main bank select" latch the
+ * ROM expects callers to acknowledge after each program / blank-
+ * check. */
+#define BIM_FLASH_TABLE_PTR    (*(const uintptr_t *const *)0x100001A8u)
+#define BIM_VIMS_TABLE_PTR     (*(const uintptr_t *const *)0x100001D8u)
+#define VIMS_BASE              0x40034000u
+#define BIM_FLASH_ACK_BIT      (*(volatile uint32_t *)0x42600484u)
+
 /* ROM dispatch slot at 0x100001B8 — same slot bim_panic_prep uses
  * for GPIO clock bring-up. The pointed-to function-pointer table
  * exposes PRCM operations: bim_panic_prep calls indices [5], [7],
@@ -760,16 +800,77 @@ int bim_spi_flash_program(uint32_t addr, uint32_t len, const void *src)
     return 1;
 }
 
-/* Internal CC2642 flash bring-up / program / tear-down helpers,
- * still pending C decomp. Renamed in Ghidra; bodies described in
- * `bim_iflash_program`'s comment. The bring-up returns an opaque
- * "previous state" handle that the tear-down consumes — the same
- * "save state, do work, restore state" pattern the BIM uses for
- * SPI flash bring-up too. */
-extern uint32_t bim_iflash_session_begin(void);
-extern int      bim_iflash_program_via_rom(const void *src, uint32_t addr,
-                                           uint32_t count);
-extern void     bim_iflash_session_end(uint32_t prev_state);
+/* Internal CC2642 flash session begin (`FUN_00056E0C` in the OEM,
+ * 44 B + 8 B literal pool). Brackets every internal-flash op with a
+ * VIMS shutdown: read current VIMS mode via `VIMS_TABLE[2]`
+ * (`VIMSModeGet`); if non-zero (cache or split mode), call
+ * `VIMS_TABLE[1]` (`VIMSModeSet`) with mode 0 (MODE_OFF) and busy-
+ * wait on `VIMSModeGet` returning 0 (mode-change settle). Returns
+ * the *original* mode as a uint8_t — `bim_iflash_session_end` uses
+ * it as the "did we change anything?" predicate. The OEM reloads
+ * `*BIM_VIMS_TABLE_PTR` on every call site rather than caching it
+ * in a register across the loop; preserved verbatim so each
+ * function-pointer fetch is re-dispatched (matches OEM's three
+ * separate ldr sequences). */
+uint32_t bim_iflash_session_begin(void)
+{
+    uint32_t orig;
+    {
+        const uintptr_t *vims = (const uintptr_t *)BIM_VIMS_TABLE_PTR;
+        orig = ((uint32_t (*)(uint32_t))vims[2])(VIMS_BASE) & 0xFFu;
+    }
+    if (orig == 0u) {
+        return 0u;
+    }
+    {
+        const uintptr_t *vims = (const uintptr_t *)BIM_VIMS_TABLE_PTR;
+        ((void (*)(uint32_t, uint32_t))vims[1])(VIMS_BASE, 0u);
+    }
+    for (;;) {
+        const uintptr_t *vims = (const uintptr_t *)BIM_VIMS_TABLE_PTR;
+        if (((uint32_t (*)(uint32_t))vims[2])(VIMS_BASE) == 0u) {
+            break;
+        }
+    }
+    return orig;
+}
+
+/* Internal CC2642 flash program-via-ROM (`FUN_0005703C` in the
+ * OEM, 16 B + 8 B literal pool). Calls `FLASH_TABLE[6]` — TI's
+ * `FlashProgram(src, addr, count)` driverlib equivalent — and
+ * passes the program status straight back to the caller. After
+ * the ROM call, clears the FLASH+0x24 bit-1 latch via the bit-
+ * banded alias at `0x42600484` (the "FSM done" acknowledge the
+ * ROM expects callers to issue between operations). Sole caller:
+ * `bim_iflash_program` / `bim_iflash_program_flat`. */
+int bim_iflash_program_via_rom(const void *src, uint32_t addr, uint32_t count)
+{
+    const uintptr_t *flash = (const uintptr_t *)BIM_FLASH_TABLE_PTR;
+    int status =
+        ((int (*)(const void *, uint32_t, uint32_t))flash[6])(src, addr, count);
+    BIM_FLASH_ACK_BIT = 0u;
+    return status;
+}
+
+/* Internal CC2642 flash session end (`FUN_00057090` in the OEM,
+ * 14 B + 8 B literal pool). Restores VIMS to MODE_ENABLED (cache
+ * on, mode 1) iff the matching `bim_iflash_session_begin` returned
+ * non-zero (i.e. VIMS was originally in some non-OFF mode and we
+ * forced it to OFF for the duration of the flash op).
+ *
+ * Quirk: always restores to mode 1 regardless of what mode the
+ * original VIMSModeGet returned — even if the prior mode was
+ * MODE_SPLIT (2) or anything else, this routine forces MODE_ENABLED.
+ * In practice the BIM only runs at boot with no app GPRAM use, so
+ * mode 1 is always the right restore target. */
+void bim_iflash_session_end(uint32_t prev_state)
+{
+    if (prev_state == 0u) {
+        return;
+    }
+    const uintptr_t *vims = (const uintptr_t *)BIM_VIMS_TABLE_PTR;
+    ((void (*)(uint32_t, uint32_t))vims[1])(VIMS_BASE, 1u);
+}
 
 /* Internal CC2642 flash program (`FUN_00056E72` in the OEM,
  * 50 B). Writes `count` bytes from `src` to internal flash at
@@ -838,17 +939,30 @@ static int bim_iflash_program_flat(uint32_t addr, const void *src, uint32_t coun
     return (prog_err == 0) ? 0 : 0xFF;
 }
 
+/* TI ROM-API blank-check primitive (`FUN_00057058` in the OEM,
+ * 16 B + 8 B literal pool). Calls `FLASH_TABLE[5]` (the 1-arg
+ * ROM helper at offset 0x14 of the `ROM_API_FLASH_TABLE`) with
+ * the page address; the ROM returns non-zero if the 8 KB page
+ * is entirely `0xFF` (blank), 0 if any byte differs. Same
+ * post-op latch acknowledge (`BIM_FLASH_ACK_BIT = 0`) as
+ * `bim_iflash_program_via_rom`. Sole in-source caller:
+ * `bim_iflash_check_slot_blank`. */
+uint32_t bim_iflash_rom_blank_check(uint32_t addr)
+{
+    const uintptr_t *flash = (const uintptr_t *)BIM_FLASH_TABLE_PTR;
+    uint32_t status = ((uint32_t (*)(uint32_t))flash[5])(addr);
+    BIM_FLASH_ACK_BIT = 0u;
+    return status;
+}
+
 /* Internal-flash blank-page check, slot-indexed (`FUN_00056FBC`
  * in the OEM, 32 B + 4 B literal). Wraps the TI ROM-API
- * blank-check primitive (`FlashCheckFsm`-style helper at
- * `FUN_00057058`) in a begin/check/end bracket. Computes the
- * page's flash address as `slot << 13` (8 KB stride) and asks the
- * ROM whether the entire page is `0xFF`. Returns `0xFF` if the
- * page is blank (caller continues), `0` if it isn't (caller
- * bails). Used only by `bim_iflash_check_range_blank` (4 B per
- * call's loop body — the slot iteration). */
-extern uint32_t bim_iflash_rom_blank_check(uint32_t addr);
-
+ * blank-check primitive in a session begin/check/end bracket.
+ * Computes the page's flash address as `slot << 13` (8 KB stride)
+ * and asks the ROM whether the entire page is `0xFF`. Returns
+ * `0xFF` if the page is blank (caller continues), `0` if it
+ * isn't (caller bails). Used only by `bim_iflash_check_range_blank`
+ * (4 B per call's loop body — the slot iteration). */
 static int bim_iflash_check_slot_blank(uint8_t slot_idx)
 {
     uint32_t prev_state = bim_iflash_session_begin();
@@ -978,21 +1092,45 @@ int bim_iflash_copy_from_spi(uint32_t spi_src, uint32_t length, uint32_t iflash_
     return 0;
 }
 
-/* IRQ enable/disable around a memcpy. PRIMASK save/restore
+/* IRQ enable/disable around a flash read. PRIMASK save/restore
  * primitives — both return prior PRIMASK as `uint32_t`.
  *
- *   `bim_irq_disable_save` (`FUN_00057164`) — `mrs r0, PRIMASK;
- *   cpsid i; bx lr`. Disables IRQs, returns the prior bit.
+ *   `bim_irq_disable_save` (`FUN_00057164`, 8 B) — `mrs r0,
+ *   PRIMASK; cpsid i; bx lr`. Disables IRQs, returns the prior
+ *   bit (0 = were enabled, 1 = were already disabled).
  *
- *   `bim_irq_enable_restore` (`FUN_00057170`) — `mrs r0, PRIMASK;
- *   cpsie i; bx lr`. Enables IRQs, returns the prior bit.
+ *   `bim_irq_enable_restore` (`FUN_00057170`, 8 B) — `mrs r0,
+ *   PRIMASK; cpsie i; bx lr`. Enables IRQs, returns the prior
+ *   bit.
  *
- * Used by `bim_iflash_read` to bracket the memcpy with a
- * critical section *only when* interrupts were enabled going in
- * — nested calls (BIM already inside a critical section) skip
- * the re-enable so the outer caller's IRQ state survives. */
-extern uint32_t bim_irq_disable_save(void);
-extern uint32_t bim_irq_enable_restore(void);
+ * Used by `bim_iflash_read` and `bim_iflash_read_paged` to
+ * bracket the memcpy with a critical section *only when*
+ * interrupts were enabled going in — nested calls (BIM already
+ * inside a critical section) skip the re-enable so the outer
+ * caller's IRQ state survives.
+ *
+ * Naked + inline-asm because GCC would otherwise emit a 4-byte
+ * push/pop frame the OEM doesn't have, breaking the 8-byte
+ * size. */
+__attribute__((naked))
+uint32_t bim_irq_disable_save(void)
+{
+    __asm volatile (
+        "mrs r0, PRIMASK\n\t"
+        "cpsid i\n\t"
+        "bx lr"
+    );
+}
+
+__attribute__((naked))
+uint32_t bim_irq_enable_restore(void)
+{
+    __asm volatile (
+        "mrs r0, PRIMASK\n\t"
+        "cpsie i\n\t"
+        "bx lr"
+    );
+}
 
 /* Internal-flash read primitive (`FUN_00056E40` in the OEM,
  * 50 B). Reads `len` bytes from internal flash at `src` (which
@@ -1035,6 +1173,78 @@ int bim_iflash_read(const void *src, void *dst, uint32_t len)
         (void)bim_irq_enable_restore();
     }
     return 0;
+}
+
+/* Internal-flash read with paged addressing (`FUN_00056D30` in the
+ * OEM, 58 B). Sibling of `bim_iflash_read`: same IRQ-safe memcpy
+ * body, same nested-safe PRIMASK bracket, but addresses the
+ * source as `(base + page * 8KB) + offset` instead of a flat
+ * pointer. The 8 KB stride matches the CC2642R1F internal-flash
+ * erase-page size, so `(page, offset)` reads naturally one byte at
+ * a time within a slot.
+ *
+ * Sole caller: `bim_crc32_image`'s `use_flash != 0` path — the
+ * dead-in-this-build alternate that CRC32s an image residing in
+ * internal flash (the live path CRC32s from external SPI staging
+ * via `bim_spi_flash_read`). Three call sites in that routine:
+ * the first-block load, the mid-loop block refill, and a one-off
+ * paired call right before a `bim_spi_flash_read` that overwrites
+ * its result (a vestigial OEM pattern preserved verbatim).
+ *
+ * Quirk: the inner loop uses a 16-bit counter (`uxth` on each
+ * decrement), so for `count > 0xFFFF` the routine loops 0x10000
+ * times rather than `count`. In practice the BIM always passes
+ * `count = 256` (BIM_BUF_BYTES) so this is harmless. The
+ * `uint16_t` cast on `remaining` below preserves the OEM
+ * truncation. */
+int bim_iflash_read_paged(uint32_t page, uint32_t offset,
+                          void *dst, uint32_t count)
+{
+    const uint8_t *src = (const uint8_t *)((page << 13) + offset);
+    uint8_t       *d   = (uint8_t *)dst;
+
+    uint32_t prev_primask = bim_irq_disable_save();
+    int      need_restore = (prev_primask == 0u) ? 1 : 0;
+
+    uint16_t remaining = (uint16_t)count;
+    while (remaining != 0u) {
+        *d++ = *src++;
+        remaining--;
+    }
+
+    if (need_restore) {
+        (void)bim_irq_enable_restore();
+    }
+    return 0;
+}
+
+/* Defensive memcpy (`FUN_000570FA` in the OEM, 22 B). Standard
+ * memcpy with a null-destination guard: if `dst` is NULL, returns
+ * 0 without touching memory; otherwise copies `count` bytes from
+ * `src` to `dst` (iterating index-down-from-`count` over the
+ * range) and returns `dst`. The body is pure C `memcpy` semantics
+ * — no IRQ bracketing, no flash bracketing, no SPI dispatch.
+ *
+ * Sole callers: the `use_spi == 0` / `use_flash == 0` alt-source
+ * paths in `bim_crc32_buffer` and `bim_crc32_image`. Both paths
+ * are dead in this build (every in-source caller passes the SPI
+ * path) but the OEM preserves them — presumably the alt source
+ * is a RAM-resident OAD reception buffer that's only used when
+ * the image being CRC'd hasn't been committed to flash yet.
+ * Preserved verbatim so the alt paths continue to compile and
+ * link against a real symbol. */
+void *bim_memcpy_safe(void *dst, const void *src, uint32_t count)
+{
+    if (dst == (void *)0) {
+        return (void *)0;
+    }
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t       *d = (uint8_t *)dst;
+    while (count != 0u) {
+        count--;
+        d[count] = s[count];
+    }
+    return dst;
 }
 
 int bim_flash_prepare(void)

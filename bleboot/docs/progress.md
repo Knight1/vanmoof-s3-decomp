@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-42 decomp-c / 2 vendor-stock / 8 named / 11 pending
+52 decomp-c / 2 vendor-stock / 3 named / 6 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -104,7 +104,7 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
-- **`flash.c`** — Now hosts 23 functions covering the full
+- **`flash.c`** — Now hosts 30 functions covering the full
   external SPI flash session and the internal CC2642 flash
   program path, end-to-end: session begin/end
   (`bim_flash_prepare`, `bim_flash_release`), PRCM teardown
@@ -118,15 +118,43 @@ layout in the TI SDK shipping CCS / IAR variants.
   `bim_spi_write_enable`, `bim_spi_flash_program`), DPD-landed
   verification (`bim_spi_wait_idle`), the two /CS toggle leaves
   (`dio4_set`, `dio4_clear` — confirmed to drive the SPI
-  flash chip-select line, not an indicator LED), and the
+  flash chip-select line, not an indicator LED), the
   internal-flash program wrapper (`bim_iflash_program`)
-  delegating to three ROM-API helpers
-  (`bim_iflash_session_begin`,
-  `bim_iflash_program_via_rom`,
-  `bim_iflash_session_end` — all renamed in Ghidra,
-  C-translation pending). The /CS pair is widely shared
-  across the flash subsystem: `dio4_set` has 13 call sites,
+  delegating through `bim_iflash_session_begin` /
+  `bim_iflash_program_via_rom` / `bim_iflash_session_end`
+  (now all decoded — see ROM-table identification below), the
+  ROM blank-check dispatcher (`bim_iflash_rom_blank_check`),
+  IRQ-save/restore leaves (`bim_irq_disable_save` /
+  `bim_irq_enable_restore`), the IRQ-safe internal-flash read
+  pair (`bim_iflash_read` flat, `bim_iflash_read_paged`
+  paged), and the defensive memcpy alt-source primitive
+  (`bim_memcpy_safe`). The /CS pair is widely shared across
+  the flash subsystem: `dio4_set` has 13 call sites,
   `dio4_clear` has 8.
+
+  **TI ROM-API tables pinned (May 2026 pass):**
+  the internal-flash program/blank-check helpers dispatch
+  through two `ROM_API_TABLE` sub-tables (`ROM_API_TABLE` =
+  array of 32 `uint32_t` slot pointers at `0x10000180`):
+
+  - `0x100001A8` = `&ROM_API_TABLE[10]` → **`FLASH_TABLE`** ptr.
+    Used slots: `[5]` (offset 0x14) for blank-check
+    (`bim_iflash_rom_blank_check`, signature `(addr) → status`);
+    `[6]` (offset 0x18) for `FlashProgram(src, addr, count)`
+    (`bim_iflash_program_via_rom`).
+  - `0x100001D8` = `&ROM_API_TABLE[22]` → **`VIMS_TABLE`** ptr.
+    Used slots: `[1]` (offset 0x04) = `VIMSModeSet(base, mode)`;
+    `[2]` (offset 0x08) = `VIMSModeGet(base)`. `VIMS_BASE` =
+    `0x40034000`. The session begin/end pair forces VIMS to
+    MODE_OFF (mode 0) for the duration of every flash op and
+    restores MODE_ENABLED (mode 1, cache on) afterwards — cache
+    coherency around `FlashProgram` requires the bracket.
+
+  The post-op write to MMIO `0x42600484` (bit-banded clear of
+  bit 1 at FLASH+0x24) that both `bim_iflash_program_via_rom`
+  and `bim_iflash_rom_blank_check` issue is the "FSM done" /
+  "main bank select" latch the TI ROM expects callers to
+  acknowledge between operations.
 
   **The OAD promote primitive stack** the
   function that actually copies a verified candidate from
@@ -148,7 +176,7 @@ layout in the TI SDK shipping CCS / IAR variants.
   blank?" — preserved verbatim; documented in `flash.c` and
   the function-table row.
 
-  **The IRQ-safe internal-flash read** (added May 2026):
+  **The IRQ-safe internal-flash read pair** (May 2026):
   `bim_iflash_read` (`0x00056E40`, 50 B) wraps a memcpy from
   memory-mapped internal flash to RAM in a PRIMASK
   save/restore via the leaf pair `bim_irq_disable_save`
@@ -156,7 +184,12 @@ layout in the TI SDK shipping CCS / IAR variants.
   Nested-safe — only re-enables IRQs on exit if they were
   enabled going in. Used by `bim_quick_scan_and_launch` for
   the 8-byte sniff and 44-byte short-header reads of
-  already-promoted images sitting in internal flash.
+  already-promoted images sitting in internal flash. The
+  paged sibling `bim_iflash_read_paged` (`0x00056D30`, 58 B)
+  takes `(page, offset)` instead of a flat pointer (computing
+  `src = base + page * 8KB + offset`) and uses a 16-bit loop
+  counter; sole caller is `bim_crc32_image`'s `use_flash != 0`
+  path (dead in this build but preserved verbatim).
 - **`bim_ssi_init` (`0x000563C8`)** — 172 B in OEM. Behaviour-
   equivalent reconstruction. The big "what is this BIM really
   doing" function. Three external resources brought up in
@@ -355,16 +388,16 @@ layout in the TI SDK shipping CCS / IAR variants.
   size, so each slot is one erasable page in the 344 KB
   bleware region (slots 0..43 → `0x00000000..0x00055FFF`).
   Three steps, all delegated to ROM-API helpers:
-  (1) `bim_iflash_session_begin` (`FUN_00056E0C`) brings
-  up the internal flash controller, returns an opaque
-  "previous state" handle for the matching tear-down;
-  (2) `bim_iflash_program_via_rom` (`FUN_0005703C`) calls
-  ROM table at `0x100001A8` slot [6] (TI's
-  `FlashProgram(src, dst, count)` driverlib equivalent)
-  and clears MMIO `0x42600484` (a status-clear or
-  VIMS-side gate); (3) `bim_iflash_session_end`
-  (`FUN_00057090`) tears down the session iff bring-up
-  changed state. Returns 0 on success, `0xFF` on
+  (1) `bim_iflash_session_begin` (`0x00056E0C`) forces VIMS
+  to MODE_OFF (cache off) via `VIMS_TABLE[1]` / `[2]` at
+  `ROM_API_TABLE[22]`, returns the original VIMS mode as the
+  "did we change anything?" handle; (2) `bim_iflash_program_via_rom`
+  (`0x0005703C`) calls `FLASH_TABLE[6]` at `ROM_API_TABLE[10]`
+  (= TI's `FlashProgram(src, addr, count)` driverlib equivalent)
+  and clears the FLASH+0x24 "FSM done" latch via the bit-banded
+  alias at `0x42600484`; (3) `bim_iflash_session_end`
+  (`0x00057090`) restores VIMS to MODE_ENABLED (cache on) iff
+  bring-up actually changed it. Returns 0 on success, `0xFF` on
   failure (matches the pre-erased flash byte value —
   "byte didn't take" reads back as `0xFF`). Used by
   the OAD scan paths to drop status markers into the
@@ -546,11 +579,12 @@ layout in the TI SDK shipping CCS / IAR variants.
   of the image are skipped (the OAD identifier + length fields,
   which can't self-cover). Image bytes are pulled into a 256-byte
   SRAM scratch buffer at `0x20000300` via one of two sources: a
-  flash path (`FUN_000569e4` with TI-style precheck via
-  `FUN_00056a88`) or an alt path (`FUN_000570fa`, addressed by
-  byte offset only — likely the OAD reception staging buffer in
-  RAM). Both BIM call sites pass `use_flash = 0`, so the flash
-  path is dead code in this build. The outer loop partitions the
+  flash path (`bim_spi_flash_read` for the first block,
+  `bim_iflash_read_paged` for mid-loop refills with TI-style
+  precheck via `bim_flash_prepare`) or an alt path
+  (`bim_memcpy_safe`, addressed by byte offset only — likely the
+  OAD reception staging buffer in RAM). Both BIM call sites pass
+  `use_flash = 0`, so the flash path is dead code in this build. The outer loop partitions the
   image into chunks of `g_oad_chunk_size` bytes (cached from
   MMIO `0x40032430` at boot); the middle loop iterates 256-byte
   blocks within each chunk; the inner loop runs the textbook
@@ -817,13 +851,15 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056C34` | 66  | `bim_iflash_check_range_blank` | `flash.c`   | Internal-flash blank-range verification — iterates pages covering the byte range `[addr_low, addr_low + length)` and confirms each is blank via `bim_iflash_check_slot_blank`. Returns 0 on all-blank, `0xFF` on first non-blank page. **Quirk:** the OEM passes only the low 8 bits of the destination address (`uxtb`), so `start_page = (addr & 0xFF) / chunk_size` collapses to 0 for any reasonable chunk size; the check is effectively "are pages 0..N blank?" regardless of where the write will land. Preserved verbatim. Sole caller: `bim_iflash_copy_from_spi`. |
 | decomp-c     | `0x00056FBC` | 32  | `bim_iflash_check_slot_blank` | `flash.c`    | Internal-flash blank-page check, slot-indexed. Wraps `bim_iflash_rom_blank_check(slot << 13)` in a session begin/end bracket. Returns `0xFF` if the 8 KB page is blank (caller continues), 0 if not (caller bails). Sole caller: `bim_iflash_check_range_blank`. |
 | decomp-c     | `0x00056E40` | 50  | `bim_iflash_read`            | `flash.c`     | Internal-flash read primitive — memcpy from memory-mapped internal flash (`0x00000000..0x00057FFF`) to RAM, wrapped in an IRQ-disabled critical section via `bim_irq_disable_save` / `bim_irq_enable_restore` (so a concurrent program/erase from an ISR can't corrupt the read). Nested-safe: only re-enables IRQs on exit if they were enabled going in. Returns 0. Signature `(src, dst, len)` — distinct from `bim_spi_flash_read`'s `(addr, len, dst)` because the two flash media have separate OEM primitives. Sole caller: `bim_quick_scan_and_launch` (8-byte sniff + 44-byte short-header reads of already-promoted images). |
-| named        | `0x00056E0C` | 46  | `bim_iflash_session_begin`   | `flash.c` (extern) | Internal CC2642 flash bring-up. Calls slot [2] of ROM table at `0x100001D8` (= `ROM_API_TABLE` entry 22) with `FLASH_BASE` (`0x40034000`) — likely a "is the FCFG/flash controller ready?" status read. If non-ready, loops calling slot [1] (init) then re-reading slot [2] until ready. Returns the initial readiness state for the matching tear-down. Sole caller: `bim_iflash_program`. |
-| named        | `0x0005703C` | 16  | `bim_iflash_program_via_rom` | `flash.c` (extern) | Calls slot [6] of ROM table at `0x100001A8` with `(src, addr, count)` — TI's `FlashProgram` driverlib equivalent — then writes 0 to MMIO `0x42600484` (status clear or VIMS-side gate). Sole caller: `bim_iflash_program`. |
-| named        | `0x00057090` | 14  | `bim_iflash_session_end`     | `flash.c` (extern) | Internal flash session tear-down. Takes the bring-up's return value as the "should I tear down?" predicate. If non-zero, calls slot [1] of ROM table at `0x100001D8` — inverse of bring-up. Sole caller: `bim_iflash_program`. |
+| decomp-c     | `0x00056E0C` | 44  | `bim_iflash_session_begin`   | `flash.c`     | VIMS shutdown bracket — reads current VIMS mode via `VIMS_TABLE[2]` (`VIMSModeGet`) at `ROM_API_TABLE[22] + 8`; if non-zero, forces MODE_OFF via `VIMS_TABLE[1]` (`VIMSModeSet`) and busy-waits on `VIMSModeGet` returning 0. Returns the *original* mode as `uint8_t` so `bim_iflash_session_end` can decide whether to restore. VIMS_BASE = `0x40034000`. Required around every internal flash op for cache coherency. |
+| decomp-c     | `0x0005703C` | 16  | `bim_iflash_program_via_rom` | `flash.c`     | Dispatches through `FLASH_TABLE[6]` (TI's `FlashProgram(src, addr, count)` at `ROM_API_TABLE[10] + 24`), then clears bit 1 of FLASH+0x24 via the bit-banded alias at `0x42600484` (the "FSM done" latch the ROM expects callers to acknowledge between operations). Returns ROM program status. |
+| decomp-c     | `0x00057090` | 14  | `bim_iflash_session_end`     | `flash.c`     | VIMS restore — if `prev_state` (the saved original mode) is non-zero, forces VIMS back to MODE_ENABLED (1, cache on) via `VIMS_TABLE[1]`. Quirk: always restores to mode 1 regardless of what mode was saved (SPLIT mode 2 would be lost) — fine for the BIM which only runs at boot. |
 | named        | `0x0005717C` | 10  | `bim_get_chip_entry`         | `crc.c` (extern)   | Returns the pointer at `g_chip_table_cursor` (`0x20000408`) — after a successful `bim_spi_probe_chip`, this points at the matched 8-byte chip-table entry inside `BIM_CHIP_TABLE_HEAD` (`0x000571A8`). First dword of every entry is the chip's total capacity in bytes (e.g. `0x04000000` = 64 MB for the installed MX25L51245G). Sole caller: `bim_crc32_buffer` (bounds CRC against the actual chip capacity). 6 B + 4 B literal. |
-| named        | `0x00057058` | ~24 | `bim_iflash_rom_blank_check` | `flash.c` (extern) | TI ROM-API blank-check primitive — checks whether the 8 KB page at `addr` is entirely `0xFF`. Returns non-zero if blank, 0 if not. Likely dispatches through one of the flash ROM tables at `0x100001A8` / `0x100001D8`. Sole in-source caller: `bim_iflash_check_slot_blank`. |
-| named        | `0x00057164` | 6   | `bim_irq_disable_save`       | `flash.c` (extern) | `mrs r0, PRIMASK; cpsid i; bx lr` — disables interrupts, returns prior PRIMASK so the caller can pair-call the matching enable-restore only when it was the one responsible for entering the critical section. Sole caller: `bim_iflash_read`. |
-| named        | `0x00057170` | 6   | `bim_irq_enable_restore`     | `flash.c` (extern) | `mrs r0, PRIMASK; cpsie i; bx lr` — mirror of `bim_irq_disable_save`. Sole caller: `bim_iflash_read` (only invoked when the disable saw IRQs enabled). |
+| decomp-c     | `0x00057058` | 16  | `bim_iflash_rom_blank_check` | `flash.c`     | TI ROM-API blank-check primitive — dispatches through `FLASH_TABLE[5]` (1-arg helper at `ROM_API_TABLE[10] + 20`) and returns its status (non-zero if the 8 KB page at `addr` is entirely `0xFF`, 0 if any byte differs). Same post-op `BIM_FLASH_ACK_BIT = 0` latch acknowledge as `bim_iflash_program_via_rom`. Sole in-source caller: `bim_iflash_check_slot_blank`. |
+| decomp-c     | `0x00057164` | 8   | `bim_irq_disable_save`       | `flash.c`     | `mrs r0, PRIMASK; cpsid i; bx lr` — disables interrupts, returns prior PRIMASK so the caller can pair-call the matching enable-restore only when it was the one responsible for entering the critical section. `__attribute__((naked))` + inline asm to preserve the 8 B size (GCC would otherwise emit a push/pop frame). Sole caller: `bim_iflash_read` / `bim_iflash_read_paged`. |
+| decomp-c     | `0x00057170` | 8   | `bim_irq_enable_restore`     | `flash.c`     | `mrs r0, PRIMASK; cpsie i; bx lr` — mirror of `bim_irq_disable_save`. Same `naked` + inline asm. Sole caller: `bim_iflash_read` / `bim_iflash_read_paged` (only invoked when the disable observed IRQs were enabled). |
+| decomp-c     | `0x00056D30` | 58  | `bim_iflash_read_paged`      | `flash.c`     | Internal-flash read with paged addressing — sibling of `bim_iflash_read` that takes `(page, offset)` and computes `src = base + (page << 13) + offset`. Same IRQ-safe memcpy with PRIMASK bracket. Inner loop uses 16-bit counter (`uxth` per iteration), so `count > 0xFFFF` would loop 0x10000 times — harmless because all in-source callers pass 256. Sole caller: `bim_crc32_image`'s `use_flash != 0` path (dead in this build). |
+| decomp-c     | `0x000570FA` | 22  | `bim_memcpy_safe`            | `flash.c`     | Defensive memcpy with null-dst guard — returns 0 without touching memory if `dst` is NULL; otherwise copies `count` bytes from `src` to `dst` (iterating index-down from `count-1` to 0) and returns `dst`. Pure C `memcpy` semantics, no flash or IRQ bracketing. Sole callers: the alt-source paths in `bim_crc32_buffer` and `bim_crc32_image` (both dead in this build). |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
 | decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
 | decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
@@ -893,11 +929,15 @@ Mirrors with browseable trees:
   per-bike salt. The BIM's integrity gate is **not authenticated**
   — anyone who can write the image bytes can write a matching
   CRC32.
-- The remaining undecoded helpers around the OAD path:
-  `FUN_000570FA` (alt-source read, used by `bim_crc32_image`'s
-  and `bim_crc32_buffer`'s alt paths — both dead in this build),
-  `FUN_00056D30` (flash-page read, used by `bim_crc32_image`'s
-  `use_flash` path).
+- ~~`FUN_000570FA` (alt-source read) and `FUN_00056D30`
+  (flash-page read)~~ — **resolved**: decoded as
+  `bim_memcpy_safe` (defensive memcpy with null-dst guard,
+  the dead-in-this-build alt source for both
+  `bim_crc32_buffer` and `bim_crc32_image`) and
+  `bim_iflash_read_paged` (sibling of `bim_iflash_read` with
+  paged `(page, offset)` addressing, used only by
+  `bim_crc32_image`'s `use_flash != 0` path — also dead in
+  this build).
 - ~~`FUN_00056714` is a secondary CRC check~~ — **resolved**:
   it's `bim_iflash_copy_from_spi`, the OAD promote primitive
   that copies a verified candidate from external SPI staging to
@@ -920,13 +960,21 @@ Mirrors with browseable trees:
   `FUN_00056E72` (flash program),
   `FUN_00056ED4` (Write Enable)~~ — **resolved**: decoded
   as `bim_oad_find_image_addr`, `bim_spi_flash_program`,
-  `bim_iflash_program`, `bim_spi_write_enable`. The three
-  internal-flash helpers consumed by `bim_iflash_program`
-  (`bim_iflash_session_begin`, `bim_iflash_program_via_rom`,
-  `bim_iflash_session_end`) are renamed in Ghidra and
-  documented in flash.c as `extern`s; C decomp deferred
-  pending exact identification of ROM table at
-  `0x100001D8` and MMIO `0x42600484`.
+  `bim_iflash_program`, `bim_spi_write_enable`.
+- ~~The three internal-flash helpers consumed by
+  `bim_iflash_program` (`bim_iflash_session_begin`,
+  `bim_iflash_program_via_rom`, `bim_iflash_session_end`),
+  plus the ROM blank-check (`bim_iflash_rom_blank_check`)
+  and the PRIMASK pair (`bim_irq_disable_save` /
+  `bim_irq_enable_restore`)~~ — **resolved**: all decoded
+  to C. The two ROM sub-tables are now pinned:
+  `0x100001A8` = `&ROM_API_TABLE[10]` = `FLASH_TABLE` ptr
+  (slot [5] = blank-check, slot [6] = `FlashProgram`);
+  `0x100001D8` = `&ROM_API_TABLE[22]` = `VIMS_TABLE` ptr
+  (slot [1] = `VIMSModeSet`, slot [2] = `VIMSModeGet`).
+  MMIO `0x42600484` is the bit-banded clear of bit 1 at
+  FLASH+0x24 — the "FSM done" latch the ROM expects callers
+  to acknowledge after each program / blank-check.
 - ~~`FUN_00056CF4` (JEDEC ID read), `FUN_00056AD4` (post-wake
   verifier), `FUN_000569E4` (flash read)~~ — **resolved**:
   decoded as `bim_spi_read_rems_id` (sends REMS opcode `0x90`,

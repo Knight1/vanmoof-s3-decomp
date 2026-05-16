@@ -54,9 +54,10 @@ void bim_panic_indicate(void);
  * `0xFFFFFFFF`. The first 12 bytes of the image are skipped (those
  * carry the OAD identifier + length fields which CRC over
  * themselves would change the result on every increment). Reads
- * the image via flash (`FUN_000569e4`) when `use_flash != 0`, or
- * via an alt source (`FUN_000570fa`, likely the OAD reception
- * staging buffer in RAM) when `use_flash == 0`. */
+ * the image via flash (`bim_spi_flash_read` + `bim_iflash_read_paged`)
+ * when `use_flash != 0`, or via an alt source (`bim_memcpy_safe`,
+ * likely the OAD reception staging buffer in RAM) when
+ * `use_flash == 0`. */
 uint32_t bim_crc32_image(uint32_t start_page,
                           uint32_t chunk_size,
                           uint32_t skip_offset_base,
@@ -72,7 +73,7 @@ uint32_t bim_crc32_image(uint32_t start_page,
  * `use_spi != 0` reads through `bim_spi_flash_read` (and bounds
  * `len` against the matched chip's capacity from
  * `bim_get_chip_entry`); `use_spi == 0` reads through the alt
- * source `FUN_000570FA` (dead in this build). Returns the final
+ * source `bim_memcpy_safe` (dead in this build). Returns the final
  * CRC value on success, `0` on any failure (zero/maxed length,
  * length exceeds chip capacity). */
 uint32_t bim_crc32_buffer(uint32_t addr, uint32_t len, uint8_t use_spi);
@@ -279,6 +280,22 @@ int bim_iflash_copy_from_spi(uint32_t spi_src, uint32_t length, uint32_t iflash_
  * for 8-byte sniff and 44-byte short-header reads from already-
  * promoted images sitting in internal flash. */
 int bim_iflash_read(const void *src, void *dst, uint32_t len);
+
+/* Internal-flash read with paged addressing — sibling of
+ * `bim_iflash_read` that takes `(page, offset)` rather than a flat
+ * pointer. The 8 KB stride per page matches the CC2642R1F erase-
+ * page size. Same IRQ-safe bracket as `bim_iflash_read`. Sole
+ * caller: `bim_crc32_image`'s `use_flash != 0` path (dead in this
+ * build but preserved). */
+int bim_iflash_read_paged(uint32_t page, uint32_t offset,
+                          void *dst, uint32_t count);
+
+/* Defensive memcpy with a null-destination guard. Returns 0
+ * (i.e. NULL) without touching memory if `dst` is NULL; otherwise
+ * copies `count` bytes from `src` to `dst` and returns `dst`.
+ * Sole callers: the alt-source paths in `bim_crc32_buffer` and
+ * `bim_crc32_image` (both dead in this build). */
+void *bim_memcpy_safe(void *dst, const void *src, uint32_t count);
 
 /* Image-segment-table walker — given the base address of an
  * OAD image header on external SPI flash and the header's

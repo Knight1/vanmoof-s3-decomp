@@ -17,16 +17,16 @@
  * SRAM scratch buffer at `0x20000300` and then CRC'd. The buffer
  * is filled by either:
  *
- *   - `FUN_000569e4` — flash read with TI's flash precheck
- *     dance (`bim_flash_prepare` / `bim_flash_release`). Used when
- *     the caller passes `use_flash != 0`. Both call sites in this
- *     BIM build pass `use_flash == 0`, so this path is dead in the
- *     compiled image.
+ *   - `bim_spi_flash_read` / `bim_iflash_read_paged` — flash read
+ *     paths used when the caller passes `use_flash != 0`. Both
+ *     BIM call sites pass `use_flash == 0`, so these paths are
+ *     dead in the compiled image.
  *
- *   - `FUN_000570fa` — the alt source. Address is offset-only
- *     (no flash precheck, no epilogue), which fits the pattern of
- *     a RAM staging buffer where the OAD reception code accumulates
- *     incoming image bytes before they're committed to flash.
+ *   - `bim_memcpy_safe` — the alt source. Pure memcpy with a
+ *     null-dst guard, no flash precheck or epilogue — fits the
+ *     pattern of a RAM staging buffer where the OAD reception
+ *     code accumulates incoming image bytes before they're
+ *     committed to flash.
  *
  * Outer-loop chunking is driven by `chunk_size` (the caller passes
  * `g_oad_chunk_size`): the image is partitioned into chunks of
@@ -88,9 +88,6 @@ uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
     return crc;
 }
 
-extern void     FUN_000570fa(void *dst, uint32_t source_offset, uint32_t n);
-extern void     FUN_00056d30(uint32_t page, uint32_t off, void *dst, uint32_t n);
-
 /* Matched-chip entry getter (`FUN_0005717C` in the OEM, 6 B +
  * 4 B literal). Returns the pointer at `g_chip_table_cursor`
  * (`0x20000408`) — which, after a successful
@@ -129,7 +126,9 @@ uint32_t bim_crc32_image(uint32_t start_page,
         }
         bim_spi_flash_read(start_page << 12, BIM_BUF_BYTES, buf);
     } else {
-        FUN_000570fa(buf, start_page * chunk_size, BIM_BUF_BYTES);
+        (void)bim_memcpy_safe(buf,
+                              (const void *)(start_page * chunk_size),
+                              BIM_BUF_BYTES);
     }
 
     uint32_t end_page = (start_page + (image_size - 1u) / chunk_size)
@@ -158,26 +157,30 @@ uint32_t bim_crc32_image(uint32_t start_page,
                 if (use_flash != 0u) {
                     if (blk == blocks - 1u) {
                         /* The OEM does TWO loads here back-to-back:
-                         * `FUN_00056d30(page+1, 0, buf, 256)` then
+                         * `bim_iflash_read_paged(page+1, 0, buf, 256)`
+                         * (an IRQ-safe internal-flash memcpy) and then
                          * `bim_spi_flash_read((page<<12)+4096, 256, buf)`.
-                         * The second overwrites the first, so only
-                         * the flash data survives. The first call's
-                         * side effect (whatever it is) is preserved
-                         * by replicating both calls verbatim. */
-                        FUN_00056d30(page + 1u, 0u, buf, BIM_BUF_BYTES);
+                         * The second overwrites the first, so only the
+                         * SPI data survives. Preserved verbatim — the
+                         * first call's only observable effect is the
+                         * IRQ-disable bracket spanning the redundant
+                         * memcpy. */
+                        (void)bim_iflash_read_paged(page + 1u, 0u,
+                                                    buf, BIM_BUF_BYTES);
                         bim_spi_flash_read((page << 12) + 4096u,
                                       BIM_BUF_BYTES, buf);
                     } else {
-                        FUN_00056d30(page,
-                                      (blk + 1u) * 256u,
-                                      buf,
-                                      BIM_BUF_BYTES);
+                        (void)bim_iflash_read_paged(page,
+                                                    (blk + 1u) * 256u,
+                                                    buf,
+                                                    BIM_BUF_BYTES);
                     }
                 } else {
-                    FUN_000570fa(buf,
-                                  page * chunk_size
-                                      + blk * 256u + 256u,
-                                  BIM_BUF_BYTES);
+                    (void)bim_memcpy_safe(
+                        buf,
+                        (const void *)(page * chunk_size
+                                       + blk * 256u + 256u),
+                        BIM_BUF_BYTES);
                 }
             }
 
@@ -240,11 +243,12 @@ uint32_t bim_crc32_image(uint32_t start_page,
  *     `bim_flash_prepare` and FUN_0005653C is only meant to drop
  *     the session on the early-bail failure path.
  *
- *   - `use_spi == 0` — `FUN_000570FA(buf, addr, 256)`: reads
- *     from the alt source. Same source `bim_crc32_image` uses
- *     for its alt path; treated as offset-only with no SPI
- *     precheck. Dead in this build (every in-source caller
- *     passes `use_spi = 1`), but preserved for OEM fidelity.
+ *   - `use_spi == 0` — `bim_memcpy_safe(buf, addr, 256)`: reads
+ *     from the alt source via a defensive memcpy. Same source
+ *     `bim_crc32_image` uses for its alt path; treated as
+ *     offset-only with no SPI precheck. Dead in this build
+ *     (every in-source caller passes `use_spi = 1`), but
+ *     preserved for OEM fidelity.
  *
  * Inner loop: 256-byte chunks into a stack-allocated scratch
  * buffer (the OEM allocates it as a stack-frame local via
@@ -286,7 +290,7 @@ uint32_t bim_crc32_buffer(uint32_t addr, uint32_t len, uint8_t use_spi)
         if (use_spi != 0u) {
             bim_spi_flash_read(addr, BIM_BUF_BYTES, buf);
         } else {
-            FUN_000570fa(buf, addr, BIM_BUF_BYTES);
+            (void)bim_memcpy_safe(buf, (const void *)addr, BIM_BUF_BYTES);
         }
 
         addr += chunk;
