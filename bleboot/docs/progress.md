@@ -9,14 +9,15 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-59 decomp-c / 2 vendor-stock / 2 named / 0 pending
+61 decomp-c / 2 vendor-stock / 0 named / 0 pending
 ```
 
-(`63` total functions in Ghidra at base `0x00056000`. **Every
-`FUN_*` is now decoded** — the remaining 2 `named` rows are
-`ResetISR_body` and `Reset_Handler`, both startup stubs preserved
-as such because they live in the asm boundary between TI's
-`SetupTrimDevice` and the auto-init machinery.)
+(`63` total functions in Ghidra at base `0x00056000`. **All
+`FUN_*` and all startup stubs decoded** — `ResetISR_body` and
+`Reset_Handler` are now hand-written naked inline asm in
+`src/startup.c`, matching the OEM byte shape exactly. The two
+remaining `vendor-stock` rows (`SetupTrimDevice`, `_auto_init_table`)
+are upstream TI driverlib / CGT runtime, linked not vendored.)
 
 **Major insight (recorded once, applies project-wide):** the BIM
 talks to an **external SPI NOR flash chip via SSI0** — the
@@ -798,28 +799,43 @@ layout in the TI SDK shipping CCS / IAR variants.
   routed from the HardFault, default, and NMI vector slots
   respectively. Compiled back to `e7fe` per handler with the project
   CFLAGS (`-Os -mthumb -mcpu=cortex-m4`); byte-equivalent.
-- **Reset path identification (no module file yet)** — The
-  Reset_Handler at `0x57126` is the stock TI driverlib `ResetISR`
-  pattern, split across two physical entry points:
-    * `0x57126` (10 B "stub"): `push {r3,lr}; bl SetupTrimDevice;
-      b.w localProgramStart`. The 6 B at `0x57130..0x57135`
-      (`bl HardFault_Handler; pop {r3,pc}`) are GCC's defensive
-      epilogue — unreachable because `localProgramStart` is a
-      tail-call to a `noreturn`-style function.
-    * `0x56DD8` (52 B body, here named `ResetISR_body`): loads MSP
-      from the literal pool (`0x20014000` — VT[0] / top of SRAM),
-      enables the FPU (`SCB->CPACR |= 0xF00000`), runs two `nop`
-      barriers, then chains into `.data` copy / `.bss` zero /
-      `main` via the helpers at `0x571A0`, `0x56BF0`, `0x57000`,
-      and `0x571A4`.
+- **`startup.c`** — The stock TI driverlib `ResetISR` pattern,
+  split across two physical entry points in the OEM image and
+  reconstructed here as two `naked` + inline-asm functions whose
+  lowered code matches the OEM byte shape exactly (52 B + 10 B,
+  bytes differing only in the link-time relative offsets of the
+  `bl` targets):
+    * `Reset_Handler` (`0x57126`, 10 B): `push {r3, lr};
+      bl SetupTrimDevice; b.w ResetISR_body`. A non-naked
+      translation would emit `bl ResetISR_body; pop {r3, pc}` (12 B
+      and the wrong control flow); the naked + `b.w` form preserves
+      the OEM tail-call. The 6 B at `0x57130..0x57135` immediately
+      after the function (`bl HardFault_Handler; pop {r3, pc}`) are
+      GCC's defensive post-tail-call epilogue from compiling TI's
+      upstream `ResetISR` (whose tail-call target
+      `localProgramStart` isn't marked `noreturn`) — unreachable
+      dead code, outside Ghidra's function boundary, no behavioural
+      impact. Our naked translation doesn't reproduce them.
+    * `ResetISR_body` (`0x56DD8`, 52 B): loads MSP from the literal
+      pool (`0x20014000` — VT[0] / top of SRAM), enables the FPU
+      (`SCB->CPACR |= 0xF00000`), runs two `nop` barriers, then
+      the standard TI CGT cinit chain: `_system_pre_init` →
+      `_auto_init_table` (only when pre-init returned nonzero) →
+      `main(0)` → `_exit(1)`. The literal pool is pinned to the
+      OEM order (CPACR addr at body+0x2C, MSP init at body+0x30 —
+      opposite of source order because the first `ldr` reaches
+      further) via explicit `.word` directives in the inline asm.
+      The trailing 2-byte alignment pad uses the T1 nop encoding
+      (`46c0` = `mov r8, r8`) rather than the T2 narrow nop
+      (`bf00`), matching the TI CCS `.align` fill choice inside a
+      Thumb code region. Emitted via `.short 0x46c0`.
   Matches `source/ti/devices/cc13x2_cc26x2/startup_files/startup_gcc.c`
   in the SimpleLink CC13x2/CC26x2 SDK 3.40.00.02 (April 2020 — the
-  TI release closest to bleboot's `Apr 23 2020` build date). No C
-  source written yet — deferred until the `0x56DD8` body's helpers
-  are decoded so we can either vendor TI's `startup_gcc.c` verbatim
-  or hand-write a single `Reset_Handler` whose lowered code matches
-  the OEM byte layout (the split entry is the GCC `-Os` artifact of
-  compiling a single C-level `ResetISR` with a noreturn tail-call).
+  TI release closest to bleboot's `Apr 23 2020` build date). The
+  same file holds weak no-op placeholders for `SetupTrimDevice` and
+  `_auto_init_table` so the build links to a (non-runnable) image
+  until the TI sources get vendored; the OEM behaviour lives in the
+  real upstream versions.
 
 ## Function table
 
@@ -886,8 +902,8 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000571A4` | 4   | `_exit`             | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`bf00 e7fe`) |
 | vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit. Upstream linked, not vendored. |
 | vendor-stock | `0x00056BF0` | 50  | `_auto_init_table`  | (TI CGT RTS)  | TI compiler-runtime cinit descriptor-table walker. Upstream linked, not vendored. |
-| named        | `0x00056DD8` | 52  | `ResetISR_body`     | (startup)     | Tail-called from Reset_Handler stub; sets MSP, enables FPU, calls `_system_pre_init` → `_auto_init_table` → `main` → `_exit` |
-| named        | `0x00057126` | 10  | `Reset_Handler`     | (startup)     | 10-byte stub: trim + tail-call to body; matches stock TI ResetISR layout |
+| decomp-c     | `0x00056DD8` | 52  | `ResetISR_body`     | `startup.c`   | Tail-called from `Reset_Handler` stub; sets MSP from `0x20014000`, enables FPU via `SCB->CPACR |= 0xF00000`, then `_system_pre_init` → `_auto_init_table` (when prev returned nonzero) → `main(0)` → `_exit(1)`. Naked + inline asm to pin the literal pool to OEM order (CPACR addr at body+0x2C, MSP init at body+0x30) and the trailing alignment pad to the T1 `46c0` encoding. Byte-equivalent to OEM except for the link-time relative offsets of `bl _system_pre_init` / `_auto_init_table` / `main` / `_exit`. |
+| decomp-c     | `0x00057126` | 10  | `Reset_Handler`     | `startup.c`   | Vector_table[1] entry. `push {r3, lr}; bl SetupTrimDevice; b.w ResetISR_body`. Naked + inline asm: a non-naked translation would emit `bl ResetISR_body; pop {r3, pc}` (12 B, wrong shape). 6 B of unreachable defensive epilogue at `0x57130..0x57135` in the OEM image (GCC artifact of compiling TI's upstream `ResetISR` whose tail-call target isn't marked `noreturn`) are not reproduced. Byte-equivalent except for the two link-time `bl` / `b.w` relative offsets. |
 
 Status legend:
 

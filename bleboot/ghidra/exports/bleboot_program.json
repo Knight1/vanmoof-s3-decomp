@@ -144,7 +144,7 @@
     {"addr":"0x000570e2","size":24,"name":"bim_spi_wait_idle","auto_named":false,"signature":"void bim_spi_wait_idle(void)","thunk":false,"external":false},
     {"addr":"0x000570fa","size":22,"name":"bim_memcpy_safe","auto_named":false,"signature":"void * bim_memcpy_safe(void * dst, void * src, uint count)","thunk":false,"external":false},
     {"addr":"0x00057110","size":22,"name":"bim_chip_assert_supported","auto_named":false,"signature":"void bim_chip_assert_supported(void)","thunk":false,"external":false},
-    {"addr":"0x00057126","size":10,"name":"Reset_Handler","auto_named":false,"signature":"undefined Reset_Handler(void)","thunk":false,"external":false},
+    {"addr":"0x00057126","size":10,"name":"Reset_Handler","auto_named":false,"signature":"void Reset_Handler(void)","thunk":false,"external":false},
     {"addr":"0x00057138","size":10,"name":"dio4_set","auto_named":false,"signature":"void dio4_set(void)","thunk":false,"external":false},
     {"addr":"0x00057156","size":14,"name":"bim_launch_image","auto_named":false,"signature":"void bim_launch_image(uint entry)","thunk":false,"external":false},
     {"addr":"0x00057164","size":8,"name":"bim_irq_disable_save","auto_named":false,"signature":"uint bim_irq_disable_save(void)","thunk":false,"external":false},
