@@ -123,6 +123,16 @@ and Reset is the application entry point.
 | `0x100001B4` | 32 b | read (ptr-to-table) | `bim_flash_prepare`, `bim_ssi_init` | ROM-region dispatch slot — pointer to a TI ROM sub-table that mixes SPI-flash command primitives and IOC/pin-routing. Slot `[15]` called by `bim_flash_prepare` with args `4` then `3` (likely SPI flash "Release from Deep Power Down" `0xAB` + a status follow-up — mirrors `bim_spi_deep_power_down`'s release-side `0xB9`). Slot `[17]` called by `bim_ssi_init` with args `(SSI0_BASE, 6, 5, -1, cfg)` (5 args; likely IOC pin routing for the SSI0 MISO/MOSI/SCLK/CSn lines). |
 | `0x40000000` – `0x40000FFF` | 32 b | RMW + via SSI ROM | `bim_ssi_init`, `bim_flash_prepare` | **SSI0** — Synchronous Serial Interface 0, used by the BIM as the SPI master to talk to an external SPI NOR flash chip that stages OAD images. The internal CC2642 flash holds only the BIM itself (this 8 KB page); candidate images live on external SPI flash. This is the TI OAD "external flash" build configuration. Direct register accesses: `+0x04` (CR1, SSE enable), `+0x14` (IM, interrupt mask), `+0x20` (ICR, interrupt clear). |
 | `0xE000ED88` | 32 b | read-modify-write | `ResetISR_body` | `SCB->CPACR` — the Reset path sets bits 20–23 (CP10/CP11 full access) to enable the FPU. Standard Cortex-M4F boilerplate. |
+| `0x50001318` | 32 b | read | `bim_chip_family`, `bim_chip_hw_revision` | `FCFG1_BASE (0x50001000) + 0x318` — `ICEPICK_DEVICE_ID`. Bits [27:12] are PARTNO (`0xBB41` = CC13x2/CC26x2 family identifier); bits [31:28] are the PG (process-generation) revision (silicon stepping). `bim_chip_family` checks PARTNO; `bim_chip_hw_revision` uses the PG nibble to encode the silicon revision. |
+| `0x500010A0` | 32 b | read | `bim_chip_hw_revision` | `FCFG1 + 0xA0` — `MINOR_HW_REV` shadow. Low byte = in-PG minor revision (e.g. PG2.1.3); values above `0x7F` are treated as "no minor rev assigned" (returned as 0). |
+| `0x5000140C` | 32 b | read | `bim_setup_after_cold_reset_cfg1` | `FCFG1 + 0x40C` — `MISC_TRIM_AON` / `OSC_CONF` block. Bits [17:12] drive the ADI3 byte trim at `0x400CB00E`; bit 9 picks between two channels of the AON trim shadow (offsets `0x13` vs `0x23` from base `0x40086209`); bits [8:6] (mask `0x38`) feed the ADI3 halfword trim at `0x400CB06A`. |
+| `0x50004FAC` / `0x50004FB0` / `0x50004FB4` | 32 b | read | `bim_setup_after_cold_reset_cfg1` | Three consecutive FCFG2 trim words (`FCFG2_BASE (0x50004000) + 0xFAC..0xFB4`). FCFG2 isn't documented in the public CC2642R1 TRM; access pattern matches a cold-reset trim shadow that the helper conditionally folds into the AON trim shadow. `0xFB0` bit 1 gates the `0xFAC>>16 \| 0xF0` write to `0x40086256`. `0xFB4` holds the "USER_ID-like" word that the three ROM-HAPI calls each receive as their first arg. |
+| `0x400C6000` / `0x400C6004` | 32 b | RMW + poll | `bim_setup_adi_step` | ADI state-machine status (`+0`) and ack (`+4`) — sequencer waits for the two to equal, then writes the next intermediate ADI mode (stepped via an 8-byte LUT at flash `0x000571D8`). Called from `bim_setup_after_cold_reset_cfg1` with target code 2. |
+| `0x400CA000` / `0x400CA404` | 16 b / 32 b | dummy-read / write | `bim_setup_after_cold_reset_cfg1` | `DDI_0_OSC_BASE (0x400CA000)` — DDI0 (Direct Digital Interface 0, the RF/clock trim block). Writes `0x01000100` to `+0x404`, then does a 16-bit dummy readback at `+0x00` to push the write through the DDI write-buffer (standard DDI-write idiom). |
+| `0x400CB00E` / `0x400CB06A` | 8 b / 16 b | write | `bim_setup_after_cold_reset_cfg1` | `ADI3_BASE (0x400CB000)` — ADI3 (Analog/Digital Interface 3, holds DCDC/recharge/REFSYS trim). Byte write at `+0x0E` and halfword write at `+0x6A` carry the masked bit fields from FCFG1.MISC_TRIM (`0x5000140C`). |
+| `0x40086209..0x40086256` | 8 b | write | `bim_setup_after_cold_reset_cfg1` | AON trim shadow byte array (4 byte writes at offsets +0x00, +0x13, +0x23, +0x4D from a misaligned base of `0x40086209` — the misalignment is deliberate, lets the OEM share one literal pool entry across all four writes via `add r1, r4, #imm`). Likely a shadow surfacing into AON_PMCTL's DCDC voltage trim registers. |
+| `0x42600494` | 32 b | write (=1) | `bim_setup_after_cold_reset_cfg1` | Bit-banded set of bit 5 in `FLASH+0x24` (= `0x40030024`) — distinct from the bit-1 `BIM_FLASH_ACK_BIT` (`0x42600484`) used by `bim_iflash_program_via_rom` / `bim_iflash_rom_blank_check`. Looks like a "trim-applied" marker bit the BIM signals after every cold-reset cfg1 pass. |
+| `0x100001F0` | 32 b | read (ptr-to-table) | `bim_setup_after_cold_reset_cfg1` | ROM-region dispatch slot — pointer to the TI **HAPI / cold-reset ROM sub-table** (= `ROM_API_TABLE[28]`). Three slots called in order from a single load of the sub-table pointer: `[0](r5)`, `[1](fcfg1_rev, r5)`, `[2](r5)` — a per-stepping wakeup state machine that the BIM forwards FCFG2 readouts into. Sub-table identity (HAPI vs another) inferred from the slot count and arg shape; not yet cross-referenced to a specific TI driverlib release. |
 
 ## External SPI NOR flash chip (BLE PCB)
 
@@ -179,6 +189,46 @@ the current 64 MB Macronix at the top. The table format
 (`{capacity, mfr, dev, padding}`) maps directly to TI's
 `extFlashInfo_t` layout from the SimpleLink CC13x2/CC26x2 SDK's
 `source/ti/common/cc26xx/flash_interface/external/flash_interface_ext_rtos_NVS.c`.
+
+### ADI step LUT at flash `0x000571D8`
+
+8-byte lookup table consumed by `bim_setup_adi_step`:
+
+| Offset | Bytes |
+| --- | --- |
+| `0x000571D8` | `01 02 00 03 02 00 01 03` |
+
+Used as a stepping table for the ADI analog-config state machine
+at `0x400C6000`: given a current code `c` and target code `t`, the
+helper picks `LUT[3 + LUT[c]]` if `LUT[t] <= LUT[c]` (step down)
+or `LUT[5 + LUT[c]]` if `LUT[t] > LUT[c]` (step up), so the live
+state crosses through a fixed permutation of intermediate codes
+rather than jumping directly to the target — analog peripherals
+have forbidden direct mode transitions that the LUT routes
+around.
+
+### Compiler-runtime auto-init records at flash `0x000571F8`
+
+Handler dispatch table (3 × 4-byte function pointers, indexed by
+the type byte of each record):
+
+| Offset | Value | Handler |
+| --- | --- | --- |
+| `0x000571F8` | `0x00056925` | byte-stream copy (`0x00056924`) |
+| `0x000571FC` | `0x00057149` | generic copy (`0x00057148`) |
+| `0x00057200` | `0x00057075` | zero-fill (`auto_init_zero_fill` @ `0x00057074`) |
+
+Record table (2 × 8-byte entries, walked by `_auto_init_table` @
+`0x00056BF0`):
+
+| Offset | Word 0 (record ptr) | Word 1 (dest) | Effect |
+| --- | --- | --- | --- |
+| `0x00057218` | `0x00057208` | `0x20000300` | 264-byte zero-fill of CRC scratch + chip-cursor region |
+| `0x00057220` | `0x00057210` | `0x20000408` | (record body) — secondary zero-fill |
+
+Records carry their type in byte 0 and a 4-byte size at byte 4
+(record body starts at byte 1, so the size is at body+3 — a
+misaligned word read the M4 tolerates by default).
 
 ### SPI command literals at flash `0x000571F0` / `0x000571F4`
 

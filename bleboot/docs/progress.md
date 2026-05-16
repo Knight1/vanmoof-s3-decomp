@@ -9,10 +9,14 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-52 decomp-c / 2 vendor-stock / 3 named / 6 pending
+59 decomp-c / 2 vendor-stock / 2 named / 0 pending
 ```
 
-(`63` total functions in Ghidra at base `0x00056000`.)
+(`63` total functions in Ghidra at base `0x00056000`. **Every
+`FUN_*` is now decoded** — the remaining 2 `named` rows are
+`ResetISR_body` and `Reset_Handler`, both startup stubs preserved
+as such because they live in the asm boundary between TI's
+`SetupTrimDevice` and the auto-init machinery.)
 
 **Major insight (recorded once, applies project-wide):** the BIM
 talks to an **external SPI NOR flash chip via SSI0** — the
@@ -854,7 +858,13 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056E0C` | 44  | `bim_iflash_session_begin`   | `flash.c`     | VIMS shutdown bracket — reads current VIMS mode via `VIMS_TABLE[2]` (`VIMSModeGet`) at `ROM_API_TABLE[22] + 8`; if non-zero, forces MODE_OFF via `VIMS_TABLE[1]` (`VIMSModeSet`) and busy-waits on `VIMSModeGet` returning 0. Returns the *original* mode as `uint8_t` so `bim_iflash_session_end` can decide whether to restore. VIMS_BASE = `0x40034000`. Required around every internal flash op for cache coherency. |
 | decomp-c     | `0x0005703C` | 16  | `bim_iflash_program_via_rom` | `flash.c`     | Dispatches through `FLASH_TABLE[6]` (TI's `FlashProgram(src, addr, count)` at `ROM_API_TABLE[10] + 24`), then clears bit 1 of FLASH+0x24 via the bit-banded alias at `0x42600484` (the "FSM done" latch the ROM expects callers to acknowledge between operations). Returns ROM program status. |
 | decomp-c     | `0x00057090` | 14  | `bim_iflash_session_end`     | `flash.c`     | VIMS restore — if `prev_state` (the saved original mode) is non-zero, forces VIMS back to MODE_ENABLED (1, cache on) via `VIMS_TABLE[1]`. Quirk: always restores to mode 1 regardless of what mode was saved (SPLIT mode 2 would be lost) — fine for the BIM which only runs at boot. |
-| named        | `0x0005717C` | 10  | `bim_get_chip_entry`         | `crc.c` (extern)   | Returns the pointer at `g_chip_table_cursor` (`0x20000408`) — after a successful `bim_spi_probe_chip`, this points at the matched 8-byte chip-table entry inside `BIM_CHIP_TABLE_HEAD` (`0x000571A8`). First dword of every entry is the chip's total capacity in bytes (e.g. `0x04000000` = 64 MB for the installed MX25L51245G). Sole caller: `bim_crc32_buffer` (bounds CRC against the actual chip capacity). 6 B + 4 B literal. |
+| decomp-c     | `0x0005717C` | 6   | `bim_get_chip_entry`         | `crc.c`       | Returns the pointer at `g_chip_table_cursor` (`0x20000408`) — after a successful `bim_spi_probe_chip`, this points at the matched 8-byte chip-table entry inside `BIM_CHIP_TABLE_HEAD` (`0x000571A8`). First dword of every entry is the chip's total capacity in bytes (e.g. `0x04000000` = 64 MB for the installed MX25L51245G). Sole caller: `bim_crc32_buffer` (bounds CRC against the actual chip capacity). 6 B + 4 B literal in OEM; ours is 6 B + 2 B nop pad + 4 B literal = 12 B (one alignment nop). |
+| decomp-c     | `0x00057020` | 24  | `bim_chip_family`            | `chipinfo.c`  | TI driverlib `ChipInfo_GetChipFamily()` mirror. Reads `FCFG1.ICEPICK_DEVICE_ID` at `0x50001318` and extracts PARTNO via `(id << 4) >> 16`; returns `FAMILY_CC13x2_CC26x2 (= 4)` for PARTNO `0xBB41`, else `FAMILY_Unknown (= -1)`. Byte-equivalent size (24 B + 4 B literal in both OEM and ours). Callers: `bim_chip_hw_revision`, `bim_chip_assert_supported`. |
+| decomp-c     | `0x00056bac` | 64  | `bim_chip_hw_revision`       | `chipinfo.c`  | TI driverlib `ChipInfo_GetHwRevision()` mirror. Reads the PG nibble from `FCFG1.ICEPICK_DEVICE_ID`[31:28] and the minor-revision byte from `FCFG1.MINOR_HW_REV` (capped to 0 if > `0x7F`); returns `HWREV_1_0 (= 10)` for PG=0/1, `HWREV_1_1 (= 11) + minor` for PG=2, `HWREV_2_1 (= 21) + minor` for PG=3, else `-1`. **Quirk**: the PG=2 base differs from present-day TI SDK (which uses `HWREV_2_0 = 20`); preserved verbatim against the OEM. +8 B vs OEM (GCC's switch lowering vs OEM's hand-rolled cmp chain). Sole caller: `bim_chip_assert_supported`. |
+| decomp-c     | `0x00057110` | 22  | `bim_chip_assert_supported`  | `chipinfo.c`  | TI driverlib `ThisLibraryIsFor_CC13x2_CC26x2_HwRev20AndLater_HaltIfViolated` mirror. Spins forever unless `bim_chip_family() == 4` AND `bim_chip_hw_revision() >= 20`. **Byte-equivalent** (22 B in both). Sole caller: `SetupTrimDevice` (vendor-stock) as one of the first instructions of cold boot. |
+| decomp-c     | `0x00056490` | 148 | `bim_setup_after_cold_reset_cfg1` | `setup.c` | TI driverlib `SetupAfterColdResetWakeupFromShutDownCfg1(fcfg1_rev)` mirror — first of three cold-reset trim helpers `SetupTrimDevice` runs on a true cold boot. Reads three consecutive FCFG2 trim words at `0x50004FAC..0xFB4`, optionally folds the first into the AON trim shadow at `0x40086256`; writes `0x01000100` to `DDI0_OSC + 0x404` (with dummy readback); calls a three-slot ROM HAPI sub-table at `ROM_API_TABLE[28]` (`0x100001F0`) with `(r5)`, `(fcfg1_rev, r5)`, `(r5)`; folds bits from `FCFG1.MISC_TRIM` (`0x5000140C`) into ADI3 byte+halfword trim at `0x400CB00E`/`0x400CB06A` and two channels of the AON trim shadow at `0x40086209+0x13`/`+0x23`; ends with `bim_setup_adi_step(2)` and a bit-banded set of bit 5 in `FLASH+0x24` via `0x42600494`. +24 B vs OEM total (mainly literal-pool: OEM shares one base for the AON byte writes via `add r1, r4, #imm`, GCC emits separate pool entries). Sole caller: `SetupTrimDevice` (vendor-stock). |
+| decomp-c     | `0x00056da4` | 44  | `bim_setup_adi_step`         | `setup.c`     | ADI sequencer — drives the analog-config state machine at MMIO `0x400C6000` (status) / `0x400C6004` (ack) to `target_code` via the 8-byte stepping LUT at flash `0x000571D8` (`01 02 00 03 02 00 01 03`). Spins until status == ack, then picks `LUT[3 + LUT[cur]]` if `LUT[tgt] <= LUT[cur]` (step down) or `LUT[5 + LUT[cur]]` if `LUT[tgt] > LUT[cur]` (step up). Same total 52 B as OEM (40 B body + 12 B literal here vs 44 B body + 8 B literal in OEM). Sole caller: `bim_setup_after_cold_reset_cfg1` with `target_code = 2`. |
+| decomp-c     | `0x00057074` | 28  | `auto_init_zero_fill`        | `rts_hooks.c` | TI CGT compiler-runtime `_auto_init` record zero-fill handler — one of three slots in the handler dispatch table at flash `0x000571F8` (alongside `0x00056924` byte-stream copy and `0x00057148` generic copy) that `_auto_init_table` (`0x00056BF0`) indexes by record type byte. Reads the 4-byte length at `body + 3` (deliberately misaligned word read; legal under M4's default alignment-trap-disabled config) and writes `length` zero bytes to `dst`. -8 B vs OEM (GCC's `cbz r3; cmp r3, r1; bne` is tighter than OEM's `cmp.w r0, #-1` decrement-and-compare loop). Dispatched indirectly via the handler table; not called directly. |
 | decomp-c     | `0x00057058` | 16  | `bim_iflash_rom_blank_check` | `flash.c`     | TI ROM-API blank-check primitive — dispatches through `FLASH_TABLE[5]` (1-arg helper at `ROM_API_TABLE[10] + 20`) and returns its status (non-zero if the 8 KB page at `addr` is entirely `0xFF`, 0 if any byte differs). Same post-op `BIM_FLASH_ACK_BIT = 0` latch acknowledge as `bim_iflash_program_via_rom`. Sole in-source caller: `bim_iflash_check_slot_blank`. |
 | decomp-c     | `0x00057164` | 8   | `bim_irq_disable_save`       | `flash.c`     | `mrs r0, PRIMASK; cpsid i; bx lr` — disables interrupts, returns prior PRIMASK so the caller can pair-call the matching enable-restore only when it was the one responsible for entering the critical section. `__attribute__((naked))` + inline asm to preserve the 8 B size (GCC would otherwise emit a push/pop frame). Sole caller: `bim_iflash_read` / `bim_iflash_read_paged`. |
 | decomp-c     | `0x00057170` | 8   | `bim_irq_enable_restore`     | `flash.c`     | `mrs r0, PRIMASK; cpsie i; bx lr` — mirror of `bim_irq_disable_save`. Same `naked` + inline asm. Sole caller: `bim_iflash_read` / `bim_iflash_read_paged` (only invoked when the disable observed IRQs were enabled). |
@@ -904,6 +914,25 @@ that vendoring saves more friction than it costs:
 
 - `SetupTrimDevice` → `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c`
 - `_auto_init_table` → TI CGT compiler runtime (`<ccs_install>/tools/compiler/ti-cgt-arm_*/lib/src/_auto_init.c` or similar; not in the SimpleLink SDK itself but ships with the TI ARM Compiler).
+
+In addition, the following decomp-c functions mirror TI driverlib /
+TI CGT internals byte-for-byte in role (independently rewritten in
+C; not classified as `vendor-stock` because the OEM image inlines
+them rather than linking out of ROM, so they're "ours" in the
+rebuild even though the algorithm is upstream):
+
+- `bim_chip_family` / `bim_chip_hw_revision` /
+  `bim_chip_assert_supported` →
+  `source/ti/devices/cc13x2_cc26x2/driverlib/chipinfo.c`.
+- `bim_setup_after_cold_reset_cfg1` /
+  `bim_setup_adi_step` →
+  `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c`
+  (`SetupAfterColdResetWakeupFromShutDownCfg1` + internal
+  ADI helper).
+- `auto_init_zero_fill` → TI CGT `_auto_init` zero-fill
+  variant (one of three handlers in the per-record dispatch
+  table; the byte-stream-copy and generic-copy variants at
+  `0x00056924` and `0x00057148` are the other two).
 
 Mirrors with browseable trees:
 [`jeandudey/simplelink_cc13x2_26x2_sdk`](https://github.com/jeandudey/simplelink_cc13x2_26x2_sdk)
@@ -981,6 +1010,41 @@ Mirrors with browseable trees:
   recv 2 bytes), `bim_spi_wait_wip` (RDSR `0x05` poll loop),
   `bim_spi_flash_read` (READ opcode `0x03` + 24-bit address +
   recv N bytes).
+- ~~`FUN_00057020`, `FUN_00056bac`, `FUN_00057110` (chip-info
+  triad), `FUN_00056490` + `FUN_00056da4` (cold-reset trim),
+  `FUN_00057074` (CGT zero-fill), `bim_get_chip_entry`
+  (extern)~~ — **resolved (May 2026 pass)**: decoded as
+  `bim_chip_family` / `bim_chip_hw_revision` /
+  `bim_chip_assert_supported` (TI driverlib chipinfo mirrors),
+  `bim_setup_after_cold_reset_cfg1` / `bim_setup_adi_step`
+  (TI driverlib `SetupAfterColdResetWakeupFromShutDownCfg1`
+  + ADI sequencer), `auto_init_zero_fill` (TI CGT
+  `_auto_init` zero-fill handler), and `bim_get_chip_entry`
+  promoted to decomp-c in `crc.c`. **`FUN_*` queue is now
+  empty** — every byte of executable code in the BIM has a
+  named owner, every callee an identified semantic. The two
+  remaining `named` rows (`ResetISR_body`, `Reset_Handler`)
+  are startup stubs. Three additional functions were
+  identified by data-pointer reference but not yet expanded:
+  the CGT cinit byte-stream-copy handler at `0x00056924`
+  (decompression / unaligned-block walker) and the CGT
+  generic-copy handler at `0x00057148` (tail-call to
+  `0x000565E0`, itself a small flat memcpy) — both lurk
+  inside Ghidra's "no function found" gaps. Worth surfacing
+  in a future pass if the auto-init machinery becomes
+  load-bearing in the rebuild.
+- **The OEM driverlib version baked into this BIM uses
+  `HWREV_1_1` (= 11) as the PG=2 base in
+  `bim_chip_hw_revision`**, not `HWREV_2_0` (= 20) as
+  present-day TI driverlib does. This means PG2 silicon
+  (returning a value in 11..) trips
+  `bim_chip_assert_supported`'s `>= 20` gate and spin-traps.
+  Either an older numbering convention than current SDK or
+  a TI driverlib bug; preserved verbatim against the OEM.
+  All working bikes must therefore ship PG3 silicon
+  (`HWREV_2_1 + minor`, passes the gate) — consistent with
+  the bike's Apr 2020 build date being well after CC2642R1
+  PG3 silicon was widely available.
 - **Why does the upper 48 MB of the installed 64 MB chip
   appear unreachable from the BIM?** `bim_spi_flash_read`
   uses 3-byte addressing (opcode `0x03`); reaching above

@@ -328,4 +328,45 @@ void bim_launch_image(uint32_t entry);
  * loop. */
 int bim_slot_iterator(int start_slot);
 
+/* Matched-chip entry getter — returns the pointer at SRAM
+ * `0x20000408`, set by a successful `bim_spi_probe_chip` to point
+ * at the matched 8-byte entry in the chip-database table at flash
+ * `0x000571A8`. First dword of every entry is the chip's capacity
+ * in bytes. Sole caller: `bim_crc32_buffer`. */
+const uint8_t *bim_get_chip_entry(void);
+
+/* `ChipInfo_GetChipFamily()` mirror — reads FCFG1 PARTNO and
+ * returns `4` (FAMILY_CC13x2_CC26x2) when running on a CC2642 /
+ * CC13x2 silicon, `-1` otherwise. */
+int32_t bim_chip_family(void);
+
+/* `ChipInfo_GetHwRevision()` mirror — returns a small int encoding
+ * silicon revision: `10` for PG1.0, `11+minor` for PG2, `21+minor`
+ * for PG3, `-1` for unsupported. The PG2 base differs from
+ * present-day TI driverlib (kept verbatim against the OEM image). */
+int32_t bim_chip_hw_revision(void);
+
+/* Driverlib safety net: spins forever unless `bim_chip_family() ==
+ * 4` and `bim_chip_hw_revision() >= 20`. Called by `SetupTrimDevice`
+ * before any trim writes touch the silicon. */
+void bim_chip_assert_supported(void);
+
+/* `SetupAfterColdResetWakeupFromShutDownCfg1(fcfg1_rev)` mirror —
+ * first of three ROM-staged cold-reset trim helpers
+ * `SetupTrimDevice` runs on a true cold boot. Pokes FCFG2/FCFG1
+ * readouts into ADI3 + DDI0 trim shadows and forwards `fcfg1_rev`
+ * to a three-call state machine at ROM `0x100001F0`. */
+void bim_setup_after_cold_reset_cfg1(uint32_t fcfg1_rev);
+
+/* ADI sequencer — drives the analog-config state machine at MMIO
+ * `0x400C6000` to `target_code` via a stepping LUT at flash
+ * `0x000571D8`. Sole caller: `bim_setup_after_cold_reset_cfg1`
+ * with `target_code = 2`. */
+void bim_setup_adi_step(uint32_t target_code);
+
+/* TI CGT compiler-runtime zero-fill handler for `_auto_init_table`.
+ * Dispatched indirectly via the handler table at flash
+ * `0x000571F8`; do not call from BIM code. */
+void auto_init_zero_fill(const void *body, uint8_t *dst);
+
 #endif

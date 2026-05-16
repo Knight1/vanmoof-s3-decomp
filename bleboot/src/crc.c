@@ -97,8 +97,12 @@ uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
  * (see flash.c chip-table layout commentary). `bim_crc32_buffer`
  * uses this to bound a CRC operation to the actual installed
  * chip's size — refusing to read past the chip's last addressable
- * byte. */
-extern const uint8_t *bim_get_chip_entry(void);
+ * byte. OEM shape: `ldr r0, =g_chip_table_cursor; ldr r0, [r0]; bx
+ * lr` (6 B + 4 B PC-relative literal). */
+const uint8_t *bim_get_chip_entry(void)
+{
+    return *(const uint8_t *const *)0x20000408u;
+}
 
 uint32_t bim_crc32_image(uint32_t start_page,
                           uint32_t chunk_size,
