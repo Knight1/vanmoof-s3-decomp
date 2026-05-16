@@ -95,6 +95,59 @@ int bim_flash_prepare(void);
  * fire-and-forget (no status return). */
 void bim_flash_release(void);
 
+/* PRCM peripheral + power-domain teardown. Final step of
+ * `bim_flash_release`: reconfigures peripheral clocks for two
+ * bitmasks (`0x100`, `0x500`) bracketed by the CLKLOADCTL kick,
+ * then powers off PRCM domain mask `6` (SERIAL | PERIPH) with a
+ * status-poll retry loop. Uses the same ROM dispatch slot at
+ * `0x100001B8` as `bim_panic_prep`. Not called from outside
+ * `bim_flash_release` in this build. */
+void bim_periph_power_off(void);
+
+/* DIO4 set / clear — fine-grained "flash op in flight"
+ * indicator on the BLE PCB. Bracket every individual flash MMIO
+ * access across the BIM (~13 set sites, ~8 clear sites). Distinct
+ * from DIO3 (the coarser "flash session active" LED that
+ * `bim_flash_prepare` lights for the whole session). Both write
+ * `1<<4` to the corresponding GPIO `DOUT{SET,CLR}31_0`
+ * register. */
+void dio4_set(void);
+void dio4_clear(void);
+
+/* SSI0 + PRCM bring-up — configures SSI0 (SPI master at
+ * `0x40000000`) for talking to the external SPI NOR flash chip
+ * that stages OAD images. Powers on SERIAL+PERIPH PRCM domains,
+ * enables two peripheral run masks (`0x500`, `0x100`), resets
+ * SSI0 interrupt state, runs `SSIConfigSetExpClk`-equivalent
+ * (48 MHz refclk, 8-bit data, `bit_rate` arg), does an IOC/DMA
+ * setup ROM call with `cfg`, enables SSI0, and drains stale
+ * RX. Called once at the start of every BIM flash session via
+ * `bim_flash_prepare(4_000_000, 9)`. */
+void bim_ssi_init(uint32_t bit_rate, uint32_t cfg);
+
+/* SPI flash "Deep Power Down" — sends the JEDEC standard `0xB9`
+ * opcode to the external SPI NOR flash, telling it to enter
+ * low-power sleep. Issued by `bim_flash_release` as the first
+ * teardown step. Standard opcode across Winbond W25Q, Micron
+ * N25Q, Macronix MX25, etc. */
+void bim_spi_deep_power_down(void);
+
+/* SSI busy-wait, bounded to 10 polls. Loops calling the SSI
+ * idle-probe `FUN_0005698C` until it returns 0 (idle), giving
+ * up after 10 attempts. Called by `bim_flash_release` after
+ * `bim_spi_deep_power_down` to drain in-flight SSI activity
+ * before peripheral teardown. */
+void bim_spi_wait_idle(void);
+
+/* Image launcher — terminal handoff for all three OAD scan
+ * paths. Reloads SP and PC from `*(entry + 4)` (both registers
+ * receive the same word — see oad.c commentary on the OEM's
+ * off-by-one inline-asm quirk) and `blx`-es into the launched
+ * image's Reset_Handler. Treated as returning in case the
+ * launch is staged; in this build all real launches are
+ * terminal. */
+void bim_launch_image(uint32_t entry);
+
 /* Slot iterator — finds the next slot (4 KB stride) starting at
  * `start_slot` whose first 8 bytes match "OAD NVM1". Returns the
  * slot index (0..43) on a hit, `~1` (-2) once `slot` advances past

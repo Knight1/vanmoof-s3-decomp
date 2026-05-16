@@ -48,25 +48,219 @@
 
 #define BIM_FLASH_ROM_TABLE   (*(const uintptr_t *const *)0x100001B4u)
 
-extern int  FUN_000563C8(uint32_t a, uint32_t b);
-extern void FUN_00057138(void);
+/* ROM dispatch slot at 0x100001B8 — same slot bim_panic_prep uses
+ * for GPIO clock bring-up. The pointed-to function-pointer table
+ * exposes PRCM operations: bim_panic_prep calls indices [5], [7],
+ * [13]; bim_periph_power_off (below) calls [6], [8], [13];
+ * bim_ssi_init calls [5], [7], [13]. Slot [13] is consistently
+ * the read/status accessor; [5]/[6] are PowerDomainOn/Off;
+ * [7]/[8] are PeripheralRunEnable/Disable. */
+#define BIM_PRCM_ROM_TABLE_PTR ((const uintptr_t *const *)0x100001B8u)
+
+/* SSI (Synchronous Serial Interface) ROM dispatch slot. Used by
+ * bim_ssi_init: slot [0] = SSIConfigSetExpClk-equivalent (6-arg
+ * config: base, refclk, protocol, mode, bit_rate, data_width);
+ * slot [4] = data-fetch / FIFO drain (called in a loop until it
+ * returns 0). Sole user in this build. */
+#define BIM_SSI_ROM_TABLE_PTR  ((const uintptr_t *const *)0x100001C4u)
+
+/* SSI0 peripheral at 0x40000000 — the BIM uses SSI0 as the SPI
+ * master to talk to an external SPI NOR flash chip that stages
+ * OAD update images. The internal CC2642 flash holds only the
+ * BIM itself (this 8 KB page); candidate images live on the
+ * external SPI flash and are read/written through SSI0. This is
+ * the TI OAD "external flash" build configuration.
+ *
+ * Selected register offsets (subset that this file touches):
+ *   0x04 SSI_CR1   — Control Register 1 (bit 1 SSE = enable)
+ *   0x14 SSI_IM    — Interrupt Mask (low 4 bits = enable flags)
+ *   0x20 SSI_ICR   — Interrupt Clear */
+#define SSI0_BASE              0x40000000u
+#define SSI0_CR1               (*(volatile uint32_t *)(SSI0_BASE + 0x04u))
+#define SSI0_IM                (*(volatile uint32_t *)(SSI0_BASE + 0x14u))
+#define SSI0_ICR               (*(volatile uint32_t *)(SSI0_BASE + 0x20u))
+#define SSI0_CR1_SSE           (1u << 1)
+
+/* PRCM_O_CLKLOADCTL at PRCM_BASE (0x40082000) + 0x28. Bit 0 = LOAD
+ * (trigger), bit 1 = LOAD_DONE (ack). The write-through alias at
+ * 0x60082028 is the canonical "kick" path; reads come back through
+ * the normal alias at 0x40082028. */
+#define PRCM_CLKLOADCTL_W      (*(volatile uint32_t *)0x60082028u)
+#define PRCM_CLKLOADCTL_R      (*(volatile uint32_t *)0x40082028u)
+#define PRCM_CLKLOADCTL_LOAD   (1u << 0)
+#define PRCM_CLKLOADCTL_DONE   (1u << 1)
+
 extern int  FUN_00056D6A(void);
 extern int  FUN_0005698C(void);
+extern int  FUN_00056EA4(const void *src, uint32_t n);
 
-extern void FUN_000570C8(void);
-extern void FUN_000570E2(void);
-extern void FUN_00056A38(void);
+/* DIO4 set / clear (`FUN_00057138` and `FUN_00057188` in the OEM).
+ * Bracket every individual flash MMIO operation across the BIM —
+ * `dio4_set` has ~13 call sites, `dio4_clear` ~8. DIO4 is the
+ * fine-grained "flash op in flight" indicator, distinct from
+ * DIO3 (the coarser "flash session active" LED that
+ * `bim_flash_prepare` lights). The asymmetric caller count
+ * suggests some helpers nest the bracket and let an outer caller
+ * issue the matching clear.
+ *
+ * Both are leaf functions (no callees). The OEM's `dio4_set`
+ * uses a literal-pool-sharing trick: load the DOUTCLR address
+ * (`0x400220A0`, which is the canonical pool constant in this
+ * image, shared with every DOUTCLR call site) and subtract 16 to
+ * derive DOUTSET (`0x40022090`). GCC doesn't replicate that
+ * trick (it loads `0x40022090` directly with its own literal),
+ * so `dio4_set` is 4 instructions + literal (12 B total) in our
+ * build vs 5 instructions (10 B) in the OEM, with the OEM's
+ * 4-byte literal shared into surrounding pool space at flash
+ * `0x57144`. `dio4_clear` matches more closely — same 4
+ * instructions + 4-byte literal shape. */
+__attribute__((noinline))
+void dio4_set(void)
+{
+    GPIO_DOUTSET31_0 = (1u << 4);
+}
+
+__attribute__((noinline))
+void dio4_clear(void)
+{
+    GPIO_DOUTCLR31_0 = (1u << 4);
+}
+
+/* SSI0 + PRCM bring-up (`FUN_000563C8` in the OEM, 172 B). Called
+ * once by `bim_flash_prepare` with args `(4_000_000, 9)` —
+ * configures SSI0 at 4 MHz SPI bit rate with config word 9
+ * (likely an IOC/DMA pin-routing parameter handed to the third
+ * ROM call). The TI BIM in external-flash OAD configuration uses
+ * SSI0 as the SPI master to talk to an external SPI NOR flash
+ * chip that stages OAD images.
+ *
+ * Sequence:
+ *
+ *   1. Power on the SERIAL + PERIPH PRCM domains: call
+ *      `prcm_table[5](6)`, then poll `prcm_table[13](6) == 1`
+ *      (= `PRCM_DOMAIN_POWER_ON`) until ready. The PRCM table
+ *      is the same `0x100001B8` sub-table that
+ *      `bim_periph_power_off` uses for the inverse teardown.
+ *
+ *   2. Two `prcm_table[7](mask)` calls (peripheral run-enable)
+ *      with masks `0x500` and `0x100`, each followed by the
+ *      canonical CLKLOADCTL kick-and-wait (`*0x60082028 = 1`,
+ *      spin until `*0x40082028 & 2`). Mirrors `bim_periph_power_off`'s
+ *      use of slot [8] for the inverse reconfigure.
+ *
+ *   3. Reset SSI0 interrupt state: clear the low 4 bits of
+ *      SSI0_IM (`0x40000014`) and write 3 to SSI0_ICR
+ *      (`0x40000020`).
+ *
+ *   4. Configure SSI0 via the SSI ROM table at `0x100001C4`,
+ *      slot [0] — equivalent to TI driverlib's
+ *      `SSIConfigSetExpClk(SSI0_BASE, ssi_clk=48_000_000,
+ *      protocol=0, mode=0, bit_rate=arg0, data_width=8)`. The
+ *      48 MHz constant matches CC2642R1F's HF XOSC.
+ *
+ *   5. Third ROM call via the table at `0x100001B4` (the same
+ *      table `bim_flash_prepare` uses for slot [15]), slot
+ *      [17], with args `(SSI0_BASE, 6, 5, -1, arg1)` — likely
+ *      IOC pin routing or DMA setup for the SSI0 lines.
+ *
+ *   6. Enable SSI0: set the SSE bit (1<<1) of SSI0_CR1
+ *      (`0x40000004`).
+ *
+ *   7. Drain any stale RX data: loop calling
+ *      `ssi_table[4](SSI0_BASE, &scratch)` until it returns 0.
+ *
+ * 172 B in OEM; our reconstruction is behaviour-equivalent but
+ * not byte-equivalent (GCC's register allocation and literal-
+ * pool placement differ; OEM uses high regs r8/r9 to cache args
+ * across the prologue, GCC chooses different scratch regs). */
+void bim_ssi_init(uint32_t bit_rate, uint32_t cfg)
+{
+    const uintptr_t *prcm = (const uintptr_t *)*BIM_PRCM_ROM_TABLE_PTR;
+
+    ((void (*)(uint32_t))prcm[5])(6u);
+    while ((((uint32_t (*)(uint32_t))prcm[13])(6u)) != 1u) { }
+
+    ((void (*)(uint32_t))prcm[7])(0x500u);
+    PRCM_CLKLOADCTL_W = PRCM_CLKLOADCTL_LOAD;
+    while ((PRCM_CLKLOADCTL_R & PRCM_CLKLOADCTL_DONE) == 0u) { }
+
+    ((void (*)(uint32_t))prcm[7])(0x100u);
+    PRCM_CLKLOADCTL_W = PRCM_CLKLOADCTL_LOAD;
+    while ((PRCM_CLKLOADCTL_R & PRCM_CLKLOADCTL_DONE) == 0u) { }
+
+    SSI0_IM &= ~0xFu;
+    SSI0_ICR = 3u;
+
+    const uintptr_t *ssi = (const uintptr_t *)*BIM_SSI_ROM_TABLE_PTR;
+    ((void (*)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))ssi[0])(
+        SSI0_BASE, 48000000u, 0u, 0u, bit_rate, 8u);
+
+    const uintptr_t *flash_t = (const uintptr_t *)*BIM_FLASH_ROM_TABLE;
+    ((void (*)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))flash_t[17])(
+        SSI0_BASE, 6u, 5u, 0xFFFFFFFFu, cfg);
+
+    SSI0_CR1 |= SSI0_CR1_SSE;
+
+    uint32_t scratch;
+    while (((int (*)(uint32_t, uint32_t *))ssi[4])(SSI0_BASE, &scratch) != 0) { }
+}
+
+/* SPI flash "Deep Power Down" command (`FUN_000570C8` in the
+ * OEM, 26 B). Sole caller: `bim_flash_release`. Sends the JEDEC
+ * standard `0xB9` opcode to the external SPI NOR flash, telling
+ * it to enter low-power sleep. Standard across Winbond W25Q,
+ * Micron N25Q, Macronix MX25, etc. — exit is via `0xAB`
+ * (Release from Deep Power Down), which is presumably what
+ * `bim_ssi_init`'s peripheral setup triggers on the next session.
+ *
+ * Brackets the 1-byte SSI write with `dio4_clear` / `dio4_set`
+ * — i.e., the DIO4 op-indicator is *low* during the DPD command
+ * transmission and *high* otherwise. That's the inverse of the
+ * usual "on while busy" pattern; in this BIM, DIO4 is held high
+ * across the whole session and only blips low for individual
+ * sub-ops. The `0xB9` byte lives on the stack (in the r3 slot of
+ * the prologue's push) for the duration of the 1-byte write. */
+void bim_spi_deep_power_down(void)
+{
+    uint8_t opcode = 0xB9u;
+    dio4_clear();
+    FUN_00056EA4(&opcode, 1u);
+    dio4_set();
+}
+
+/* SSI busy-wait, bounded to 10 polls (`FUN_000570E2` in the
+ * OEM, 24 B). Called by `bim_flash_release` immediately after
+ * `bim_spi_deep_power_down` to drain any in-flight SSI activity
+ * before powering off the peripheral domains. Also called from
+ * other flash-write helpers (e.g., `FUN_00056EA4` internally)
+ * after each SSI transaction.
+ *
+ * Polls `FUN_0005698C` up to 10 times; the probe returns
+ * non-zero while the SSI is still busy and 0 when idle. The
+ * bound protects against hangs if the SSI never reports idle —
+ * after 10 attempts the function returns regardless, letting
+ * the caller proceed with teardown. */
+void bim_spi_wait_idle(void)
+{
+    uint8_t tries = 0;
+    while (tries < 10u) {
+        if (FUN_0005698C() == 0) {
+            return;
+        }
+        tries = (uint8_t)(tries + 1u);
+    }
+}
 
 int bim_flash_prepare(void)
 {
-    FUN_000563C8(0x003D0900u, 9u);
+    bim_ssi_init(0x003D0900u, 9u);   /* 4 MHz SPI bit rate, cfg = 9 */
 
     ((void (*)(uint32_t))BIM_FLASH_ROM_TABLE[15])(4u);
     ((void (*)(uint32_t))BIM_FLASH_ROM_TABLE[15])(3u);
 
     GPIO_DOUTSET31_0 = DIO_FLASH_BUSY_LED;
 
-    FUN_00057138();
+    dio4_set();
 
     if (FUN_00056D6A() == 0) {
         bim_flash_release();
@@ -107,10 +301,65 @@ int bim_flash_prepare(void)
  *      delegates to `FUN_000563C8`.
  *
  * No return value: every flash path treats release as fire-and-forget. */
+/* PRCM peripheral + power-domain teardown (`FUN_00056A38` in the
+ * OEM). Final step of `bim_flash_release`, called once per flash
+ * transaction. Three operations, all via the PRCM ROM dispatch
+ * slot at `0x100001B8` (same slot `bim_panic_prep` uses for the
+ * inverse "bring up GPIO" sequence):
+ *
+ *   1. Two `prcm_table[8](mask)` calls (masks `0x100`, then
+ *      `0x500`), each followed by the canonical CLKLOADCTL "kick
+ *      and wait for LOAD_DONE" idiom: write 1 to the write-through
+ *      alias `0x60082028`, then spin-read `0x40082028` until bit 1
+ *      sets. Slot [8] takes a peripheral bitmask and reconfigures
+ *      run/sleep clock state for that mask — the two masks together
+ *      cover the set of peripherals the flash session brought up.
+ *
+ *   2. A retry loop pairing `prcm_table[6](6)` with
+ *      `prcm_table[13](6)`. Slot [6] takes a power-domain mask (6 =
+ *      SERIAL | PERIPH in PRCM_DOMAIN_* encoding) and initiates a
+ *      power-off. Slot [13] reads the resulting domain status; loop
+ *      exits when the status equals `2`. The retry covers the case
+ *      where the off-request raced with an in-flight access — the
+ *      OEM re-issues both calls until the domain reports ready.
+ *
+ * Slot [13] is the same accessor `bim_panic_prep` uses (with arg
+ * `4`); confirms [13] is consistently the PRCM read/status entry
+ * across both callers.
+ *
+ * Asymmetry with `bim_flash_prepare`: prepare doesn't directly
+ * touch PRCM — it delegates clock setup to `FUN_000563C8` (still
+ * pending). So this teardown likely undoes work that
+ * `FUN_000563C8` did transitively, plus reasserts a sleep-friendly
+ * power-domain state between flash transactions to save energy
+ * during BIM execution. */
+void bim_periph_power_off(void)
+{
+    const uintptr_t *prcm = (const uintptr_t *)*BIM_PRCM_ROM_TABLE_PTR;
+
+    ((void (*)(uint32_t))prcm[8])(0x100u);
+    PRCM_CLKLOADCTL_W = PRCM_CLKLOADCTL_LOAD;
+    while ((PRCM_CLKLOADCTL_R & PRCM_CLKLOADCTL_DONE) == 0u) { }
+
+    prcm = (const uintptr_t *)*BIM_PRCM_ROM_TABLE_PTR;
+    ((void (*)(uint32_t))prcm[8])(0x500u);
+    PRCM_CLKLOADCTL_W = PRCM_CLKLOADCTL_LOAD;
+    while ((PRCM_CLKLOADCTL_R & PRCM_CLKLOADCTL_DONE) == 0u) { }
+
+    uint32_t status;
+    do {
+        prcm = (const uintptr_t *)*BIM_PRCM_ROM_TABLE_PTR;
+        ((void (*)(uint32_t))prcm[6])(6u);
+
+        prcm = (const uintptr_t *)*BIM_PRCM_ROM_TABLE_PTR;
+        status = ((uint32_t (*)(uint32_t))prcm[13])(6u);
+    } while (status != 2u);
+}
+
 void bim_flash_release(void)
 {
-    FUN_000570C8();
-    FUN_000570E2();
+    bim_spi_deep_power_down();
+    bim_spi_wait_idle();
     GPIO_DOUTCLR31_0 = DIO_FLASH_OP_LED;
-    FUN_00056A38();
+    bim_periph_power_off();
 }

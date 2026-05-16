@@ -67,11 +67,7 @@ _Static_assert(sizeof(oad_short_header_t) == 44,
  *   FUN_00056f74 — 8-byte header sniff; returns 1 if it looks like
  *                  a real OAD header start.
  *   bim_flash_release — the flash-session-end epilogue (now decoded).
- *   FUN_00057156 — image launcher / entry handoff; ABI is unusual
- *                  (loads SP from `*(entry + 4)` and `blx`-es the
- *                  same word — see panic.c notes). Treated as
- *                  returning normally in case the launch is staged
- *                  rather than terminal. */
+ *   bim_launch_image — image entry handoff (now decoded). */
 extern void     FUN_000569e4(uint32_t off, uint32_t n, void *dst);
 extern uint32_t FUN_00056cb8(uint32_t slot_base, uint32_t image_size);
 extern int      FUN_00056714(uint32_t slot_base, uint32_t image_size, uint32_t image_base);
@@ -79,7 +75,6 @@ extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n)
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
 extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
 extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
-extern void     FUN_00057156(uint32_t entry);
 
 /* "OAD NVM1" — the TI OAD image-identifier magic string that
  * tags every legitimate OAD image header. The OEM keeps a
@@ -96,6 +91,70 @@ extern void     FUN_00057156(uint32_t entry);
  * `bim_slot_iterator` matches the OEM `bl` sequence. */
 static const uint8_t OAD_MAGIC_A[8] = "OAD NVM1";
 static const uint8_t OAD_MAGIC_B[8] = "OAD NVM1";
+
+/* Image launcher (`FUN_00057156` in the OEM). Called as the
+ * terminal handoff from all three OAD scan paths
+ * (`bim_full_scan_and_launch`, `bim_quick_scan_and_launch`,
+ * `bim_verify_and_launch_image`) once a candidate image has
+ * passed CRC validation.
+ *
+ * Bytes (14): `08 b5 00 1d d0 f8 00 d0 00 68 80 47 08 bd` →
+ *
+ *     push  {r3, lr}
+ *     adds  r0, r0, #4         ; r0 = entry + 4
+ *     ldr.w sp, [r0]            ; sp = *(entry + 4)
+ *     ldr   r0, [r0]            ; r0 = *(entry + 4)  -- SAME word
+ *     blx   r0
+ *     pop   {r3, pc}
+ *
+ * Calling convention quirk worth flagging: the OEM loads BOTH
+ * sp and r0 from the SAME memory location (`*(entry + 4)`), so
+ * the new stack pointer ends up holding the called function's
+ * own address rather than a sensible stack top. This only works
+ * because the called image's `Reset_Handler` is expected to
+ * reload SP from its own vector-table[0] (or an equivalent
+ * `__stack_top` literal) as one of its very first instructions,
+ * which is standard for ARM Cortex-M startup code. The OEM
+ * launcher therefore *assumes* the launched image conforms to
+ * that convention. The interpretation that fits the byte
+ * sequence is: `entry` was intended to point to the image's
+ * vector table, and the source was a sequence like
+ *
+ *     ((void (*)(void))((uint32_t *)entry)[1])();
+ *
+ * with a manual `sp` reload that was meant to read
+ * `((uint32_t *)entry)[0]` (initial SP, vector[0]) but ended
+ * up reading `[1]` (Reset_Handler, vector[1]) instead — likely
+ * an off-by-one in the original hand-written inline asm. The
+ * mistake is silent because Reset_Handler corrects SP
+ * immediately. Preserved verbatim here as a naked function with
+ * inline asm — this is the only way to emit the exact OEM
+ * bytes (no portable C can write `sp` directly).
+ *
+ * Treated as returning normally: the OEM uses `blx`/pop rather
+ * than `bx`, so if the called image's `Reset_Handler` returns
+ * via `bx lr`, control resumes in the caller. In this BIM build
+ * that path is dead — Reset_Handler implementations in the
+ * shipping images don't return — but the launcher itself is
+ * structured to handle it. */
+__attribute__((naked, noinline))
+void bim_launch_image(uint32_t entry)
+{
+    (void)entry;
+    __asm volatile (
+        "push  {r3, lr}        \n\t"
+        /* `adds r0, r0, #4` — force the 3-operand T1 encoding
+         * (`0x1d00`). GNU `as` would otherwise pick the
+         * 2-operand T2 form (`0x3004`); both are 16-bit ADDS
+         * with the same semantics, but only T1 matches the OEM
+         * byte sequence. */
+        ".short 0x1d00         \n\t"
+        "ldr.w sp, [r0]        \n\t"
+        "ldr   r0, [r0]        \n\t"
+        "blx   r0              \n\t"
+        "pop   {r3, pc}        \n\t"
+    );
+}
 
 static int oad_magic_walk(const uint8_t *hdr8, const uint8_t *ref)
 {
@@ -208,7 +267,7 @@ void bim_verify_and_launch_image(void)
     if (hdr.image_crc == crc) {
         status = 0xFEu;
         FUN_00056e72(page, 17, &status, 1);
-        FUN_00057156(hdr.entry);
+        bim_launch_image(hdr.entry);
     }
 
     bim_flash_release();
@@ -219,7 +278,7 @@ void bim_verify_and_launch_image(void)
  * then a 44-byte short header. If the status byte (offset 17) is
  * `0xFE` (already promoted to "verified" by an earlier full scan) or
  * `0xFF` (pristine, never touched), launches the entry word via
- * `FUN_00057156`. `0xFC` ("rejected") and anything else cause the
+ * `bim_launch_image`. `0xFC` ("rejected") and anything else cause the
  * slot to be skipped. Called from bim_dispatch when the full scan
  * already returned 0 (no launch happened) — this is the fast path
  * that trusts the promotion marker without re-verifying.
@@ -254,11 +313,11 @@ void bim_quick_scan_and_launch(int start_slot)
             goto next;
         }
         if (buf.hdr.status == 0xFFu) {
-            FUN_00057156(buf.hdr.entry);
+            bim_launch_image(buf.hdr.entry);
             goto next;
         }
         if (buf.hdr.status == 0xFEu) {
-            FUN_00057156(buf.hdr.entry);
+            bim_launch_image(buf.hdr.entry);
             /* fall through to next */
         }
 
@@ -287,7 +346,7 @@ void bim_quick_scan_and_launch(int start_slot)
  *   5. On hash match: writes `0xFE` to slot+17 (verified marker) and
  *      to `image_base>>13`'s flash page at offset 17 (so the image
  *      itself carries the same marker), then launches via
- *      `FUN_00057156(hdr2[28])`.
+ *      `bim_launch_image(hdr2[28])`.
  *   6. On hash mismatch: writes `0xFC` to slot+17 (rejected).
  *
  * Returns -1 if `bim_flash_prepare` fails, otherwise
@@ -401,7 +460,7 @@ int bim_full_scan_and_launch(void)
             uint8_t f = flags_sec;
             if ((f & ~1u) == 0u || f == 3u || f == 7u) {
                 bim_flash_release();
-                FUN_00057156(entry_sec);
+                bim_launch_image(entry_sec);
             }
         } else {
             status = 0xFCu;
