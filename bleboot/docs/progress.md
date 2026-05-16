@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-34 decomp-c / 2 vendor-stock / 2 named / 25 pending
+38 decomp-c / 2 vendor-stock / 5 named / 18 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -104,21 +104,29 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
-- **`flash.c`** — Now hosts 16 functions covering the full
-  external SPI flash session, end-to-end: session begin/end
+- **`flash.c`** — Now hosts 19 functions covering the full
+  external SPI flash session and the internal CC2642 flash
+  program path, end-to-end: session begin/end
   (`bim_flash_prepare`, `bim_flash_release`), PRCM teardown
   (`bim_periph_power_off`), SSI0 bring-up (`bim_ssi_init`),
   DPD bracket (`bim_spi_deep_power_down`, `bim_spi_release_from_dpd`),
   chip identification (`bim_spi_read_rems_id`,
   `bim_spi_probe_chip`), SPI primitives (`bim_spi_send_bytes`,
   `bim_spi_recv_bytes`, `bim_ssi_rx_drain`), status polling
-  (`bim_spi_wait_wip`), the leaf flash read primitive
-  (`bim_spi_flash_read`), DPD-landed verification
-  (`bim_spi_wait_idle`), and the two /CS toggle leaves
+  (`bim_spi_wait_wip`), the leaf SPI flash read / write-enable /
+  page-program primitives (`bim_spi_flash_read`,
+  `bim_spi_write_enable`, `bim_spi_flash_program`), DPD-landed
+  verification (`bim_spi_wait_idle`), the two /CS toggle leaves
   (`dio4_set`, `dio4_clear` — confirmed to drive the SPI
-  flash chip-select line, not an indicator LED). The /CS
-  pair is widely shared across the flash subsystem:
-  `dio4_set` has 13 call sites, `dio4_clear` has 8.
+  flash chip-select line, not an indicator LED), and the
+  internal-flash program wrapper (`bim_iflash_program`)
+  delegating to three ROM-API helpers
+  (`bim_iflash_session_begin`,
+  `bim_iflash_program_via_rom`,
+  `bim_iflash_session_end` — all renamed in Ghidra,
+  C-translation pending). The /CS pair is widely shared
+  across the flash subsystem: `dio4_set` has 13 call sites,
+  `dio4_clear` has 8.
 - **`bim_ssi_init` (`0x000563C8`)** — 172 B in OEM. Behaviour-
   equivalent reconstruction. The big "what is this BIM really
   doing" function. Three external resources brought up in
@@ -275,7 +283,104 @@ layout in the TI SDK shipping CCS / IAR variants.
   READ4B `0x13`, not present in the BIM). Either the OAD
   slots are confined to the first 16 MB, or the upper
   bank is owned by `bleware` for some other purpose
-  (BLE pairing, app NV, log buffer).
+  (BLE pairing, app NV, log buffer). **ABI fix (Apr 2026):**
+  earlier decomp passes claimed signature `(addr, dst, len)`
+  — the actual OEM ABI is `(addr, len, dst)`. The existing
+  oad.c / crc.c call sites had it right; only the C
+  reconstruction was wrong. Now corrected.
+- **`bim_spi_write_enable` (`0x00056ED4`)** — 24 B + 4 B
+  literal. Sends the JEDEC standard `0x06` opcode (loaded
+  from flash literal at `0x000571F5`, byte 1 of the shared
+  opcode word at `0x000571F4`). Brackets the 1-byte SSI
+  send with `dio4_clear` / `dio4_set`. Returns 0 on
+  success, -3 on send error. SPI NOR chips require WREN
+  before every program/erase/write-status to arm the WEL
+  (Write Enable Latch); WEL clears automatically after
+  each program/erase. Sole in-source caller:
+  `bim_spi_flash_program`. **Earlier note correction**:
+  byte 1 of the literal was previously called "dead in
+  this build" — wrong, this is the caller.
+- **`bim_spi_flash_program` (`0x000567A0`)** — 132 B.
+  External SPI flash page-program. Writes `len` bytes from
+  `src` to `addr`, splitting the write at every 256-byte
+  page boundary. Per chunk: `bim_spi_wait_wip` →
+  `bim_spi_write_enable` → build PP cmd `[0x02, addr_hi,
+  addr_mid, addr_lo]` (24-bit big-endian addressing,
+  same 16 MB limit as `bim_spi_flash_read`) → assert /CS
+  → send 4-byte cmd → send chunk data → release /CS.
+  Returns 1 on success, 0 on any error. Caller must
+  ensure target bytes are pre-erased (`0xFF`); typically
+  used for status-marker writes that flip individual
+  bits `1`→`0` (e.g. `0xFF` → `0xFE` for "verified",
+  `0xFF` → `0xFC` for "rejected"). Does NOT wait for the
+  program to complete before returning — the next
+  caller's `bim_spi_wait_wip` handles that. Sole caller:
+  `bim_full_scan_and_launch` (4 sites — transient `0xFC`
+  and final `0xFE` markers on the OAD staging slots in
+  external SPI flash).
+- **`bim_iflash_program` (`0x00056E72`)** — 50 B. Internal
+  CC2642 flash program. Writes `count` bytes from `src` to
+  internal flash at address `(slot << 13) + offset`.
+  8 KB stride per slot matches the CC2642R1F erase-page
+  size, so each slot is one erasable page in the 344 KB
+  bleware region (slots 0..43 → `0x00000000..0x00055FFF`).
+  Three steps, all delegated to ROM-API helpers:
+  (1) `bim_iflash_session_begin` (`FUN_00056E0C`) brings
+  up the internal flash controller, returns an opaque
+  "previous state" handle for the matching tear-down;
+  (2) `bim_iflash_program_via_rom` (`FUN_0005703C`) calls
+  ROM table at `0x100001A8` slot [6] (TI's
+  `FlashProgram(src, dst, count)` driverlib equivalent)
+  and clears MMIO `0x42600484` (a status-clear or
+  VIMS-side gate); (3) `bim_iflash_session_end`
+  (`FUN_00057090`) tears down the session iff bring-up
+  changed state. Returns 0 on success, `0xFF` on
+  failure (matches the pre-erased flash byte value —
+  "byte didn't take" reads back as `0xFF`). Used by
+  the OAD scan paths to drop status markers into the
+  executable image's own internal-flash page —
+  complement to `bim_spi_flash_program` which writes
+  the corresponding marker to the OAD staging slot on
+  external SPI flash. Callers:
+  `bim_full_scan_and_launch` (1 site, `slot+17` marker),
+  `bim_verify_and_launch_image` (1 site, BIM's own
+  header marker).
+  **Major insight (recorded once):** the BIM uses BOTH
+  external SPI flash (OAD staging buffer, 4 KB stride
+  per `bim_spi_flash_read` calls in scan/verify) AND
+  internal CC2642 flash (executable image storage,
+  8 KB stride per `bim_iflash_program` slot index). The
+  full-scan promote sequence writes a status marker on
+  BOTH (`bim_spi_flash_program` to external,
+  `bim_iflash_program` to internal). The earlier
+  description of "the BIM keeps a tighter grid for
+  metadata" was misleading — the two strides reflect
+  different storage media, not different metadata
+  granularities.
+- **`bim_oad_find_image_addr` (`0x00056CB8`)** — 60 B.
+  OAD image-segment-table walker. Given the base
+  address of an OAD image header on external SPI flash
+  and the header's total length, walks the segment-
+  descriptor list (12-byte entries starting at offset
+  `0x2C`) looking for a type-1 (contiguous-image)
+  segment, returning its `seg_value` (load address).
+  TI's `imgHdr_t` segment format: byte 0 = `seg_type`,
+  bytes 4..7 = `seg_len` (advance to next entry), bytes
+  8..11 = `seg_value` (load address for type 1). Loop
+  termination: SPI read failure, type-1 hit, `seg_len
+  == 0` sentinel, or offset >= `hdr_limit`. Returns
+  `0xFFFFFFFF` on no-match. Used by both
+  `bim_verify_and_launch_image` and
+  `bim_full_scan_and_launch` to compute the executable
+  load address before integrity check. The OEM holds
+  the default `-1` return value in `r8` across the
+  whole loop and only updates it on a type-1 hit; we
+  mirror that with a single result variable. The OEM
+  also has a curious `str r0, [sp, #0]; ldmia sp!,
+  {r0, ...}` epilogue pattern that ends up restoring
+  `r0` from the stored value (no-op effectively); it's
+  a TI CCS quirk and not preserved verbatim in our
+  reconstruction.
 - **`dio4_set` / `dio4_clear` (`0x00057138` / `0x00057188`)** —
   Each is a 4–5 instruction leaf that writes `1<<4` to the
   appropriate GPIO `DOUT{SET,CLR}31_0` register, then `bx lr`.
@@ -531,9 +636,15 @@ layout in the TI SDK shipping CCS / IAR variants.
   scan now?" precheck). Otherwise iterates slots via
   `FUN_00056b1c(prev)` (a slot iterator state machine returning
   the next slot or `-1`), with **4 KB stride** for the primary
-  header read (`r4<<12`) and **8 KB stride** for the verified-marker
-  write (`r4<<13`) — the BIM keeps a tighter grid for metadata
-  than for image bodies. For each slot it: (a) primary CRC check
+  header read on **external SPI flash** (`r4<<12`, via
+  `bim_spi_flash_read`) and **8 KB stride** for the
+  verified-marker write on **internal CC2642 flash** (`r4<<13`,
+  via `bim_iflash_program`). The two strides reflect different
+  storage media, not different metadata granularities — the
+  BIM stages OAD candidates on external SPI at a 4 KB grid
+  and promotes them by writing markers to the corresponding
+  internal flash 8 KB page (where bleware actually executes).
+  For each slot it: (a) primary CRC check
   via `FUN_0005653c` against `hdr[8]`; (b) on match, reads a
   44-byte secondary header from a fixed `slot_base = 0` anchor (a
   single global metadata buffer, not the slot itself); (c) derives
@@ -650,7 +761,14 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00056FE0` | 28  | `bim_ssi_rx_drain`           | `flash.c`     | Loops calling SSI ROM slot [4] (`SSIDataGetNonBlocking`) on SSI0 until it returns 0 (FIFO empty). Sole caller: `bim_spi_wait_wip`'s prep pulse. Distinct from the inlined drain at the tail of `bim_ssi_init` (TI compiler emitted both copies separately). |
 | decomp-c     | `0x00056CF4` | 52  | `bim_spi_read_rems_id`       | `flash.c`     | Sends the 4-byte REMS command word `[0x90, 0xFF, 0xFF, 0x00]` (loaded from flash literal at `0x000571F0`) over SPI, then receives 2 bytes into the SRAM globals at `0x20000404`/`0x20000405` (`g_chip_id_byte1`/`g_chip_id_byte2`). Returns 1 on success. Sole caller: `bim_spi_probe_chip`. Uses legacy REMS opcode `0x90` (mfr+device, 2 bytes) rather than full JEDEC `0x9F` (3 bytes), matching the chip-database table layout. |
 | decomp-c     | `0x00056AD4` | 68  | `bim_spi_wait_wip`           | `flash.c`     | SPI flash "wait for Write-In-Progress to clear" — RDSR polling loop. Prep pulse: assert /CS, drain stale RX, release /CS. Polling loop: assert /CS, send RDSR opcode `0x05` (loaded from flash literal at `0x000571F4`), recv 1 status byte, release /CS, exit if bit 0 (WIP) is clear. Returns 0 on ready, -2 on recv error. **Unbounded loop** — relies on the chip eventually reporting idle. Called by `bim_spi_release_from_dpd` (post-wake verify) and `bim_spi_flash_read` (gate before every read). |
-| decomp-c     | `0x000569E4` | 84  | `bim_spi_flash_read`         | `flash.c`     | SPI flash sequential read primitive — the leaf consumed by every BIM caller that pulls bytes off the external SPI flash. Steps: gate on `bim_spi_wait_wip`; build `[0x03, addr_hi, addr_mid, addr_lo]` (READ opcode + 24-bit big-endian address); assert /CS; send 4-byte cmd; recv `len` bytes via `bim_spi_recv_bytes`; release /CS. Returns 1 on success. **24-bit addressing limits reach to the first 16 MB** of the installed MX25L51245G (64 MB) — upper 48 MB is unreachable by this opcode. |
+| decomp-c     | `0x000569E4` | 84  | `bim_spi_flash_read`         | `flash.c`     | SPI flash sequential read primitive — the leaf consumed by every BIM caller that pulls bytes off the external SPI flash. Signature `(addr, len, dst)`. Steps: gate on `bim_spi_wait_wip`; build `[0x03, addr_hi, addr_mid, addr_lo]` (READ opcode + 24-bit big-endian address); assert /CS; send 4-byte cmd; recv `len` bytes via `bim_spi_recv_bytes`; release /CS. Returns 1 on success. **24-bit addressing limits reach to the first 16 MB** of the installed MX25L51245G (64 MB) — upper 48 MB is unreachable by this opcode. |
+| decomp-c     | `0x00056ED4` | 24  | `bim_spi_write_enable`       | `flash.c`     | Sends JEDEC `0x06` (WREN) opcode (loaded from flash literal at `0x000571F5`) over SPI, bracketed with `dio4_clear` / `dio4_set`. Returns 0 on success, -3 on send error. SPI NOR chips require WREN before every program/erase to arm the WEL latch. Sole caller: `bim_spi_flash_program`. |
+| decomp-c     | `0x000567A0` | 132 | `bim_spi_flash_program`      | `flash.c`     | External SPI flash page-program. Signature `(addr, len, src)`. Splits writes at 256-byte page boundaries; each chunk: `wait_wip` → `write_enable` → build PP cmd `[0x02, addr_hi, addr_mid, addr_lo]` → assert /CS → send 4-byte cmd → send chunk data → release /CS. Returns 1 on success. Caller must ensure target bytes are pre-erased (`0xFF`); used for marker writes that flip individual bits `1`→`0` (`0xFE`/`0xFC`). 24-bit address limit (first 16 MB). Sole caller: `bim_full_scan_and_launch` (4 sites). |
+| decomp-c     | `0x00056E72` | 50  | `bim_iflash_program`         | `flash.c`     | Internal CC2642 flash program — writes `count` bytes from `src` to internal flash at `(slot << 13) + offset` (8 KB stride per slot = the CC2642R1F erase-page size). Three-step bracket via ROM-API helpers: `bim_iflash_session_begin` → `bim_iflash_program_via_rom` (TI's `FlashProgram` driverlib equivalent) → `bim_iflash_session_end`. Returns 0 on success, `0xFF` on failure (matches the pre-erased flash byte value). Used by the OAD scan paths to drop `0xFE` markers into the executable image's own internal-flash page — complement to `bim_spi_flash_program` (which writes the corresponding marker to the OAD staging slot on external SPI flash). Callers: `bim_full_scan_and_launch`, `bim_verify_and_launch_image`. |
+| decomp-c     | `0x00056CB8` | 60  | `bim_oad_find_image_addr`    | `oad.c`       | OAD image-segment-table walker. Signature `(hdr_base, hdr_limit)`. Walks 12-byte segment-descriptor entries starting at `hdr_base + 0x2C` looking for a type-1 (contiguous-image) segment, returns its load address (`seg_value` at offset 8). Termination: SPI read failure, type-1 hit, `seg_len == 0` sentinel, or `offset >= hdr_limit`. Returns `0xFFFFFFFF` on no-match. Each entry read via `bim_spi_flash_read` into a 12-byte stack buffer. Used by `bim_verify_and_launch_image` and `bim_full_scan_and_launch` to compute the executable load address before integrity check. |
+| named        | `0x00056E0C` | 46  | `bim_iflash_session_begin`   | `flash.c` (extern) | Internal CC2642 flash bring-up. Calls slot [2] of ROM table at `0x100001D8` (= `ROM_API_TABLE` entry 22) with `FLASH_BASE` (`0x40034000`) — likely a "is the FCFG/flash controller ready?" status read. If non-ready, loops calling slot [1] (init) then re-reading slot [2] until ready. Returns the initial readiness state for the matching tear-down. Sole caller: `bim_iflash_program`. |
+| named        | `0x0005703C` | 16  | `bim_iflash_program_via_rom` | `flash.c` (extern) | Calls slot [6] of ROM table at `0x100001A8` with `(src, addr, count)` — TI's `FlashProgram` driverlib equivalent — then writes 0 to MMIO `0x42600484` (status clear or VIMS-side gate). Sole caller: `bim_iflash_program`. |
+| named        | `0x00057090` | 14  | `bim_iflash_session_end`     | `flash.c` (extern) | Internal flash session tear-down. Takes the bring-up's return value as the "should I tear down?" predicate. If non-zero, calls slot [1] of ROM table at `0x100001D8` — inverse of bring-up. Sole caller: `bim_iflash_program`. |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
 | decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
 | decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
@@ -721,11 +839,25 @@ Mirrors with browseable trees:
   — anyone who can write the image bytes can write a matching
   CRC32.
 - The remaining undecoded helpers around the OAD path:
-  `FUN_00056CB8` (image-base derivation),
   `FUN_00056714` (secondary CRC check),
-  `FUN_000567A0` (short flash write), `FUN_00056E40` (small
-  flash read), `FUN_00056E72` (flash program), `FUN_000570FA`
-  (alt-source read), `FUN_00056D30` (flash-page read).
+  `FUN_0005653C` (primary CRC compute),
+  `FUN_00056E40` (small flash read — likely an alternate
+  read primitive distinct from `bim_spi_flash_read`),
+  `FUN_000570FA` (alt-source read, used by
+  `bim_crc32_image`'s alt path),
+  `FUN_00056D30` (flash-page read).
+- ~~`FUN_00056CB8` (image-base derivation),
+  `FUN_000567A0` (short flash write),
+  `FUN_00056E72` (flash program),
+  `FUN_00056ED4` (Write Enable)~~ — **resolved**: decoded
+  as `bim_oad_find_image_addr`, `bim_spi_flash_program`,
+  `bim_iflash_program`, `bim_spi_write_enable`. The three
+  internal-flash helpers consumed by `bim_iflash_program`
+  (`bim_iflash_session_begin`, `bim_iflash_program_via_rom`,
+  `bim_iflash_session_end`) are renamed in Ghidra and
+  documented in flash.c as `extern`s; C decomp deferred
+  pending exact identification of ROM table at
+  `0x100001D8` and MMIO `0x42600484`.
 - ~~`FUN_00056CF4` (JEDEC ID read), `FUN_00056AD4` (post-wake
   verifier), `FUN_000569E4` (flash read)~~ — **resolved**:
   decoded as `bim_spi_read_rems_id` (sends REMS opcode `0x90`,

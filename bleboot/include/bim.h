@@ -207,7 +207,54 @@ int bim_spi_release_from_dpd(void);
  * the installed MX25L51245G's upper 48 MB is unreachable
  * by this opcode (would need the 4-byte-address READ4B
  * `0x13`, not present in the BIM). */
-int bim_spi_flash_read(uint32_t addr, void *dst, uint32_t len);
+int bim_spi_flash_read(uint32_t addr, uint32_t len, void *dst);
+
+/* SPI flash "Write Enable" — sends the JEDEC standard `0x06`
+ * opcode (loaded from flash literal at `0x000571F5`).
+ * Returns 0 on success, -3 on send error. SPI NOR chips
+ * require this before every program/erase to arm the WEL
+ * latch. Sole caller: `bim_spi_flash_program`. */
+int bim_spi_write_enable(void);
+
+/* SPI flash page-program — writes `len` bytes from `src` to
+ * the external SPI NOR flash starting at `addr`. Splits the
+ * write at 256-byte page boundaries, issuing a fresh `WREN +
+ * PP (0x02) + addr + data` sequence per chunk. Returns 1 on
+ * success, 0 on any error. Caller must ensure target bytes
+ * are pre-erased (`0xFF`); typically used for status-marker
+ * writes that flip individual bits `1`→`0` (`0xFF` →
+ * `0xFE`/`0xFC`). 24-bit address limit (first 16 MB) — same
+ * as `bim_spi_flash_read`. Sole caller:
+ * `bim_full_scan_and_launch`. */
+int bim_spi_flash_program(uint32_t addr, uint32_t len, const void *src);
+
+/* Internal CC2642 flash program — writes `count` bytes from
+ * `src` to internal flash at address `(slot << 13) + offset`.
+ * 8 KB per slot matches the CC2642R1F erase-page size, so
+ * each slot is one erasable page in the 344 KB bleware region
+ * (slots 0..43 → addresses 0..0x55FFF). Returns 0 on success,
+ * `0xFF` on program failure (matches the pre-erased flash
+ * byte value). Used by the OAD scan paths to drop status
+ * markers into the executable image's own page after CRC
+ * verification — complement to `bim_spi_flash_program` which
+ * writes the corresponding marker to the OAD staging slot on
+ * external SPI flash. */
+int bim_iflash_program(uint32_t slot, uint32_t offset,
+                       const void *src, uint32_t count);
+
+/* Image-segment-table walker — given the base address of an
+ * OAD image header on external SPI flash and the header's
+ * total length, reads each 12-byte segment descriptor
+ * starting at offset `0x2C` and returns the load address
+ * (entry's `seg_value` at offset 8) of the first segment
+ * whose `seg_type` (byte 0) equals `1` (TI's "contiguous
+ * image" segment type). Returns `0xFFFFFFFF` if no matching
+ * segment is found, the SPI read fails, or the segment-list
+ * sentinel (`seg_len == 0`) is reached. Used by both
+ * `bim_verify_and_launch_image` and `bim_full_scan_and_launch`
+ * to compute "where does this image actually run from"
+ * before checking integrity. */
+uint32_t bim_oad_find_image_addr(uint32_t hdr_base, uint32_t hdr_limit);
 
 /* Image launcher — terminal handoff for all three OAD scan
  * paths. Reloads SP and PC from `*(entry + 4)` (both registers

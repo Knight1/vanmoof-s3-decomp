@@ -52,28 +52,18 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(oad_short_header_t) == 44,
                "OAD short header must be 44 bytes");
 
-/* External helpers — names mirror Ghidra's `FUN_*` symbols so the
- * next decomp pass can rename in place without grep-replace
- * collisions. Roles below are inferred from call-site shape:
+/* External helpers — three of the original FUN_* externs are
+ * now decoded (`bim_spi_flash_read`, `bim_spi_flash_program`,
+ * `bim_iflash_program`, `bim_oad_find_image_addr` — all in
+ * `bim.h`). The remainder still need C decomp:
  *
- *   FUN_000569e4 — flash read; (slot_anchor, n_bytes, dst).
- *   FUN_00056cb8 — derives an image-base address from the header's
- *                  `image_size`. Return shifted right by 13 = page.
  *   FUN_00056714 — secondary CRC check over the image body.
- *   FUN_00056e72 — flash program; (page, offset, src, n_bytes).
  *   FUN_0005653c — primary CRC compute; (dst_buf, src_addr, len).
- *   FUN_000567a0 — short flash write; (addr, n_bytes, src).
- *   FUN_00056e40 — small flash read; (addr, dst, n_bytes).
- *   FUN_00056f74 — 8-byte header sniff; returns 1 if it looks like
- *                  a real OAD header start.
- *   bim_flash_release — the flash-session-end epilogue (now decoded).
- *   bim_launch_image — image entry handoff (now decoded). */
-extern void     FUN_000569e4(uint32_t off, uint32_t n, void *dst);
-extern uint32_t FUN_00056cb8(uint32_t slot_base, uint32_t image_size);
+ *   FUN_00056e40 — small flash read; (addr, dst, n_bytes). The
+ *                  arg order here differs from `bim_spi_flash_read`
+ *                  (addr, len, dst); pin once decoded. */
 extern int      FUN_00056714(uint32_t slot_base, uint32_t image_size, uint32_t image_base);
-extern void     FUN_00056e72(uint32_t page, uint32_t off, void *src, uint32_t n);
 extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
-extern void     FUN_000567a0(uint32_t addr, uint32_t n_bytes, void *src);
 extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
 
 /* "OAD NVM1" — the TI OAD image-identifier magic string that
@@ -214,7 +204,7 @@ int bim_slot_iterator(int start_slot)
     uint8_t buf[44];
 
     do {
-        FUN_000569e4((uint32_t)slot << 12, 8, buf);
+        bim_spi_flash_read((uint32_t)slot << 12, 8, buf);
 
         if (oad_magic_match2(buf) == 1) {
             return (int)(int8_t)slot;
@@ -232,6 +222,71 @@ int bim_slot_iterator(int start_slot)
     return ~1;
 }
 
+/* Image-segment-table walker (`FUN_00056CB8` in the OEM, 60 B).
+ * Walks the segment-descriptor list inside an OAD image header
+ * to locate the executable load address. Used by both
+ * `bim_verify_and_launch_image` and `bim_full_scan_and_launch`
+ * to compute "where does this image actually run from"
+ * before checking integrity.
+ *
+ * The OAD image header layout (TI's `imgHdr_t`) places a
+ * variable-length segment list starting at offset `0x2C` (44).
+ * Each segment is a 12-byte descriptor:
+ *
+ *     offset 0..3   seg_type (byte 0) + 3 reserved bytes
+ *     offset 4..7   seg_len  (32-bit; total bytes to advance to
+ *                             the next segment header)
+ *     offset 8..11  seg_value (segment-type-specific payload;
+ *                              for type 1, the load address)
+ *
+ * TI's segment types:
+ *
+ *     0x00  boundary segment (image bounds metadata)
+ *     0x01  contiguous-image segment (executable code) — value
+ *           field is the load address, which is what this
+ *           function returns
+ *     0x02  NVRAM segment
+ *     0x03  security info
+ *
+ * Loop termination conditions:
+ *
+ *   - `bim_spi_flash_read` returns 0 (SPI read failure) → return -1
+ *   - segment with `seg_type == 1` found → return its `seg_value`
+ *   - segment with `seg_len == 0` reached (end-of-list sentinel)
+ *     → return -1
+ *   - `offset >= hdr_limit` (walked past the header) → return -1
+ *
+ * The OEM holds the default return value (`-1`) in r8 across the
+ * whole loop and overwrites it only on a type-1 hit; we mirror
+ * that with a single return-value variable. */
+uint32_t bim_oad_find_image_addr(uint32_t hdr_base, uint32_t hdr_limit)
+{
+    uint32_t result = 0xFFFFFFFFu;
+    uint32_t offset = 44u;        /* 0x2C — start of segment list */
+
+    while (offset < hdr_limit) {
+        struct {
+            uint8_t  seg_type;
+            uint8_t  rfu[3];
+            uint32_t seg_len;
+            uint32_t seg_value;
+        } entry;
+
+        if (bim_spi_flash_read(hdr_base + offset, sizeof entry, &entry) == 0) {
+            break;
+        }
+        if (entry.seg_type == 1u) {
+            result = entry.seg_value;
+            break;
+        }
+        if (entry.seg_len == 0u) {
+            break;
+        }
+        offset += entry.seg_len;
+    }
+    return result;
+}
+
 void bim_verify_and_launch_image(void)
 {
     if (bim_flash_prepare() == 0) {
@@ -239,13 +294,13 @@ void bim_verify_and_launch_image(void)
     }
 
     oad_image_header_t hdr;
-    FUN_000569e4(0, sizeof hdr, &hdr);
+    bim_spi_flash_read(0, sizeof hdr, &hdr);
 
     if (hdr.status != 0xFEu) {
         return;
     }
 
-    uint32_t image_base = FUN_00056cb8(0, hdr.image_size);
+    uint32_t image_base = bim_oad_find_image_addr(0, hdr.image_size);
     if (FUN_00056714(0, hdr.image_size, image_base) != 0) {
         bim_flash_release();
         return;
@@ -266,7 +321,7 @@ void bim_verify_and_launch_image(void)
     uint8_t status = 0xFCu;
     if (hdr.image_crc == crc) {
         status = 0xFEu;
-        FUN_00056e72(page, 17, &status, 1);
+        bim_iflash_program(page, 17, &status, 1);
         bim_launch_image(hdr.entry);
     }
 
@@ -382,7 +437,7 @@ int bim_full_scan_and_launch(void)
          * coincide cleanly with `oad_image_header_t` — keep raw
          * byte access for clarity. */
         uint8_t hdr1[56];
-        FUN_000569e4(slot_anchor, sizeof hdr1, hdr1);
+        bim_spi_flash_read(slot_anchor, sizeof hdr1, hdr1);
 
         if (hdr1[16] != 0xFEu) continue;
         if (hdr1[12] != 3u)    continue;
@@ -407,7 +462,7 @@ int bim_full_scan_and_launch(void)
          * uses a fixed metadata anchor regardless of which slot is
          * being verified). */
         uint8_t hdr2[44];
-        FUN_000569e4(slot_base, sizeof hdr2, hdr2);
+        bim_spi_flash_read(slot_base, sizeof hdr2, hdr2);
 
         uint32_t image_size_sec = *(const uint32_t *)&hdr2[24];
         uint32_t image_end_sec  = *(const uint32_t *)&hdr2[36];
@@ -415,7 +470,7 @@ int bim_full_scan_and_launch(void)
         uint32_t entry_sec      = *(const uint32_t *)&hdr2[28];
         uint8_t  flags_sec      = hdr2[18];
 
-        uint32_t image_base = FUN_00056cb8(slot_base, image_size_sec);
+        uint32_t image_base = bim_oad_find_image_addr(slot_base, image_size_sec);
         if (image_base == (uint32_t)-1) {
             continue;
         }
@@ -432,7 +487,7 @@ int bim_full_scan_and_launch(void)
             FUN_00056714(slot_base, derived_len, image_base);
 
         uint8_t status = 0xFCu;
-        FUN_000567a0(slot_anchor + 16u, 1u, &status);
+        bim_spi_flash_program(slot_anchor + 16u, 1u, &status);
 
         if ((uint8_t)crc2_status != 0u) {
             continue;
@@ -451,8 +506,8 @@ int bim_full_scan_and_launch(void)
              * (slot << 13 stride here, not 4 KB — the BIM's two
              * grids differ) and to the image's own header at
              * `image_base + 17`. */
-            FUN_000567a0((slot_anchor << 1) + 17u, 1u, &status);
-            FUN_00056e72(page, 17u, &status, 1u);
+            bim_spi_flash_program((slot_anchor << 1) + 17u, 1u, &status);
+            bim_iflash_program(page, 17u, &status, 1u);
 
             /* Launch if the `flags` field is in {0,1,3,7}. The
              * trailing `status == 0xFE` recheck is always true in
@@ -464,11 +519,11 @@ int bim_full_scan_and_launch(void)
             }
         } else {
             status = 0xFCu;
-            FUN_000567a0(slot_base + 17u, 1u, &status);
+            bim_spi_flash_program(slot_base + 17u, 1u, &status);
         }
 
         status = 0xFCu;
-        FUN_000567a0(slot_base + 16u, 1u, &status);
+        bim_spi_flash_program(slot_base + 16u, 1u, &status);
     }
 
     bim_flash_release();

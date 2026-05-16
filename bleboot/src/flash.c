@@ -132,13 +132,18 @@
  *                 sent verbatim. Address LSB = 0 → REMS returns
  *                 mfr first, device second.
  *
- *   `0x000571F4`: 4-byte status-command blob `05 06 FF FF`. Only
- *                 the first byte is used (RDSR opcode `0x05`); the
- *                 next byte (`0x06` = WREN) is dead in this
- *                 build. `bim_spi_wait_wip` loads byte 0 onto the
- *                 stack each call. */
+ *   `0x000571F4`: 4-byte status-command blob `05 06 FF FF`.
+ *                 Byte 0 = RDSR opcode `0x05`, loaded by
+ *                 `bim_spi_wait_wip`. Byte 1 = WREN opcode
+ *                 `0x06`, loaded by `bim_spi_write_enable` (via
+ *                 the literal pointer at `0x000571F5` = base + 1).
+ *                 Bytes 2/3 = `0xFF` filler. The two opcode
+ *                 helpers share the same 4-byte `.rodata` slot
+ *                 to keep flash use minimal — earlier guesses
+ *                 that byte 1 was dead were wrong. */
 #define BIM_REMS_CMD_WORD_PTR  ((const uint32_t *)0x000571F0u)
 #define BIM_RDSR_OPCODE_PTR    ((const uint8_t  *)0x000571F4u)
+#define BIM_WREN_OPCODE_PTR    ((const uint8_t  *)0x000571F5u)
 
 /* DIO4 set / clear (`FUN_00057138` and `FUN_00057188` in the OEM).
  * Bracket every individual flash MMIO operation across the BIM —
@@ -615,7 +620,7 @@ void bim_spi_wait_idle(void)
  * preserves both intermediate failure paths (`wait_wip` /
  * send) as separate `cbz` branches, plus a third for recv;
  * we mirror that. */
-int bim_spi_flash_read(uint32_t addr, void *dst, uint32_t len)
+int bim_spi_flash_read(uint32_t addr, uint32_t len, void *dst)
 {
     if (bim_spi_wait_wip() != 0) {
         return 0;
@@ -636,6 +641,181 @@ int bim_spi_flash_read(uint32_t addr, void *dst, uint32_t len)
     int recv_err = bim_spi_recv_bytes(dst, len);
     dio4_set();
     return (recv_err == 0) ? 1 : 0;
+}
+
+/* SPI flash "Write Enable" (`FUN_00056ED4` in the OEM, 24 B +
+ * 4 B literal). Sends the JEDEC standard `0x06` opcode (loaded
+ * from the second byte of the shared opcode literal at flash
+ * `0x000571F4`, i.e. address `0x000571F5`), bracketed with
+ * `dio4_clear` / `dio4_set`. Returns 0 on success, -3 on send
+ * error.
+ *
+ * SPI NOR flash chips require a Write Enable command before
+ * every program / erase / write-status — the chip clears its
+ * internal "WEL" (Write Enable Latch) after each
+ * program/erase, so each operation must re-arm via WREN.
+ * Sole in-source caller: `bim_spi_flash_program` (issues
+ * before every page-program command). */
+int bim_spi_write_enable(void)
+{
+    uint8_t opcode = *BIM_WREN_OPCODE_PTR;
+
+    dio4_clear();
+    int recv_err = bim_spi_send_bytes(&opcode, 1u);
+    dio4_set();
+    if (recv_err != 0) {
+        return -3;
+    }
+    return 0;
+}
+
+/* SPI flash page-program (`FUN_000567A0` in the OEM, 132 B).
+ * Writes `len` bytes from `src` to the external SPI NOR flash
+ * starting at `addr`. Handles the chip's 256-byte page boundary
+ * automatically by splitting writes that cross it.
+ *
+ * Per-iteration sequence:
+ *
+ *   1. `bim_spi_wait_wip` — gate on the chip being idle. On
+ *      error, abort and return 0.
+ *
+ *   2. `bim_spi_write_enable` — arm the WEL bit. On error,
+ *      abort and return 0.
+ *
+ *   3. Compute bytes-this-chunk = `min(256 - (addr & 0xFF),
+ *      remaining)` — the bytes available before the next
+ *      256-byte page boundary, capped at the bytes still
+ *      needed.
+ *
+ *   4. Build the 4-byte SPI PAGE PROGRAM command on the stack:
+ *      `[0x02, addr_hi, addr_mid, addr_lo]` — opcode `0x02`
+ *      plus the 24-bit address sent **big-endian**. Same
+ *      24-bit-address limitation as `bim_spi_flash_read`:
+ *      writes above 16 MB would need the 4-byte-address
+ *      PP4B opcode (`0x12`), not present in this BIM.
+ *
+ *   5. Assert /CS, send the 4-byte command, then send the
+ *      data bytes for this page. Release /CS regardless of
+ *      success.
+ *
+ *   6. Advance `addr`, `src`, decrement `remaining`. Loop
+ *      until `remaining == 0`.
+ *
+ * Returns 1 on success, 0 on any error (wait-WIP fail, WREN
+ * fail, send fail). The function does NOT wait for the program
+ * to complete before returning — the next caller's
+ * `bim_spi_wait_wip` (or any subsequent flash op) handles
+ * that. Also does NOT erase first; the caller must ensure the
+ * target bytes are pre-erased (`0xFF`), which is the case for
+ * status-marker writes that flip individual bits from `1` to
+ * `0` (e.g. `0xFF` → `0xFE` for "verified", `0xFF` → `0xFC`
+ * for "rejected").
+ *
+ * Sole caller: `bim_full_scan_and_launch`'s slot-marker writes
+ * (4 sites — transient `0xFC` and final `0xFE` markers on
+ * external SPI flash). */
+int bim_spi_flash_program(uint32_t addr, uint32_t len, const void *src)
+{
+    if (len == 0u) {
+        return 1;
+    }
+
+    const uint8_t *p         = (const uint8_t *)src;
+    uint32_t       remaining = len;
+    uint32_t       cur_addr  = addr;
+    uint8_t        opcode    = 0x02u;          /* PAGE PROGRAM */
+
+    while (remaining != 0u) {
+        if (bim_spi_wait_wip() != 0) {
+            return 0;
+        }
+        if (bim_spi_write_enable() != 0) {
+            return 0;
+        }
+
+        uint32_t page_room  = 256u - (cur_addr & 0xFFu);
+        uint32_t this_chunk = (page_room <= remaining) ? page_room : remaining;
+
+        uint8_t cmd[4];
+        cmd[0] = opcode;
+        cmd[1] = (uint8_t)((cur_addr >> 16) & 0xFFu);
+        cmd[2] = (uint8_t)((cur_addr >>  8) & 0xFFu);
+        cmd[3] = (uint8_t)( cur_addr        & 0xFFu);
+
+        cur_addr  += this_chunk;
+        remaining -= this_chunk;
+
+        dio4_clear();
+        if (bim_spi_send_bytes(cmd, 4u) != 0) {
+            dio4_set();
+            return 0;
+        }
+        if (bim_spi_send_bytes(p, this_chunk) != 0) {
+            dio4_set();
+            return 0;
+        }
+        p += this_chunk;
+        dio4_set();
+    }
+    return 1;
+}
+
+/* Internal CC2642 flash bring-up / program / tear-down helpers,
+ * still pending C decomp. Renamed in Ghidra; bodies described in
+ * `bim_iflash_program`'s comment. The bring-up returns an opaque
+ * "previous state" handle that the tear-down consumes — the same
+ * "save state, do work, restore state" pattern the BIM uses for
+ * SPI flash bring-up too. */
+extern uint32_t bim_iflash_session_begin(void);
+extern int      bim_iflash_program_via_rom(const void *src, uint32_t addr,
+                                           uint32_t count);
+extern void     bim_iflash_session_end(uint32_t prev_state);
+
+/* Internal CC2642 flash program (`FUN_00056E72` in the OEM,
+ * 50 B). Writes `count` bytes from `src` to internal flash at
+ * address `(slot << 13) + offset`. The 8 KB stride per slot
+ * matches the CC2642R1F flash erase-page size, so each "slot"
+ * is exactly one erasable page in the bleware region of
+ * internal flash (`0x00000000..0x00055FFF`, 344 KB = 43 × 8 KB).
+ *
+ * Three steps, all delegated to ROM-API helpers:
+ *
+ *   1. `bim_iflash_session_begin` (`FUN_00056E0C`) — bring up
+ *      the internal flash controller. Returns an opaque
+ *      "previous state" handle for the matching tear-down.
+ *
+ *   2. `bim_iflash_program_via_rom` (`FUN_0005703C`) — calls
+ *      the ROM API table at `0x100001A8` slot [6] (TI's
+ *      `FlashProgram(src, addr, count)` driverlib equivalent),
+ *      then writes 0 to MMIO `0x42600484` (some "operation
+ *      complete" status clear).
+ *
+ *   3. `bim_iflash_session_end` (`FUN_00057090`) — tears down
+ *      the flash session iff the bring-up changed state.
+ *      Takes the bring-up's return value as the "should I
+ *      tear down?" predicate.
+ *
+ * Returns 0 on success, `0xFF` on program failure. The
+ * `0xFF` return code is suggestive — that's the pre-erased
+ * value of NOR flash, so "byte didn't take" reads back as
+ * `0xFF`. Used as a **complement to `bim_spi_flash_program`**:
+ * SPI flash holds the OAD staging slots, internal flash
+ * holds the executable bleware images. The full-scan path
+ * promotes by writing markers to BOTH (status byte `0xFE`
+ * to the external SPI slot, then to the corresponding
+ * internal flash page).
+ *
+ * Callers: `bim_full_scan_and_launch` (1 site, internal
+ * marker write at `slot+17`), `bim_verify_and_launch_image`
+ * (1 site, marker write to the BIM's own header). */
+int bim_iflash_program(uint32_t slot, uint32_t offset,
+                       const void *src, uint32_t count)
+{
+    uint32_t prev_state = bim_iflash_session_begin();
+    int      prog_err   = bim_iflash_program_via_rom(
+                              src, (slot << 13) + offset, count);
+    bim_iflash_session_end(prev_state);
+    return (prog_err == 0) ? 0 : 0xFF;
 }
 
 int bim_flash_prepare(void)

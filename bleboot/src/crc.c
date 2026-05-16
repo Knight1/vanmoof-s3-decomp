@@ -88,7 +88,6 @@ uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
     return crc;
 }
 
-extern void     FUN_000569e4(uint32_t flash_addr, uint32_t n, void *dst);
 extern void     FUN_000570fa(void *dst, uint32_t source_offset, uint32_t n);
 extern void     FUN_00056d30(uint32_t page, uint32_t off, void *dst, uint32_t n);
 
@@ -116,7 +115,7 @@ uint32_t bim_crc32_image(uint32_t start_page,
         if (bim_flash_prepare() != 1) {
             return 0u;
         }
-        FUN_000569e4(start_page << 12, BIM_BUF_BYTES, buf);
+        bim_spi_flash_read(start_page << 12, BIM_BUF_BYTES, buf);
     } else {
         FUN_000570fa(buf, start_page * chunk_size, BIM_BUF_BYTES);
     }
@@ -148,13 +147,13 @@ uint32_t bim_crc32_image(uint32_t start_page,
                     if (blk == blocks - 1u) {
                         /* The OEM does TWO loads here back-to-back:
                          * `FUN_00056d30(page+1, 0, buf, 256)` then
-                         * `FUN_000569e4((page<<12)+4096, 256, buf)`.
+                         * `bim_spi_flash_read((page<<12)+4096, 256, buf)`.
                          * The second overwrites the first, so only
                          * the flash data survives. The first call's
                          * side effect (whatever it is) is preserved
                          * by replicating both calls verbatim. */
                         FUN_00056d30(page + 1u, 0u, buf, BIM_BUF_BYTES);
-                        FUN_000569e4((page << 12) + 4096u,
+                        bim_spi_flash_read((page << 12) + 4096u,
                                       BIM_BUF_BYTES, buf);
                     } else {
                         FUN_00056d30(page,
