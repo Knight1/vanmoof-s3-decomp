@@ -90,9 +90,29 @@
 #define PRCM_CLKLOADCTL_LOAD   (1u << 0)
 #define PRCM_CLKLOADCTL_DONE   (1u << 1)
 
-extern int  FUN_00056D6A(void);
-extern int  FUN_0005698C(void);
-extern int  FUN_00056EA4(const void *src, uint32_t n);
+/* SRAM globals consumed by `bim_spi_probe_chip`:
+ *
+ *   `g_chip_id_bytes` (`0x20000404..0x20000406`) — the BIM
+ *   places the JEDEC ID response bytes here after the SPI
+ *   read-id command. The probe uses bytes [0] and [1] (at
+ *   `0x20000404` and `0x20000405`) as the search key into the
+ *   known-chip table. These are presumably the JEDEC
+ *   "manufacturer_id" + "device_id_high" pair.
+ *
+ *   `g_chip_table_cursor` (`0x20000408`) — the table-walk
+ *   cursor used by `bim_spi_probe_chip`. Reset to the table
+ *   head (`0x000571A8`) at the start of every probe call. */
+#define BIM_CHIP_TABLE_HEAD    ((const uint8_t *)0x000571A8u)
+#define g_chip_table_cursor    (*(const uint8_t **)0x20000408u)
+#define g_chip_id_byte1        (*(volatile uint8_t *)0x20000404u)
+#define g_chip_id_byte2        (*(volatile uint8_t *)0x20000405u)
+
+/* The "post-Release-from-DPD" verifier and the "fill SRAM with
+ * JEDEC ID response" helper — both still pending. Likely thin
+ * wrappers over `bim_spi_send_bytes` that send the appropriate
+ * JEDEC opcode (0x9F = Read ID) and stash the response. */
+extern int  FUN_00056CF4(void);
+extern int  FUN_00056AD4(void);
 
 /* DIO4 set / clear (`FUN_00057138` and `FUN_00057188` in the OEM).
  * Bracket every individual flash MMIO operation across the BIM —
@@ -124,6 +144,146 @@ __attribute__((noinline))
 void dio4_clear(void)
 {
     GPIO_DOUTCLR31_0 = (1u << 4);
+}
+
+/* SPI full-duplex transmit (`FUN_00056EA4` in the OEM, 44 B).
+ * Sends `n` bytes from `src` over SSI0 and discards each
+ * byte the slave shifts back in. Uses the SSI ROM table at
+ * `0x100001C4`:
+ *
+ *   - slot [1] = `SSIDataPut(base, data)` (blocking) — pushes
+ *     a byte into the SSI TX FIFO, blocking until the FIFO has
+ *     space.
+ *   - slot [3] = `SSIDataGet(base, *data)` (blocking) — pulls
+ *     a byte from the SSI RX FIFO, blocking until one is
+ *     available. The returned byte is stashed on the stack
+ *     and ignored — for command-only transmissions like JEDEC
+ *     opcodes, only the side effect matters.
+ *
+ * Returns 0 unconditionally. The OEM call sites preserve a
+ * non-zero return path (see `bim_spi_release_from_dpd`'s
+ * conditional below) suggesting earlier revisions returned a
+ * status; the current implementation is success-only. */
+int bim_spi_send_bytes(const void *src, uint32_t n)
+{
+    if (n == 0u) {
+        return 0;
+    }
+    const uint8_t *p = (const uint8_t *)src;
+    const uintptr_t *ssi = (const uintptr_t *)*BIM_SSI_ROM_TABLE_PTR;
+    uint32_t scratch;
+    do {
+        ((void (*)(uint32_t, uint32_t))ssi[1])(SSI0_BASE, (uint32_t)*p);
+        ((void (*)(uint32_t, uint32_t *))ssi[3])(SSI0_BASE, &scratch);
+        p++;
+        n--;
+    } while (n != 0u);
+    return 0;
+}
+
+/* SPI chip-database lookup (`FUN_0005698C` in the OEM, 74 B).
+ * Calls `FUN_00056CF4` (the JEDEC-ID readback helper — still
+ * pending; presumably issues `0x9F = Read ID` via
+ * `bim_spi_send_bytes` and stashes the 2-byte response at
+ * `g_chip_id_byte1`/`g_chip_id_byte2`). If that read fails,
+ * returns 0. Otherwise walks the 8-byte-stride table at
+ * `BIM_CHIP_TABLE_HEAD` (= `0x000571A8`) looking for an entry
+ * whose bytes at offsets [4] and [5] match the readout. The
+ * table terminates with an 8-byte entry whose first word is
+ * `0`. Returns 1 if a matching non-NULL entry was found, 0 if
+ * the read failed or the table was exhausted.
+ *
+ * Caller usage:
+ *   - `bim_flash_prepare` tail-calls this and returns its
+ *     value directly: prepare succeeds iff the connected
+ *     external SPI flash is one of the BIM's known chips.
+ *   - `bim_spi_wait_idle` loops on it up to 10 times, exiting
+ *     when it returns 0. Used after `bim_spi_deep_power_down`
+ *     to verify DPD took effect (chip stops responding to
+ *     probes).
+ *
+ * The walk-cursor is held in SRAM (`g_chip_table_cursor`)
+ * rather than on the stack — reset at the start of every
+ * call. This is a TI CCS code-size tic; the cursor doesn't
+ * need to persist across calls. */
+int bim_spi_probe_chip(void)
+{
+    if (FUN_00056CF4() == 0) {
+        return 0;
+    }
+
+    g_chip_table_cursor = BIM_CHIP_TABLE_HEAD;
+
+    for (;;) {
+        const uint8_t *entry = g_chip_table_cursor;
+        if (*(const uint32_t *)entry == 0u) {
+            break;   /* end-of-table sentinel */
+        }
+        if (entry[4] == g_chip_id_byte1 && entry[5] == g_chip_id_byte2) {
+            break;   /* match */
+        }
+        g_chip_table_cursor += 8u;
+    }
+
+    return (*(const uint32_t *)g_chip_table_cursor != 0u) ? 1 : 0;
+}
+
+/* SPI flash "Release from Deep Power Down" (`FUN_00056D6A` in
+ * the OEM, 56 B). Three steps:
+ *
+ *   1. Send the JEDEC standard `0xAB` opcode (Release from DPD)
+ *      via `bim_spi_send_bytes`, bracketed with `dio4_clear` /
+ *      `dio4_set`. The 1-byte buffer lives on the stack in
+ *      the `r2` slot of the prologue's `push {r2, r3, r4, lr}`
+ *      — same TI CCS technique `bim_spi_deep_power_down` uses
+ *      for its `0xB9` opcode.
+ *
+ *   2. tRES1 wake-up delay — JEDEC spec is 3–30 µs depending
+ *      on chip family. The OEM uses a 200-iteration spin loop
+ *      with a 16-bit counter (`mov r0, r1; subs r1, r0, #1;
+ *      cmp r0, #0; uxth r1, r1; bne`) — ~12 µs at 48 MHz HF
+ *      core clock. The post-decrement-with-compare-on-prev
+ *      shape gives 201 actual iterations.
+ *
+ *   3. Verify the chip is alive by calling `FUN_00056AD4`
+ *      (still pending — likely a JEDEC ID read with
+ *      validation). Returns 0 on success; non-zero means the
+ *      chip didn't respond after wake-up.
+ *
+ * Returns 1 if both the send and verify succeeded, 0
+ * otherwise. The "send failed → r4 = 0" branch is dead in this
+ * build because `bim_spi_send_bytes` always returns 0, but the
+ * OEM preserves the check — preserved here too.
+ *
+ * Sole caller: `bim_flash_prepare` (called as
+ * `if (FUN_00056D6A() == 0) { bim_flash_release(); return 0; }`)
+ * — the gate between SSI bring-up and the
+ * `bim_spi_probe_chip` tail. */
+int bim_spi_release_from_dpd(void)
+{
+    uint8_t opcode = 0xABu;
+    int     ok     = 0;
+
+    dio4_clear();
+    if (bim_spi_send_bytes(&opcode, 1u) == 0) {
+        ok = 1;
+    }
+    dio4_set();
+
+    if (ok == 0) {
+        return 0;
+    }
+
+    /* tRES1 spin delay, ~12 µs at 48 MHz. Volatile counter so
+     * GCC doesn't optimise the loop away. */
+    for (volatile uint16_t i = 200u; i != 0u; i--) {
+        /* intentionally empty */
+    }
+
+    if (FUN_00056AD4() != 0) {
+        ok = 0;
+    }
+    return ok;
 }
 
 /* SSI0 + PRCM bring-up (`FUN_000563C8` in the OEM, 172 B). Called
@@ -224,7 +384,7 @@ void bim_spi_deep_power_down(void)
 {
     uint8_t opcode = 0xB9u;
     dio4_clear();
-    FUN_00056EA4(&opcode, 1u);
+    bim_spi_send_bytes(&opcode, 1u);
     dio4_set();
 }
 
@@ -244,7 +404,7 @@ void bim_spi_wait_idle(void)
 {
     uint8_t tries = 0;
     while (tries < 10u) {
-        if (FUN_0005698C() == 0) {
+        if (bim_spi_probe_chip() == 0) {
             return;
         }
         tries = (uint8_t)(tries + 1u);
@@ -262,12 +422,12 @@ int bim_flash_prepare(void)
 
     dio4_set();
 
-    if (FUN_00056D6A() == 0) {
+    if (bim_spi_release_from_dpd() == 0) {
         bim_flash_release();
         return 0;
     }
 
-    return FUN_0005698C();
+    return bim_spi_probe_chip();
 }
 
 /* Flash-session end (`FUN_000570AC` in the OEM). Complement to

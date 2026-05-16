@@ -106,6 +106,8 @@ and Reset is the application entry point.
 | --- | --- | --- | --- | --- |
 | `0x20000300` | 256 | `(crc scratch)` | `crc.c` | 256-byte scratch buffer used by `bim_crc32_image` to stage flash- or RAM-source bytes before the CRC32 inner loop. Adjacent to `g_oad_chunk_size`; the two globals form a contiguous 260-byte block at the start of the BIM's SRAM data. |
 | `0x20000400` | 4 | `g_oad_chunk_size` | `main.c` | OAD chunk-size selector — `(MMIO[0x40032430] & 0xF) << 10` cached at boot. Read by `bim_crc32_image` as the outer-loop partition size. Originally misnamed `g_hw_id_cached` (the assumption that it was a per-bike salt turned out to be wrong; it's a per-board configuration selector, not a device identity). |
+| `0x20000404` | 2 | `g_chip_id_byte1/2` | `flash.c` | JEDEC ID readout bytes from the external SPI NOR flash chip — populated by `FUN_00056CF4` (the still-pending Read-ID helper) and consumed by `bim_spi_probe_chip` as the search key into the chip-database table. Bytes at `0x20000404`/`0x20000405` are likely manufacturer-id + device-id-high; byte at `0x20000406` may hold device-id-low or capacity. |
+| `0x20000408` | 4 | `g_chip_table_cursor` | `flash.c` | Walk cursor for `bim_spi_probe_chip`'s table search — reset to the table head (`0x000571A8`) at the start of every probe call, advanced by 8 bytes per non-matching entry. The walk-cursor doesn't need to persist across calls, but the OEM keeps it in SRAM (rather than on the stack) — a TI CCS code-size tic. |
 
 ## Known MMIO accesses (from decomp)
 

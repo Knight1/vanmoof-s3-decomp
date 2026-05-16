@@ -132,12 +132,41 @@ void bim_ssi_init(uint32_t bit_rate, uint32_t cfg);
  * N25Q, Macronix MX25, etc. */
 void bim_spi_deep_power_down(void);
 
-/* SSI busy-wait, bounded to 10 polls. Loops calling the SSI
- * idle-probe `FUN_0005698C` until it returns 0 (idle), giving
- * up after 10 attempts. Called by `bim_flash_release` after
- * `bim_spi_deep_power_down` to drain in-flight SSI activity
- * before peripheral teardown. */
+/* SSI busy-wait, bounded to 10 polls. Loops calling
+ * `bim_spi_probe_chip` until it returns 0 (chip not
+ * recognized), giving up after 10 attempts. Called by
+ * `bim_flash_release` after `bim_spi_deep_power_down` to
+ * verify DPD took effect — once the chip stops responding to
+ * the probe, we know it has powered down. */
 void bim_spi_wait_idle(void);
+
+/* SPI full-duplex transmit — sends `n` bytes from `src` over
+ * SSI0 via the SSI ROM table slots [1] (`SSIDataPut`) and [3]
+ * (`SSIDataGet`). The received bytes (one per sent byte by
+ * SPI's nature) are discarded; this helper is for
+ * command-only transmissions like JEDEC opcodes. Returns 0.
+ * Sole in-source callers: `bim_spi_deep_power_down` and
+ * `bim_spi_release_from_dpd`. */
+int bim_spi_send_bytes(const void *src, uint32_t n);
+
+/* SPI chip-database lookup. Issues a JEDEC ID read (via
+ * `FUN_00056CF4`, still pending) and walks the BIM's table of
+ * known SPI flash chips at flash `0x000571A8` (8-byte entries
+ * with signature bytes at offsets [4]/[5], terminated by an
+ * 8-byte entry whose first word is `0`). Returns 1 if the
+ * connected chip is recognized, 0 otherwise. Called by
+ * `bim_flash_prepare` (success gate) and by `bim_spi_wait_idle`
+ * (loop predicate). */
+int bim_spi_probe_chip(void);
+
+/* SPI flash "Release from Deep Power Down" — sends JEDEC
+ * `0xAB` opcode (the inverse of `0xB9` that
+ * `bim_spi_deep_power_down` sends), waits ~12 µs for the
+ * chip's tRES1 wake-up window, then verifies the chip is
+ * alive via `FUN_00056AD4` (still pending). Returns 1 on
+ * success, 0 on send or verify failure. Called by
+ * `bim_flash_prepare` after `bim_ssi_init`. */
+int bim_spi_release_from_dpd(void);
 
 /* Image launcher — terminal handoff for all three OAD scan
  * paths. Reloads SP and PC from `*(entry + 4)` (both registers
