@@ -149,24 +149,65 @@ void bim_spi_wait_idle(void);
  * `bim_spi_release_from_dpd`. */
 int bim_spi_send_bytes(const void *src, uint32_t n);
 
-/* SPI chip-database lookup. Issues a JEDEC ID read (via
- * `FUN_00056CF4`, still pending) and walks the BIM's table of
- * known SPI flash chips at flash `0x000571A8` (8-byte entries
- * with signature bytes at offsets [4]/[5], terminated by an
- * 8-byte entry whose first word is `0`). Returns 1 if the
- * connected chip is recognized, 0 otherwise. Called by
- * `bim_flash_prepare` (success gate) and by `bim_spi_wait_idle`
- * (loop predicate). */
+/* SPI full-duplex receive — clocks out `n` dummy `0x00` bytes
+ * via SSI ROM slot [2] (`SSIDataPutNonBlocking`) and stores
+ * each byte the slave shifts back into `dst[0..n)` via slot
+ * [3] (`SSIDataGet`). Returns 0 on success, -1 if any
+ * non-blocking put returned 0 (TX FIFO full — defensive). */
+int bim_spi_recv_bytes(void *dst, uint32_t n);
+
+/* SPI flash REMS (Read Electronic Manufacturer & Device ID)
+ * — sends the 4-byte command `[0x90, 0xFF, 0xFF, 0x00]`
+ * (opcode + 24-bit dummy address; LSB=0 → mfr first) over
+ * SPI, then receives 2 bytes into the SRAM globals
+ * `g_chip_id_byte1` / `g_chip_id_byte2` (= `0x20000404` /
+ * `0x20000405`). Returns 1 on success, 0 on any SSI error.
+ * Sole caller: `bim_spi_probe_chip`. The BIM uses the
+ * REMS opcode `0x90` (2-byte response: mfr+device) rather
+ * than the longer JEDEC `0x9F` (3-byte: mfr+type+capacity)
+ * because the chip-database table is keyed on REMS. */
+int bim_spi_read_rems_id(void);
+
+/* SPI chip-database lookup. Calls `bim_spi_read_rems_id` to
+ * fill `g_chip_id_byte1` / `g_chip_id_byte2`, then walks the
+ * BIM's table of known SPI flash chips at flash
+ * `0x000571A8` (8-byte entries with REMS-signature bytes at
+ * offsets [4]/[5], terminated by an 8-byte entry whose
+ * first word is `0`). Returns 1 if the connected chip is
+ * recognized, 0 otherwise. Called by `bim_flash_prepare`
+ * (success gate) and by `bim_spi_wait_idle` (loop
+ * predicate). */
 int bim_spi_probe_chip(void);
+
+/* SPI flash "wait for Write-In-Progress to clear" — polls
+ * the chip's status register (RDSR opcode `0x05`) in a tight
+ * loop and returns once bit 0 (WIP) is observed clear.
+ * Returns 0 on ready, -2 on SSI receive error. Called as a
+ * gate before reads (`bim_spi_flash_read`) and as the
+ * post-DPD-wake verification (`bim_spi_release_from_dpd`).
+ * **Unbounded loop** — relies on the chip eventually
+ * reporting idle. */
+int bim_spi_wait_wip(void);
 
 /* SPI flash "Release from Deep Power Down" — sends JEDEC
  * `0xAB` opcode (the inverse of `0xB9` that
  * `bim_spi_deep_power_down` sends), waits ~12 µs for the
  * chip's tRES1 wake-up window, then verifies the chip is
- * alive via `FUN_00056AD4` (still pending). Returns 1 on
- * success, 0 on send or verify failure. Called by
- * `bim_flash_prepare` after `bim_ssi_init`. */
+ * alive via `bim_spi_wait_wip` (RDSR until WIP clears).
+ * Returns 1 on success, 0 on send or verify failure.
+ * Called by `bim_flash_prepare` after `bim_ssi_init`. */
 int bim_spi_release_from_dpd(void);
+
+/* SPI flash sequential read — sends a 4-byte READ command
+ * (`0x03` + 24-bit big-endian address) over SPI, then
+ * receives `len` bytes into `dst`. Returns 1 on success, 0
+ * on any error path (wait-WIP fail, send fail, recv fail).
+ * Gated on `bim_spi_wait_wip` first. The 24-bit address
+ * limits this primitive to the first 16 MB of the chip;
+ * the installed MX25L51245G's upper 48 MB is unreachable
+ * by this opcode (would need the 4-byte-address READ4B
+ * `0x13`, not present in the BIM). */
+int bim_spi_flash_read(uint32_t addr, void *dst, uint32_t len);
 
 /* Image launcher — terminal handoff for all three OAD scan
  * paths. Reloads SP and PC from `*(entry + 4)` (both registers

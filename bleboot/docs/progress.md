@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-29 decomp-c / 2 vendor-stock / 2 named / 30 pending
+34 decomp-c / 2 vendor-stock / 2 named / 25 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -30,6 +30,48 @@ the underlying mechanism is SPI. Evidence:
 3. The 48 MHz literal (`0x02DC6C00`) inside `bim_ssi_init`
    matches CC2642R1F's HF XOSC frequency, fed as the refclk to
    the SSI clock divider.
+
+**Identified chip and pin assignment (Apr 2026 pass):**
+
+- **DIO4 is the SPI flash chip-select** (`/CS`, active low),
+  bit-banged manually via `dio4_clear` (assert) /
+  `dio4_set` (release) brackets around every SPI transaction.
+  Confirmed by the bracket pattern in `bim_spi_flash_read`,
+  `bim_spi_read_rems_id`, `bim_spi_deep_power_down`, and
+  `bim_spi_release_from_dpd`. The earlier "DIO4 = flash op
+  in flight LED" interpretation was wrong; the function names
+  are kept (`dio4_set` / `dio4_clear` are accurate at the
+  MMIO level) but the semantic is /CS, not an LED.
+- **Installed flash chip: Macronix MX25L51245GMI-08G-TR**
+  (512 Mbit / 64 MB, SOIC-8, 2.7–3.6 V). Identified from the
+  PCB; matches entry 0 of the chip-database table at flash
+  `0x000571A8`. The BIM uses the legacy REMS opcode `0x90`
+  (returns 2 bytes: mfr `0xC2`, device `0x19`) rather than
+  full JEDEC `0x9F` (3 bytes including capacity), so the
+  table is keyed only on the (mfr, device) pair.
+- **Chip-database table** at flash `0x000571A8`, 8-byte
+  entries, NULL-terminated. Five known chips supported by
+  the BIM, presumably reflecting VanMoof's BLE PCB design
+  history:
+
+| word[0] (capacity B) | mfr  | dev  | Chip identification | Notes |
+| --- | --- | --- | --- | --- |
+| `0x04000000` (64 MB)  | `C2` | `19` | Macronix MX25L51245G (512 Mbit) | **installed** on this PCB |
+| `0x00200000` (2 MB)   | `C2` | `15` | Macronix MX25L1606 (16 Mbit)    | older / smaller variant |
+| `0x00100000` (1 MB)   | `C2` | `14` | Macronix MX25L8006 (8 Mbit)     | older / smaller variant |
+| `0x00080000` (512 KB) | `EF` | `12` | Winbond W25X40 (4 Mbit)         | older / smaller variant |
+| `0x00040000` (256 KB) | `EF` | `11` | Winbond W25X20 (2 Mbit)         | older / smaller variant |
+| `0x00000000` (term)   | —    | —    | end-of-table sentinel           | first word == 0 |
+
+  Implication: at 64 MB, the installed chip is **way larger**
+  than what the BIM actually addresses — it only ships the
+  3-byte-address READ opcode (`0x03` in `bim_spi_flash_read`),
+  which limits reachability to the first 16 MB. The remaining
+  48 MB is unreachable by the BIM. Either VanMoof oversized
+  the chip for future-proofing, or the BIM was never updated
+  after a chip swap, or downstream code (in `bleware`, not
+  here) uses the upper bank for some other purpose (BLE
+  pairing data, app NV storage, log buffer).
 
 **Toolchain identified**: the OEM image was built with the **TI ARM
 Compiler / CCS**, not GCC. Evidence: the `_auto_init_*` descriptor-
@@ -62,17 +104,21 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
-- **`flash.c`** — Now hosts 11 functions covering the full
-  external SPI flash session: session begin/end
+- **`flash.c`** — Now hosts 16 functions covering the full
+  external SPI flash session, end-to-end: session begin/end
   (`bim_flash_prepare`, `bim_flash_release`), PRCM teardown
   (`bim_periph_power_off`), SSI0 bring-up (`bim_ssi_init`),
   DPD bracket (`bim_spi_deep_power_down`, `bim_spi_release_from_dpd`),
-  chip identification (`bim_spi_probe_chip`), SPI primitive
-  (`bim_spi_send_bytes`), DPD-landed verification
-  (`bim_spi_wait_idle`), and the two DIO4 indicator leaves
-  (`dio4_set`, `dio4_clear`). The DIO4 pair is widely shared
-  across the flash subsystem: `dio4_set` has 13 call sites,
-  `dio4_clear` has 8.
+  chip identification (`bim_spi_read_rems_id`,
+  `bim_spi_probe_chip`), SPI primitives (`bim_spi_send_bytes`,
+  `bim_spi_recv_bytes`, `bim_ssi_rx_drain`), status polling
+  (`bim_spi_wait_wip`), the leaf flash read primitive
+  (`bim_spi_flash_read`), DPD-landed verification
+  (`bim_spi_wait_idle`), and the two /CS toggle leaves
+  (`dio4_set`, `dio4_clear` — confirmed to drive the SPI
+  flash chip-select line, not an indicator LED). The /CS
+  pair is widely shared across the flash subsystem:
+  `dio4_set` has 13 call sites, `dio4_clear` has 8.
 - **`bim_ssi_init` (`0x000563C8`)** — 172 B in OEM. Behaviour-
   equivalent reconstruction. The big "what is this BIM really
   doing" function. Three external resources brought up in
@@ -123,8 +169,8 @@ layout in the TI SDK shipping CCS / IAR variants.
   opcode `0xAB`). Behaviour-equivalent reconstruction
   (register allocation differs).
 - **`bim_spi_probe_chip` (`0x0005698C`)** — 74 B. Calls
-  `FUN_00056CF4` (JEDEC ID read, still pending; presumably
-  sends `0x9F = Read ID` and stashes the response at SRAM
+  `bim_spi_read_rems_id` (which sends the REMS opcode `0x90`
+  and stashes the 2-byte response at SRAM
   `0x20000404`/`0x20000405`), then walks the 8-byte-stride
   table at flash `0x000571A8` searching for an entry whose
   signature bytes at offsets [4]/[5] match the readout. The
@@ -140,19 +186,96 @@ layout in the TI SDK shipping CCS / IAR variants.
   source equivalent is `extFlashInfo`.
 - **`bim_spi_release_from_dpd` (`0x00056D6A`)** — 56 B. Three
   steps: (1) send JEDEC `0xAB` (Release from Deep Power Down)
-  via `bim_spi_send_bytes`, bracketed with DIO4 indicator
-  toggle; (2) tRES1 wake-up delay via a 200-iter `uint16_t`
-  spin loop (~12 µs at 48 MHz HF — within JEDEC's 3–30 µs
-  spec window); (3) verify the chip via `FUN_00056AD4` (still
-  pending). Returns 1 on success. Sole caller:
-  `bim_flash_prepare` as the gate between SSI bring-up and
-  the chip-probe tail. The "send failed → fail" branch is
-  dead in this build (`bim_spi_send_bytes` always returns 0)
-  but preserved verbatim. The C reconstruction uses a
-  `volatile uint16_t` counter for the delay; GCC will emit
-  a different loop shape than the OEM's
-  `mov r0, r1; subs r1, r0, #1; cmp r0, #0; bne` pattern
-  but the iteration count and total delay are preserved.
+  via `bim_spi_send_bytes`, bracketed with /CS toggle;
+  (2) tRES1 wake-up delay via a 200-iter `uint16_t` spin loop
+  (~12 µs at 48 MHz HF — within JEDEC's 3–30 µs spec window);
+  (3) verify the chip via `bim_spi_wait_wip` (RDSR poll).
+  Returns 1 on success. Sole caller: `bim_flash_prepare` as
+  the gate between SSI bring-up and the chip-probe tail. The
+  "send failed → fail" branch is dead in this build
+  (`bim_spi_send_bytes` always returns 0) but preserved
+  verbatim. The C reconstruction uses a `volatile uint16_t`
+  counter for the delay; GCC will emit a different loop shape
+  than the OEM's `mov r0, r1; subs r1, r0, #1; cmp r0, #0;
+  bne` pattern but the iteration count and total delay are
+  preserved.
+- **`bim_spi_recv_bytes` (`0x00056C78`)** — 58 B. SPI
+  full-duplex receive primitive. For each byte: clock out a
+  dummy `0x00` via SSI ROM slot [2] (`SSIDataPutNonBlocking`
+  — note non-blocking; returns 0 if the TX FIFO was full),
+  then receive 1 byte via slot [3] (`SSIDataGet`, blocking)
+  into a 1-byte stack scratch, store at `dst[i++]`. Returns
+  0 on success, -1 if any TX put returned 0 (defensive — the
+  4-byte FIFO and serial put-then-get loop should keep this
+  unreachable). Counterpart to `bim_spi_send_bytes` (which
+  uses slot [1] = `SSIDataPut`, blocking, with TX byte from
+  the source buffer instead of zero). The two primitives
+  together form the BIM's core SPI master interface.
+- **`bim_ssi_rx_drain` (`0x00056FE0`)** — 28 B. Standalone
+  RX-FIFO drain helper: loops calling SSI ROM slot [4]
+  (`SSIDataGetNonBlocking`) on SSI0 until it returns 0
+  (FIFO empty). Sole in-source caller: `bim_spi_wait_wip`'s
+  prep pulse, used to clear any stale RX bytes left over
+  from a previously interrupted operation before the polling
+  loop starts. Distinct from the inlined drain at the tail
+  of `bim_ssi_init` (semantically identical, separately
+  emitted by the TI compiler — same one-source-multiple-
+  copies pattern as the `oad_magic_match` / `oad_magic_match2`
+  duplication).
+- **`bim_spi_read_rems_id` (`0x00056CF4`)** — 52 B. Sends the
+  4-byte REMS command word `[0x90, 0xFF, 0xFF, 0x00]`
+  (loaded from flash literal at `0x000571F0`) over SPI,
+  then receives 2 bytes into the SRAM globals at
+  `0x20000404`/`0x20000405` (`g_chip_id_byte1` /
+  `g_chip_id_byte2`). Returns 1 on success, 0 on send/recv
+  failure. Bracketed with `dio4_clear` / `dio4_set` (i.e.
+  /CS asserted across the 4-byte send + 2-byte recv as a
+  single SPI transaction). Sole caller:
+  `bim_spi_probe_chip`. **Note**: opcode `0x90` is the
+  legacy REMS (Read Electronic Manufacturer & Device ID),
+  which returns 2 bytes (mfr + device); the table at
+  `0x000571A8` is keyed on this 2-byte pair. The longer
+  JEDEC ID `0x9F` (3 bytes including capacity) would have
+  needed a different table layout; the BIM's choice of
+  REMS is consistent with the chip-database-as-lookup-table
+  design.
+- **`bim_spi_wait_wip` (`0x00056AD4`)** — 68 B. SPI flash
+  "wait for Write-In-Progress to clear" — RDSR polling
+  loop. Two phases: (1) **prep pulse**: assert /CS, drain
+  any stale RX bytes via `bim_ssi_rx_drain`, release /CS;
+  (2) **polling loop**: each iteration assert /CS, send
+  RDSR opcode `0x05` (loaded once from flash literal at
+  `0x000571F4`), recv 1 status byte, release /CS, exit if
+  bit 0 (WIP) is clear. Returns 0 on ready, -2 on recv
+  error. Loop is **unbounded** — relies on the chip
+  eventually reporting idle. Used by
+  `bim_spi_release_from_dpd` (post-wake verification) and
+  `bim_spi_flash_read` (gate before every read). The 1-byte
+  RDSR opcode buffer lives in the `r1` slot of the
+  prologue's `push {r1, r2, r3, lr}` — same TI CCS
+  1-byte-stack-scratch pattern that
+  `bim_spi_deep_power_down` and `bim_spi_release_from_dpd`
+  use for their 1-byte opcode buffers.
+- **`bim_spi_flash_read` (`0x000569E4`)** — 84 B. SPI flash
+  sequential read primitive. The leaf consumed by every
+  BIM caller that pulls bytes off the external SPI flash:
+  the slot iterator's 8-byte sniff (`bim_slot_iterator`),
+  the verify-and-launch 56-byte header read, the full-scan
+  path's metadata reads, and (in this build, dead)
+  `bim_crc32_image`'s flash-source path. Steps:
+  (1) gate on `bim_spi_wait_wip`; (2) build the 4-byte SPI
+  READ command on the stack `[0x03, addr_hi, addr_mid,
+  addr_lo]` (opcode `0x03` + 24-bit big-endian address);
+  (3) assert /CS, send 4-byte cmd; (4) recv `len` bytes
+  into `dst` via `bim_spi_recv_bytes`; (5) release /CS.
+  Returns 1 on success, 0 on any error. **24-bit addressing
+  limits this primitive to the first 16 MB of the chip**
+  — the upper 48 MB of the installed MX25L51245G is
+  unreachable by this opcode (would need the 4-byte-address
+  READ4B `0x13`, not present in the BIM). Either the OAD
+  slots are confined to the first 16 MB, or the upper
+  bank is owned by `bleware` for some other purpose
+  (BLE pairing, app NV, log buffer).
 - **`dio4_set` / `dio4_clear` (`0x00057138` / `0x00057188`)** —
   Each is a 4–5 instruction leaf that writes `1<<4` to the
   appropriate GPIO `DOUT{SET,CLR}31_0` register, then `bx lr`.
@@ -522,7 +645,12 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000570E2` | 24  | `bim_spi_wait_idle`          | `flash.c`     | Bounded busy-wait, ≤10 polls of `bim_spi_probe_chip`. Called by `bim_flash_release` after `bim_spi_deep_power_down` to verify DPD took effect (exits when chip stops responding to probes). Source shape: `for (uint8_t i = 0; i < 10; i++)` — OEM emits `uxtb` on increment. Behaviour-equivalent. |
 | decomp-c     | `0x00056EA4` | 44  | `bim_spi_send_bytes`         | `flash.c`     | SPI full-duplex transmit: for each byte, `SSIDataPut(SSI0, byte)` then `SSIDataGet(SSI0, &scratch)`. Discards RX. Used by both DPD opcode senders (`0xB9` enter and `0xAB` release). Returns 0. |
 | decomp-c     | `0x0005698C` | 74  | `bim_spi_probe_chip`         | `flash.c`     | SPI chip-database lookup. Reads JEDEC ID via `FUN_00056CF4` (pending), then walks an 8-byte-stride table at flash `0x000571A8` searching for an entry whose signature bytes at [4]/[5] match the readout. SRAM globals: cursor at `0x20000408`, JEDEC bytes at `0x20000404`/`0x20000405`. Returns 1 if recognized, 0 otherwise. Equivalent to TI's `extFlashInfo`. |
-| decomp-c     | `0x00056D6A` | 56  | `bim_spi_release_from_dpd`   | `flash.c`     | Sends JEDEC `0xAB` (Release from DPD), waits ~12 µs (200-iter spin loop for tRES1), then verifies via `FUN_00056AD4` (pending). Returns 1 on success. Sole caller: `bim_flash_prepare` as the bring-up gate before chip-probe. |
+| decomp-c     | `0x00056D6A` | 56  | `bim_spi_release_from_dpd`   | `flash.c`     | Sends JEDEC `0xAB` (Release from DPD), waits ~12 µs (200-iter spin loop for tRES1), then verifies via `bim_spi_wait_wip` (RDSR poll). Returns 1 on success. Sole caller: `bim_flash_prepare` as the bring-up gate before chip-probe. |
+| decomp-c     | `0x00056C78` | 58  | `bim_spi_recv_bytes`         | `flash.c`     | SPI full-duplex receive primitive. For each byte: clock out a dummy `0x00` via SSI ROM slot [2] (`SSIDataPutNonBlocking`), then receive 1 byte via slot [3] (`SSIDataGet`) into `dst[i++]`. Returns 0 on success, -1 if any non-blocking put returned 0 (TX FIFO full — defensive). |
+| decomp-c     | `0x00056FE0` | 28  | `bim_ssi_rx_drain`           | `flash.c`     | Loops calling SSI ROM slot [4] (`SSIDataGetNonBlocking`) on SSI0 until it returns 0 (FIFO empty). Sole caller: `bim_spi_wait_wip`'s prep pulse. Distinct from the inlined drain at the tail of `bim_ssi_init` (TI compiler emitted both copies separately). |
+| decomp-c     | `0x00056CF4` | 52  | `bim_spi_read_rems_id`       | `flash.c`     | Sends the 4-byte REMS command word `[0x90, 0xFF, 0xFF, 0x00]` (loaded from flash literal at `0x000571F0`) over SPI, then receives 2 bytes into the SRAM globals at `0x20000404`/`0x20000405` (`g_chip_id_byte1`/`g_chip_id_byte2`). Returns 1 on success. Sole caller: `bim_spi_probe_chip`. Uses legacy REMS opcode `0x90` (mfr+device, 2 bytes) rather than full JEDEC `0x9F` (3 bytes), matching the chip-database table layout. |
+| decomp-c     | `0x00056AD4` | 68  | `bim_spi_wait_wip`           | `flash.c`     | SPI flash "wait for Write-In-Progress to clear" — RDSR polling loop. Prep pulse: assert /CS, drain stale RX, release /CS. Polling loop: assert /CS, send RDSR opcode `0x05` (loaded from flash literal at `0x000571F4`), recv 1 status byte, release /CS, exit if bit 0 (WIP) is clear. Returns 0 on ready, -2 on recv error. **Unbounded loop** — relies on the chip eventually reporting idle. Called by `bim_spi_release_from_dpd` (post-wake verify) and `bim_spi_flash_read` (gate before every read). |
+| decomp-c     | `0x000569E4` | 84  | `bim_spi_flash_read`         | `flash.c`     | SPI flash sequential read primitive — the leaf consumed by every BIM caller that pulls bytes off the external SPI flash. Steps: gate on `bim_spi_wait_wip`; build `[0x03, addr_hi, addr_mid, addr_lo]` (READ opcode + 24-bit big-endian address); assert /CS; send 4-byte cmd; recv `len` bytes via `bim_spi_recv_bytes`; release /CS. Returns 1 on success. **24-bit addressing limits reach to the first 16 MB** of the installed MX25L51245G (64 MB) — upper 48 MB is unreachable by this opcode. |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
 | decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
 | decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
@@ -593,15 +721,26 @@ Mirrors with browseable trees:
   — anyone who can write the image bytes can write a matching
   CRC32.
 - The remaining undecoded helpers around the OAD path:
-  `FUN_000569E4` (flash read), `FUN_00056CB8` (image-base
-  derivation), `FUN_00056714` (secondary CRC check),
-  `FUN_000567A0` (short flash write), `FUN_00056E40` (small flash
-  read), `FUN_00056E72` (flash program), `FUN_000570FA`
-  (alt-source read), `FUN_00056D30`
-  (flash-page read), the helpers internal to `bim_flash_prepare`
-  itself: `FUN_00056CF4` (JEDEC-ID read helper consumed by
-  `bim_spi_probe_chip`), `FUN_00056AD4` (post-wake verifier
-  consumed by `bim_spi_release_from_dpd`).
+  `FUN_00056CB8` (image-base derivation),
+  `FUN_00056714` (secondary CRC check),
+  `FUN_000567A0` (short flash write), `FUN_00056E40` (small
+  flash read), `FUN_00056E72` (flash program), `FUN_000570FA`
+  (alt-source read), `FUN_00056D30` (flash-page read).
+- ~~`FUN_00056CF4` (JEDEC ID read), `FUN_00056AD4` (post-wake
+  verifier), `FUN_000569E4` (flash read)~~ — **resolved**:
+  decoded as `bim_spi_read_rems_id` (sends REMS opcode `0x90`,
+  recv 2 bytes), `bim_spi_wait_wip` (RDSR `0x05` poll loop),
+  `bim_spi_flash_read` (READ opcode `0x03` + 24-bit address +
+  recv N bytes).
+- **Why does the upper 48 MB of the installed 64 MB chip
+  appear unreachable from the BIM?** `bim_spi_flash_read`
+  uses 3-byte addressing (opcode `0x03`); reaching above
+  16 MB would require the 4-byte-address READ4B (`0x13`) or
+  the 4-byte-mode-enable opcode (`0xB7`) — neither appears
+  in the BIM. Either OAD slots are confined to the first
+  16 MB by design, or the upper bank is reserved for
+  `bleware`-owned data (BLE bond storage, app NV, log
+  buffer). Worth verifying once `bleware` is in scope.
 - The OAD image header bytes around file offset `0x1FA8` aren't
   yet parsed; the two `OAD NVM1` markers visible via `strings -t x`
   weren't auto-tagged by Ghidra because they sit inside a packed

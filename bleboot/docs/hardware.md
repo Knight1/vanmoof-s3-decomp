@@ -106,7 +106,7 @@ and Reset is the application entry point.
 | --- | --- | --- | --- | --- |
 | `0x20000300` | 256 | `(crc scratch)` | `crc.c` | 256-byte scratch buffer used by `bim_crc32_image` to stage flash- or RAM-source bytes before the CRC32 inner loop. Adjacent to `g_oad_chunk_size`; the two globals form a contiguous 260-byte block at the start of the BIM's SRAM data. |
 | `0x20000400` | 4 | `g_oad_chunk_size` | `main.c` | OAD chunk-size selector — `(MMIO[0x40032430] & 0xF) << 10` cached at boot. Read by `bim_crc32_image` as the outer-loop partition size. Originally misnamed `g_hw_id_cached` (the assumption that it was a per-bike salt turned out to be wrong; it's a per-board configuration selector, not a device identity). |
-| `0x20000404` | 2 | `g_chip_id_byte1/2` | `flash.c` | JEDEC ID readout bytes from the external SPI NOR flash chip — populated by `FUN_00056CF4` (the still-pending Read-ID helper) and consumed by `bim_spi_probe_chip` as the search key into the chip-database table. Bytes at `0x20000404`/`0x20000405` are likely manufacturer-id + device-id-high; byte at `0x20000406` may hold device-id-low or capacity. |
+| `0x20000404` | 2 | `g_chip_id_byte1/2` | `flash.c` | REMS readout bytes (manufacturer + device, 2 bytes total) from the external SPI NOR flash chip — populated by `bim_spi_read_rems_id` (sends opcode `0x90`, recv 2 bytes) and consumed by `bim_spi_probe_chip` as the search key into the chip-database table. For the installed Macronix MX25L51245G these read back as `0xC2` (Macronix mfr) and `0x19` (REMS device ID). |
 | `0x20000408` | 4 | `g_chip_table_cursor` | `flash.c` | Walk cursor for `bim_spi_probe_chip`'s table search — reset to the table head (`0x000571A8`) at the start of every probe call, advanced by 8 bytes per non-matching entry. The walk-cursor doesn't need to persist across calls, but the OEM keeps it in SRAM (rather than on the stack) — a TI CCS code-size tic. |
 
 ## Known MMIO accesses (from decomp)
@@ -114,8 +114,8 @@ and Reset is the application entry point.
 | Address | Width | Direction | Accessor | Notes |
 | --- | --- | --- | --- | --- |
 | `0x40032430` | 32 b | read | `main` | Sits in the `0x40030000..0x40034000` band between the FLASH controller and VIMS. Low 4 bits select an OAD chunk size (the value is left-shifted by 10 before caching, giving 1024-byte steps from 1 KB to 15 KB). Consumed by `bim_crc32_image` as the outer-loop chunk stride. Probably keyed off a board-revision pad rather than a hardware identity. |
-| `0x40022090` | 32 b | write | `bim_panic_indicate`, `bim_flash_prepare`, `dio4_set` | `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` — set-only alias for `DOUT31_0`. Used by three callers with three different DIO bits: `1<<2` (DIO2, panic LED via `bim_panic_indicate`), `1<<3` (DIO3, "flash session active" via `bim_flash_prepare`), `1<<4` (DIO4, "flash op in flight" via `dio4_set` — ~13 call sites across the BIM flash subsystem). |
-| `0x400220A0` | 32 b | write | `bim_flash_release`, `dio4_clear` | `GPIO_BASE + DOUTCLR31_0 (0xA0)` — set-only alias for clearing DIO bits. Used as a literal-pool-shared constant across the image: many call sites load `0x400220A0` and either use it directly (`bim_flash_release` clears `1<<4` inline; `dio4_clear` is a standalone leaf doing the same write — ~8 call sites) or `subs r0, #16` to convert it to `DOUTSET31_0` at `0x40022090` (the trick `dio4_set` uses). |
+| `0x40022090` | 32 b | write | `bim_panic_indicate`, `bim_flash_prepare`, `dio4_set` | `GPIO_BASE (0x40022000) + DOUTSET31_0 (0x90)` — set-only alias for `DOUT31_0`. Used by three callers with three different DIO bits: `1<<2` (DIO2, panic LED via `bim_panic_indicate`), `1<<3` (DIO3, "flash session active" indicator LED via `bim_flash_prepare`), `1<<4` (DIO4, **SPI flash /CS release** via `dio4_set` — ~13 call sites bracketing every SPI transaction). |
+| `0x400220A0` | 32 b | write | `bim_flash_release`, `dio4_clear` | `GPIO_BASE + DOUTCLR31_0 (0xA0)` — set-only alias for clearing DIO bits. Used as a literal-pool-shared constant across the image: many call sites load `0x400220A0` and either use it directly (`bim_flash_release` clears `1<<4` to drop /CS at session end; `dio4_clear` is a standalone leaf doing the same write to **assert /CS** at the start of every SPI transaction — ~8 call sites) or `subs r0, #16` to convert it to `DOUTSET31_0` at `0x40022090` (the trick `dio4_set` uses). |
 | `0x42441A08` | 32 b | write | `bim_panic_prep` | Bit-band alias of bit 2 of `GPIO_DOE31_0` at `GPIO_BASE + 0xD0 = 0x400220D0`. Writes `1` to switch DIO2 from input (reset default) to output, so the `DOUTSET31_0` write that follows actually drives the pin. |
 | `0x40082028` / `0x60082028` | 32 b | write + poll | `bim_panic_prep`, `bim_periph_power_off`, `bim_ssi_init` | `PRCM_BASE (0x40082000) + 0x28` — **PRCM_CLKLOADCTL** (NOT `GPIOCLKGR`, which is at offset `0x48`). Bit 0 = `LOAD` (write 1 to trigger reload of all PRCM clock-gate configuration), bit 1 = `LOAD_DONE` (ack, software-polled). The `0x60082028` alias is the write-through trigger path; the `0x40082028` alias is the readable status. All three PRCM users issue the same trigger-and-wait idiom after any clock-gate change. |
 | `0x100001B8` | 32 b | read (ptr-to-table) | `bim_panic_prep`, `bim_periph_power_off`, `bim_ssi_init` | ROM-region dispatch slot — pointer to the TI **PRCM ROM sub-table**. Slot map (consistent across all three callers): `[5]` = PowerDomainOn (`bim_panic_prep(4)`, `bim_ssi_init(6)`), `[6]` = PowerDomainOff (`bim_periph_power_off(6)`), `[7]` = PeripheralRunEnable (`bim_panic_prep(0x500)`, `bim_ssi_init(0x500)` + `(0x100)`), `[8]` = PeripheralReconfigure (`bim_periph_power_off(0x100)` + `(0x500)`), `[13]` = PowerDomainStatus (all three; arg = domain mask, returns `1` = ON in bring-up, `2` = ready-to-power-down in teardown). Exact slot-to-function-name mapping deferred until cross-referenced against TI's `rom.h` from a matching SDK release. |
@@ -123,6 +123,71 @@ and Reset is the application entry point.
 | `0x100001B4` | 32 b | read (ptr-to-table) | `bim_flash_prepare`, `bim_ssi_init` | ROM-region dispatch slot — pointer to a TI ROM sub-table that mixes SPI-flash command primitives and IOC/pin-routing. Slot `[15]` called by `bim_flash_prepare` with args `4` then `3` (likely SPI flash "Release from Deep Power Down" `0xAB` + a status follow-up — mirrors `bim_spi_deep_power_down`'s release-side `0xB9`). Slot `[17]` called by `bim_ssi_init` with args `(SSI0_BASE, 6, 5, -1, cfg)` (5 args; likely IOC pin routing for the SSI0 MISO/MOSI/SCLK/CSn lines). |
 | `0x40000000` – `0x40000FFF` | 32 b | RMW + via SSI ROM | `bim_ssi_init`, `bim_flash_prepare` | **SSI0** — Synchronous Serial Interface 0, used by the BIM as the SPI master to talk to an external SPI NOR flash chip that stages OAD images. The internal CC2642 flash holds only the BIM itself (this 8 KB page); candidate images live on external SPI flash. This is the TI OAD "external flash" build configuration. Direct register accesses: `+0x04` (CR1, SSE enable), `+0x14` (IM, interrupt mask), `+0x20` (ICR, interrupt clear). |
 | `0xE000ED88` | 32 b | read-modify-write | `ResetISR_body` | `SCB->CPACR` — the Reset path sets bits 20–23 (CP10/CP11 full access) to enable the FPU. Standard Cortex-M4F boilerplate. |
+
+## External SPI NOR flash chip (BLE PCB)
+
+The BIM uses SSI0 as the SPI master to talk to an external SPI
+NOR flash chip that stages OAD update images.
+
+| | |
+| --- | --- |
+| Installed chip   | **Macronix MX25L51245GMI-08G-TR** (identified from PCB) |
+| Capacity         | 512 Mbit / 64 MB |
+| Package          | SOIC-8 (208 mil) |
+| Voltage          | 2.7–3.6 V (single supply, matches CC2642 IO domain) |
+| REMS ID (`0x90`) | mfr `0xC2` (Macronix), device `0x19` |
+| JEDEC ID (`0x9F`)| `C2 20 1A` (mfr `0xC2`, type `0x20` = MX25L, capacity `0x1A` = 512 Mbit) |
+| Erase grain      | 4 KB sector / 32 KB block / 64 KB block / chip-erase |
+| /CS line         | **DIO4** (CC2642), bit-banged manually rather than driven by SSI0's hardware FSS pin |
+| SCK / MISO / MOSI| Driven by SSI0 via IOC — exact DIO assignments TBD (SSI0 IOC config done in `bim_ssi_init` slot [17] call) |
+
+**Bus configuration** (set up in `bim_ssi_init`):
+
+- SPI master, mode 0 (CPOL=0, CPHA=0)
+- 4 MHz bit rate (well under the chip's 80 MHz max)
+- 8-bit data width
+- /CS bit-banged via DIO4 (active low)
+
+**Reachability quirk**: `bim_spi_flash_read` uses 3-byte
+addressing (opcode `0x03`, 24-bit address), so the BIM can
+only read the first 16 MB of the 64 MB chip. The upper 48 MB
+is unreachable from this image — would need the 4-byte-address
+READ4B (`0x13`) or a `0xB7` to enable 4-byte mode persistently.
+Either OAD slots are confined to the first 16 MB by design, or
+the upper bank is reserved for `bleware`-owned data (BLE bond
+storage, app NV, log buffer).
+
+### Chip-database table at flash `0x000571A8`
+
+The BIM ships with a hardcoded list of supported SPI NOR flash
+chips. `bim_spi_probe_chip` walks this table after every chip
+identification, comparing the REMS readout against entries
+[4]/[5]. 8-byte entries, NULL-terminated.
+
+| Offset | word[0] (capacity, B) | byte[4] mfr | byte[5] device | byte[6:8] | Identification |
+| --- | --- | --- | --- | --- | --- |
+| `0x000571A8` | `0x04000000` (64 MB)  | `0xC2` | `0x19` | `00 00` | Macronix MX25L51245G (512 Mbit) — **installed** |
+| `0x000571B0` | `0x00200000` (2 MB)   | `0xC2` | `0x15` | `00 00` | Macronix MX25L1606 (16 Mbit) |
+| `0x000571B8` | `0x00100000` (1 MB)   | `0xC2` | `0x14` | `00 00` | Macronix MX25L8006 (8 Mbit) |
+| `0x000571C0` | `0x00080000` (512 KB) | `0xEF` | `0x12` | `00 00` | Winbond W25X40 (4 Mbit) |
+| `0x000571C8` | `0x00040000` (256 KB) | `0xEF` | `0x11` | `00 00` | Winbond W25X20 (2 Mbit) |
+| `0x000571D0` | `0x00000000` (term)   | —      | —      | `00 00` | end-of-table sentinel (first word == 0) |
+
+The table presumably reflects VanMoof's BLE PCB design history
+across S3 hardware revisions: smaller older chips at the bottom,
+the current 64 MB Macronix at the top. The table format
+(`{capacity, mfr, dev, padding}`) maps directly to TI's
+`extFlashInfo_t` layout from the SimpleLink CC13x2/CC26x2 SDK's
+`source/ti/common/cc26xx/flash_interface/external/flash_interface_ext_rtos_NVS.c`.
+
+### SPI command literals at flash `0x000571F0` / `0x000571F4`
+
+Two pre-formatted SPI command blobs live in the BIM's `.rodata`:
+
+| Address | Bytes | Used by | Notes |
+| --- | --- | --- | --- |
+| `0x000571F0` | `90 FF FF 00` | `bim_spi_read_rems_id` | REMS opcode `0x90` + 24-bit dummy address `0xFFFF00`. Address LSB = 0 → REMS returns mfr first, device second. |
+| `0x000571F4` | `05 06 FF FF` | `bim_spi_wait_wip` (only byte 0) | byte 0 = RDSR opcode `0x05` (Read Status Register). byte 1 = `0x06` (WREN, Write Enable) — present in the literal but **dead** in this build (no caller loads byte 1). May be a leftover from an earlier BIM revision that did flash writes. |
 
 ## Strings of interest
 
