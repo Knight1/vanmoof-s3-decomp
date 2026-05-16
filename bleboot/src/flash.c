@@ -818,6 +818,225 @@ int bim_iflash_program(uint32_t slot, uint32_t offset,
     return (prog_err == 0) ? 0 : 0xFF;
 }
 
+/* Internal-flash flat-address program (`FUN_00056F00` in the OEM,
+ * 42 B). Sibling of `bim_iflash_program` — same three-step
+ * begin/ROM-program/end sequence, but with a flat destination
+ * address instead of `(slot, offset)`. Used by
+ * `bim_iflash_copy_from_spi` to drop 256-byte chunks at
+ * arbitrary internal-flash addresses inside the bleware region.
+ *
+ * Returns 0 on success, `0xFF` on program failure — matches
+ * `bim_iflash_program`'s convention. The slot/offset wrapper
+ * exists for marker-write call sites that think in slot-relative
+ * terms (`bim_iflash_program(page, 17, ...)`); this flat
+ * variant is for the bulk-copy call site. */
+static int bim_iflash_program_flat(uint32_t addr, const void *src, uint32_t count)
+{
+    uint32_t prev_state = bim_iflash_session_begin();
+    int      prog_err   = bim_iflash_program_via_rom(src, addr, count);
+    bim_iflash_session_end(prev_state);
+    return (prog_err == 0) ? 0 : 0xFF;
+}
+
+/* Internal-flash blank-page check, slot-indexed (`FUN_00056FBC`
+ * in the OEM, 32 B + 4 B literal). Wraps the TI ROM-API
+ * blank-check primitive (`FlashCheckFsm`-style helper at
+ * `FUN_00057058`) in a begin/check/end bracket. Computes the
+ * page's flash address as `slot << 13` (8 KB stride) and asks the
+ * ROM whether the entire page is `0xFF`. Returns `0xFF` if the
+ * page is blank (caller continues), `0` if it isn't (caller
+ * bails). Used only by `bim_iflash_check_range_blank` (4 B per
+ * call's loop body — the slot iteration). */
+extern uint32_t bim_iflash_rom_blank_check(uint32_t addr);
+
+static int bim_iflash_check_slot_blank(uint8_t slot_idx)
+{
+    uint32_t prev_state = bim_iflash_session_begin();
+    uint32_t blank      = bim_iflash_rom_blank_check((uint32_t)slot_idx << 13);
+    bim_iflash_session_end(prev_state);
+    return ((uint8_t)blank != 0u) ? 0xFF : 0;
+}
+
+/* Internal-flash blank-range verification (`FUN_00056C34` in the
+ * OEM, 66 B). Iterates every internal-flash page that the byte
+ * range `[addr_low, addr_low + length)` would touch and confirms
+ * each one is blank (pre-erased to `0xFF`). Returns `0` if every
+ * page is blank, `0xFF` on the first non-blank page.
+ *
+ * Quirk: the OEM passes only the LOW 8 BITS of the destination
+ * address (`uxtb r0` at the call site in
+ * `bim_iflash_copy_from_spi`), so the start-page index it
+ * computes is `(addr & 0xFF) / chunk_size` — which collapses to
+ * `0` for any reasonable chunk size (1024, 2048, 8192). The
+ * end-page index is `ceil(length / chunk_size)`, so the check
+ * effectively verifies pages `0..ceil(length/chunk_size)` are
+ * blank — not the pages this write will actually touch. Looks
+ * like a holdover from an earlier `slot_base`-relative variant
+ * where the low byte WAS the slot index; preserved verbatim
+ * because changing it would diverge from the OEM behaviour
+ * (which is: the check is effectively a "are slots 0..N blank?"
+ * sanity pass before a bulk write, regardless of where the
+ * write lands). */
+static int bim_iflash_check_range_blank(uint8_t addr_low, uint32_t length, uint32_t chunk_size)
+{
+    uint8_t start = (uint8_t)((uint32_t)addr_low / chunk_size);
+    uint8_t count = (uint8_t)(length / chunk_size);
+
+    if ((length % chunk_size) != 0u) {
+        count = (uint8_t)(count + 1u);
+    }
+
+    uint8_t end = (uint8_t)(start + count);
+    uint8_t slot = start;
+    uint8_t fail = 0;
+
+    while (slot < end) {
+        if (bim_iflash_check_slot_blank(slot) != 0xFF) {
+            fail = 0xFF;
+            break;
+        }
+        slot = (uint8_t)(slot + 1u);
+    }
+
+    return fail;
+}
+
+/* External-to-internal flash copy (`FUN_00056714` in the OEM,
+ * 140 B). The OAD promote primitive — pulls a contiguous range
+ * from external SPI flash and writes it to internal CC2642
+ * flash, 256 bytes per chunk. Used after CRC verification in
+ * `bim_full_scan_and_launch` to copy the verified candidate from
+ * its OAD staging slot to its executable destination in internal
+ * flash, and also by `bim_verify_and_launch_image` for the same
+ * staging-to-executable transfer.
+ *
+ * Preconditions, all enforced up front (any failure returns -1
+ * without touching flash):
+ *
+ *   - `iflash_dst` must be 4-byte aligned (the underlying
+ *     ROM-API flash programmer requires word alignment).
+ *   - `(iflash_dst + length - 1) / chunk_size` (end page index)
+ *     must be ≥ `iflash_dst / chunk_size` (start page index) —
+ *     guards against overflow.
+ *   - end page index must be ≤ 44 (the BIM's executable region
+ *     spans 44 × 8 KB pages = 352 KB; chunk_size is
+ *     `g_oad_chunk_size` from `BIM_CHUNK_SIZE_REG`).
+ *   - target slots must be pre-erased (see
+ *     `bim_iflash_check_range_blank` — note that quirk's
+ *     low-byte truncation effectively makes this a "slots
+ *     0..N blank" check rather than a check on the actual
+ *     target slots).
+ *
+ * Main loop: pulls 256-byte chunks from SPI flash via
+ * `bim_spi_flash_read` into a 256-byte stack buffer, then writes
+ * each chunk to internal flash via `bim_iflash_program_flat`.
+ * Both source and destination advance lockstep by the chunk
+ * size; the final iteration may write less than 256 bytes.
+ *
+ * Returns 0 on success, -1 on any failure (precondition trip,
+ * SPI read failure, or internal-flash program failure). The
+ * caller compares against 0 to decide whether to promote (write
+ * 0xFE status markers) or reject (write 0xFC). */
+int bim_iflash_copy_from_spi(uint32_t spi_src, uint32_t length, uint32_t iflash_dst)
+{
+    uint32_t chunk_size = g_oad_chunk_size;
+
+    uint32_t start_page = iflash_dst / chunk_size;
+    uint32_t end_page   = (iflash_dst + length - 1u) / chunk_size;
+
+    if ((iflash_dst & 0x3u) != 0u) {
+        return -1;
+    }
+    if (end_page < start_page || end_page > 44u) {
+        return -1;
+    }
+
+    if (bim_iflash_check_range_blank((uint8_t)iflash_dst, length, chunk_size) != 0) {
+        return -1;
+    }
+
+    uint8_t  buf[256];
+    uint32_t remaining   = length;
+    uint32_t cur_spi     = spi_src;
+    uint32_t cur_iflash  = iflash_dst;
+
+    while (remaining != 0u) {
+        uint16_t chunk = (remaining < 256u) ? (uint16_t)remaining : 256u;
+
+        if (bim_spi_flash_read(cur_spi, chunk, buf) == 0) {
+            return -1;
+        }
+        if (bim_iflash_program_flat(cur_iflash, buf, chunk) != 0) {
+            return -1;
+        }
+
+        cur_spi    += chunk;
+        cur_iflash += chunk;
+        remaining  -= chunk;
+    }
+
+    return 0;
+}
+
+/* IRQ enable/disable around a memcpy. PRIMASK save/restore
+ * primitives — both return prior PRIMASK as `uint32_t`.
+ *
+ *   `bim_irq_disable_save` (`FUN_00057164`) — `mrs r0, PRIMASK;
+ *   cpsid i; bx lr`. Disables IRQs, returns the prior bit.
+ *
+ *   `bim_irq_enable_restore` (`FUN_00057170`) — `mrs r0, PRIMASK;
+ *   cpsie i; bx lr`. Enables IRQs, returns the prior bit.
+ *
+ * Used by `bim_iflash_read` to bracket the memcpy with a
+ * critical section *only when* interrupts were enabled going in
+ * — nested calls (BIM already inside a critical section) skip
+ * the re-enable so the outer caller's IRQ state survives. */
+extern uint32_t bim_irq_disable_save(void);
+extern uint32_t bim_irq_enable_restore(void);
+
+/* Internal-flash read primitive (`FUN_00056E40` in the OEM,
+ * 50 B). Reads `len` bytes from internal flash at `src` (which
+ * lives at the CC2642's memory-mapped internal flash region
+ * `0x00000000..0x00057FFF`) into RAM at `dst`, wrapped in an
+ * IRQ-disabled critical section.
+ *
+ * Why disable IRQs around a flash read: the CC2642's internal
+ * flash controller is single-ported — if a higher-priority ISR
+ * issues a flash program/erase while a read is in-flight (e.g.
+ * `bim_iflash_program` running from a hypothetical preemption
+ * path), the read returns garbage. The BIM is essentially
+ * single-threaded so this is defensive, but the OEM emits the
+ * bracket anyway.
+ *
+ * Nested-safe: only re-enables IRQs at the end if the prior
+ * PRIMASK said they were enabled going in. If the caller was
+ * already in a critical section, this routine respects that
+ * across the memcpy.
+ *
+ * Used by `bim_quick_scan_and_launch` for the 8-byte sniff and
+ * 44-byte short-header reads at each slot's anchor — both reads
+ * land on internal flash (not external SPI) because the quick
+ * scan operates on already-promoted images that live in
+ * internal flash. */
+int bim_iflash_read(const void *src, void *dst, uint32_t len)
+{
+    uint32_t prev_primask = bim_irq_disable_save();
+    int      need_restore = (prev_primask == 0u) ? 1 : 0;
+
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t       *d = (uint8_t *)dst;
+
+    while (len != 0u) {
+        *d++ = *s++;
+        len--;
+    }
+
+    if (need_restore) {
+        (void)bim_irq_enable_restore();
+    }
+    return 0;
+}
+
 int bim_flash_prepare(void)
 {
     bim_ssi_init(0x003D0900u, 9u);   /* 4 MHz SPI bit rate, cfg = 9 */

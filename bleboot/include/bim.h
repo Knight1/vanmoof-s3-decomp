@@ -63,6 +63,20 @@ uint32_t bim_crc32_image(uint32_t start_page,
                           uint32_t image_size,
                           uint8_t  use_flash);
 
+/* Flat-buffer CRC32-IEEE over a contiguous flash range — the
+ * sibling of `bim_crc32_image`, used by `bim_full_scan_and_launch`
+ * as the primary integrity check against `hdr[8]` before the
+ * paged variant runs. Same per-byte polynomial step
+ * (`crc32_ieee_byte_step`), but reads bytes sequentially from
+ * `addr..addr+len` instead of walking pages of `chunk_size`.
+ * `use_spi != 0` reads through `bim_spi_flash_read` (and bounds
+ * `len` against the matched chip's capacity from
+ * `bim_get_chip_entry`); `use_spi == 0` reads through the alt
+ * source `FUN_000570FA` (dead in this build). Returns the final
+ * CRC value on success, `0` on any failure (zero/maxed length,
+ * length exceeds chip capacity). */
+uint32_t bim_crc32_buffer(uint32_t addr, uint32_t len, uint8_t use_spi);
+
 /* OAD magic check — returns 1 if the 8 bytes pointed to by `hdr8`
  * match the constant ASCII string "OAD NVM1", else 0. Called by
  * the quick-scan sniff and by `bim_slot_iterator`. The reference
@@ -241,6 +255,30 @@ int bim_spi_flash_program(uint32_t addr, uint32_t len, const void *src);
  * external SPI flash. */
 int bim_iflash_program(uint32_t slot, uint32_t offset,
                        const void *src, uint32_t count);
+
+/* External-to-internal flash copy — the OAD promote primitive.
+ * Pulls `length` bytes from external SPI flash at `spi_src` and
+ * writes them to internal CC2642 flash at `iflash_dst` in
+ * 256-byte chunks. Pre-checks that `iflash_dst` is 4-byte
+ * aligned, that the touched-page range fits within the bleware
+ * region (≤ 44 pages × 8 KB = 352 KB), and that the target
+ * pages are pre-erased (`0xFF`) — see the "low-byte truncation"
+ * quirk in `bim_iflash_check_range_blank`. Returns 0 on success,
+ * -1 on any failure (precondition trip, SPI read, or iflash
+ * program). Used by `bim_full_scan_and_launch` (post-CRC
+ * promote) and `bim_verify_and_launch_image` (staging-to-exec
+ * transfer). */
+int bim_iflash_copy_from_spi(uint32_t spi_src, uint32_t length, uint32_t iflash_dst);
+
+/* Internal-flash read primitive — reads `len` bytes from
+ * memory-mapped internal flash at `src` to RAM at `dst`, wrapped
+ * in an IRQ-disabled critical section so a concurrent program/
+ * erase from a hypothetical ISR can't corrupt the read. Nested-
+ * safe: only re-enables IRQs on exit if they were enabled going
+ * in. Returns 0 (always). Used by `bim_quick_scan_and_launch`
+ * for 8-byte sniff and 44-byte short-header reads from already-
+ * promoted images sitting in internal flash. */
+int bim_iflash_read(const void *src, void *dst, uint32_t len);
 
 /* Image-segment-table walker — given the base address of an
  * OAD image header on external SPI flash and the header's

@@ -9,7 +9,7 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-38 decomp-c / 2 vendor-stock / 5 named / 18 pending
+42 decomp-c / 2 vendor-stock / 8 named / 11 pending
 ```
 
 (`63` total functions in Ghidra at base `0x00056000`.)
@@ -104,7 +104,7 @@ layout in the TI SDK shipping CCS / IAR variants.
   `movs r0,#0` on the fall-through, since r0 is already 0 there),
   and `cmp.w r4,#-1; bne` with `adds r4,#1; bne` (mutates r4 but
   it's dead after) — saving 4 B total.
-- **`flash.c`** — Now hosts 19 functions covering the full
+- **`flash.c`** — Now hosts 23 functions covering the full
   external SPI flash session and the internal CC2642 flash
   program path, end-to-end: session begin/end
   (`bim_flash_prepare`, `bim_flash_release`), PRCM teardown
@@ -127,6 +127,36 @@ layout in the TI SDK shipping CCS / IAR variants.
   C-translation pending). The /CS pair is widely shared
   across the flash subsystem: `dio4_set` has 13 call sites,
   `dio4_clear` has 8.
+
+  **The OAD promote primitive stack** the
+  function that actually copies a verified candidate from
+  external SPI staging to its internal-flash executable
+  destination is `bim_iflash_copy_from_spi` (`0x00056714`,
+  140 B), called from both `bim_full_scan_and_launch` (after
+  CRC) and `bim_verify_and_launch_image`. It pulls 256-byte
+  chunks via `bim_spi_flash_read` and writes them via
+  `bim_iflash_program_flat` (`0x00056F00`, 42 B — a flat-
+  address sibling of `bim_iflash_program`). Pre-erase
+  verification happens via `bim_iflash_check_range_blank`
+  (`0x00056C34`) which iterates pages via
+  `bim_iflash_check_slot_blank` (`0x00056FBC`), in turn
+  calling the TI ROM-API blank-check helper
+  `bim_iflash_rom_blank_check` (`0x00057058`). The
+  `bim_iflash_check_range_blank` routine has an OEM low-byte
+  truncation quirk that effectively makes the check "are
+  slots 0..N blank?" rather than "are the actual target slots
+  blank?" — preserved verbatim; documented in `flash.c` and
+  the function-table row.
+
+  **The IRQ-safe internal-flash read** (added May 2026):
+  `bim_iflash_read` (`0x00056E40`, 50 B) wraps a memcpy from
+  memory-mapped internal flash to RAM in a PRIMASK
+  save/restore via the leaf pair `bim_irq_disable_save`
+  (`0x00057164`) / `bim_irq_enable_restore` (`0x00057170`).
+  Nested-safe — only re-enables IRQs on exit if they were
+  enabled going in. Used by `bim_quick_scan_and_launch` for
+  the 8-byte sniff and 44-byte short-header reads of
+  already-promoted images sitting in internal flash.
 - **`bim_ssi_init` (`0x000563C8`)** — 172 B in OEM. Behaviour-
   equivalent reconstruction. The big "what is this BIM really
   doing" function. Three external resources brought up in
@@ -483,14 +513,18 @@ layout in the TI SDK shipping CCS / IAR variants.
   The complementary "flash session end" routine is
   `bim_flash_release`, called by every flash-using path (and by
   this function on the failure branch).
-- **`crc.c`** — Now hosts two functions: `bim_crc32_image` at
-  `0x000560D8` (the outer CRC compute) and `crc32_ieee_byte_step`
-  at `0x00056F50` (the per-byte polynomial step). Together they
-  implement standard CRC32-IEEE (polynomial `0xEDB88320`,
-  init/final XOR `0xFFFFFFFF`) without a precomputed table — the
-  step function materialises one table entry on demand by 8-bit
-  polynomial division. Trades ~8 cycles per byte for ~1 KB of
-  flash savings, which fits the BIM's 8 KB budget.
+- **`crc.c`** — Now hosts three functions: `bim_crc32_image` at
+  `0x000560D8` (the paged-OAD CRC compute), `bim_crc32_buffer`
+  at `0x0005653C` (the flat-buffer CRC compute), and
+  `crc32_ieee_byte_step` at `0x00056F50` (the shared per-byte
+  polynomial step). Together they implement standard CRC32-IEEE
+  (polynomial `0xEDB88320`, init/final XOR `0xFFFFFFFF`) without
+  a precomputed table — the step function materialises one table
+  entry on demand by 8-bit polynomial division. Trades ~8 cycles
+  per byte for ~1 KB of flash savings, which fits the BIM's 8 KB
+  budget. The two compute routines share the same `0x20000300`
+  256-byte SRAM scratch buffer; safe because the BIM never
+  reenters either CRC routine within a single boot.
 - **`crc32_ieee_byte_step` (`0x00056F50`)** — 32 B (OEM) / 22 B
   (ours, `-Os`, +4 B literal). Pure textbook 8-iteration loop;
   the polynomial constant in the literal pool is the only thing
@@ -605,17 +639,22 @@ layout in the TI SDK shipping CCS / IAR variants.
 - **`bim_verify_and_launch_image` (`0x000568A8`)** — 120 B in both
   OEM and ours — size-equivalent but not byte-equivalent. Reads
   the 56-byte primary OAD header at flash address 0 via
-  `FUN_000569e4(0, 56, &hdr)`, bails if `hdr.status != 0xFE`,
-  computes an image-base word via `FUN_00056cb8(0, hdr.image_size)`,
-  runs `FUN_00056714(0, hdr.image_size, base)` as a secondary
-  geometry check, then computes the CRC32 over the image body
-  via `bim_crc32_image(page, g_oad_chunk_size, 0, hdr.image_size, 0)`.
+  `bim_spi_flash_read(0, 56, &hdr)`, bails if `hdr.status != 0xFE`,
+  computes an image-base word via
+  `bim_oad_find_image_addr(0, hdr.image_size)`, then **promotes**
+  the staged candidate via
+  `bim_iflash_copy_from_spi(0, hdr.image_size, base)` (copies the
+  image body from external SPI into its destination in internal
+  CC2642 flash, in 256-byte chunks, after pre-erase verification).
+  If the copy succeeds, computes the CRC32 over the image body via
+  `bim_crc32_image(page, g_oad_chunk_size, 0, hdr.image_size, 0)`.
   On match against `hdr.image_crc`, writes a 1-byte `0xFE` marker
-  into flash at offset 17 of the image's own page via
-  `FUN_00056e72` and jumps to `hdr.entry` via `FUN_00057156`. The
-  `0xFC` write to the local `status` byte preceding the compare
-  is dead on the mismatch path but materialised by `-Os` because
-  the C source has the default value inline with the declaration.
+  into internal flash at offset 17 of the image's own page via
+  `bim_iflash_program` and jumps to `hdr.entry` via
+  `bim_launch_image`. The `0xFC` write to the local `status` byte
+  preceding the compare is dead on the mismatch path but
+  materialised by `-Os` because the C source has the default
+  value inline with the declaration.
 - **`bim_quick_scan_and_launch` (`0x00056824`)** — 130 B (OEM) /
   102 B (ours, `-Os`) — behaviour-equivalent. Lazy fast-path
   scanner: walks slots `start_slot..43` (8 KB stride), reads an
@@ -644,29 +683,35 @@ layout in the TI SDK shipping CCS / IAR variants.
   BIM stages OAD candidates on external SPI at a 4 KB grid
   and promotes them by writing markers to the corresponding
   internal flash 8 KB page (where bleware actually executes).
-  For each slot it: (a) primary CRC check
-  via `FUN_0005653c` against `hdr[8]`; (b) on match, reads a
+  For each slot it: (a) primary CRC32 check over the image body
+  via `bim_crc32_buffer(slot_base+12, image_size-12, 1)` against
+  `hdr[8]` (flat-buffer variant — same per-byte CRC32-IEEE as
+  `bim_crc32_image` but reads sequentially via
+  `bim_spi_flash_read`, bounded against the matched chip's
+  capacity through `bim_get_chip_entry`); (b) on match, reads a
   44-byte secondary header from a fixed `slot_base = 0` anchor (a
   single global metadata buffer, not the slot itself); (c) derives
-  the image base via `FUN_00056cb8`, runs secondary CRC via
-  `FUN_00056714`, writes a transient `0xFC` to `slot+16`; (d)
-  computes CRC32 over the image body via
+  the image base via `bim_oad_find_image_addr`, **promotes**
+  the candidate from external SPI to internal flash via
+  `bim_iflash_copy_from_spi(slot_base, derived_len, image_base)`,
+  writes a transient `0xFC` to `slot+16`; (d) computes the paged
+  CRC32 over the now-internal image body via
   `bim_crc32_image(page, g_oad_chunk_size, slot_base, derived_len,
-  0)` and compares against `hdr2[8]`; (e) **promotes** by writing
-  `0xFE` to both the slot's `+17` byte (in metadata) and the
-  image-page's `+17` byte (in flash), then launches via
-  `FUN_00057156(hdr2[28])` if the flags byte at offset 18 is in
-  `{0, 1, 3, 7}`. Mismatches write `0xFC` to `slot+17` (reject)
-  and clear the transient `+16` marker. Returns 0 after the
-  iterator exhausts all slots (or after a successful launch
-  returns, which shouldn't happen in practice but the compiler
-  doesn't know that). Note: the `slot_base = 0` register is held
-  constant by the OEM in r5 across the entire function but never
-  modified — so several flash writes that look like they take a
-  slot-relative address (`slot_base + 17`, `slot_base + 16`) hit
-  literal flash addresses 16/17 in this build. Preserved as-is;
-  the underlying `FUN_000567a0` likely interprets a 0 anchor as
-  "use a different implicit base via global state."
+  0)` and compares against `hdr2[8]` — this is a re-check after
+  promotion to confirm the copy itself wasn't corrupted; (e) on
+  final match writes `0xFE` to both the slot's `+17` byte on
+  external SPI and the image-page's `+17` byte on internal flash,
+  then launches via `bim_launch_image(hdr2[28])` if the flags
+  byte at offset 18 is in `{0, 1, 3, 7}`. Mismatches write `0xFC`
+  to `slot+17` (reject) and clear the transient `+16` marker.
+  Returns 0 after the iterator exhausts all slots (or after a
+  successful launch returns, which shouldn't happen in practice
+  but the compiler doesn't know that). Note: the `slot_base = 0`
+  register is held constant by the OEM in r5 across the entire
+  function but never modified — so several flash writes that look
+  like they take a slot-relative address (`slot_base + 17`,
+  `slot_base + 16`) hit literal flash addresses 16/17 in this
+  build. Preserved as-is.
 - **`panic.c`** — Two functions: `bim_panic_indicate` at `0x00057194`
   and `bim_panic_prep` at `0x00056B64`. Together they implement
   the BIM's "I'm about to spin forever, please notice" sequence —
@@ -766,9 +811,19 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x000567A0` | 132 | `bim_spi_flash_program`      | `flash.c`     | External SPI flash page-program. Signature `(addr, len, src)`. Splits writes at 256-byte page boundaries; each chunk: `wait_wip` → `write_enable` → build PP cmd `[0x02, addr_hi, addr_mid, addr_lo]` → assert /CS → send 4-byte cmd → send chunk data → release /CS. Returns 1 on success. Caller must ensure target bytes are pre-erased (`0xFF`); used for marker writes that flip individual bits `1`→`0` (`0xFE`/`0xFC`). 24-bit address limit (first 16 MB). Sole caller: `bim_full_scan_and_launch` (4 sites). |
 | decomp-c     | `0x00056E72` | 50  | `bim_iflash_program`         | `flash.c`     | Internal CC2642 flash program — writes `count` bytes from `src` to internal flash at `(slot << 13) + offset` (8 KB stride per slot = the CC2642R1F erase-page size). Three-step bracket via ROM-API helpers: `bim_iflash_session_begin` → `bim_iflash_program_via_rom` (TI's `FlashProgram` driverlib equivalent) → `bim_iflash_session_end`. Returns 0 on success, `0xFF` on failure (matches the pre-erased flash byte value). Used by the OAD scan paths to drop `0xFE` markers into the executable image's own internal-flash page — complement to `bim_spi_flash_program` (which writes the corresponding marker to the OAD staging slot on external SPI flash). Callers: `bim_full_scan_and_launch`, `bim_verify_and_launch_image`. |
 | decomp-c     | `0x00056CB8` | 60  | `bim_oad_find_image_addr`    | `oad.c`       | OAD image-segment-table walker. Signature `(hdr_base, hdr_limit)`. Walks 12-byte segment-descriptor entries starting at `hdr_base + 0x2C` looking for a type-1 (contiguous-image) segment, returns its load address (`seg_value` at offset 8). Termination: SPI read failure, type-1 hit, `seg_len == 0` sentinel, or `offset >= hdr_limit`. Returns `0xFFFFFFFF` on no-match. Each entry read via `bim_spi_flash_read` into a 12-byte stack buffer. Used by `bim_verify_and_launch_image` and `bim_full_scan_and_launch` to compute the executable load address before integrity check. |
+| decomp-c     | `0x0005653C` | 158 | `bim_crc32_buffer`           | `crc.c`       | Flat-buffer CRC32-IEEE compute — sibling of `bim_crc32_image`, same per-byte `crc32_ieee_byte_step` but operating on a single contiguous `[addr, addr+len)` SPI flash range. Bounded against the matched chip's capacity via `bim_get_chip_entry`. Reads 256-byte chunks into the same `0x20000300` scratch buffer that `bim_crc32_image` uses. Returns the final CRC on success, 0 on failure (zero/maxed length, length > chip capacity). Sole caller: `bim_full_scan_and_launch` as the primary `hdr[8]` integrity check before the paged variant runs. |
+| decomp-c     | `0x00056714` | 140 | `bim_iflash_copy_from_spi`   | `flash.c`     | External-to-internal flash copy — the **OAD promote primitive**. Signature `(spi_src, length, iflash_dst)`. Pulls `length` bytes from external SPI flash and writes them to internal CC2642 flash in 256-byte chunks via `bim_iflash_program_flat`. Pre-checks: 4-byte alignment on `iflash_dst`, page-range fit ≤ 44 pages × 8 KB = 352 KB, and pre-erased target slots (`bim_iflash_check_range_blank` — note the low-byte-truncation quirk that makes the check effectively "slots 0..N blank?" rather than the actual target slots). Returns 0 on success, -1 on any failure. Callers: `bim_full_scan_and_launch` (post-CRC promote), `bim_verify_and_launch_image` (staging-to-exec transfer). |
+| decomp-c     | `0x00056F00` | 42  | `bim_iflash_program_flat`    | `flash.c`     | Flat-address internal flash program — sibling of `bim_iflash_program` with a flat dst address instead of `(slot, offset)`. Same begin/program-via-ROM/end three-step sequence. Returns 0 on success, `0xFF` on failure. Sole caller: `bim_iflash_copy_from_spi` (256-byte chunk programming). |
+| decomp-c     | `0x00056C34` | 66  | `bim_iflash_check_range_blank` | `flash.c`   | Internal-flash blank-range verification — iterates pages covering the byte range `[addr_low, addr_low + length)` and confirms each is blank via `bim_iflash_check_slot_blank`. Returns 0 on all-blank, `0xFF` on first non-blank page. **Quirk:** the OEM passes only the low 8 bits of the destination address (`uxtb`), so `start_page = (addr & 0xFF) / chunk_size` collapses to 0 for any reasonable chunk size; the check is effectively "are pages 0..N blank?" regardless of where the write will land. Preserved verbatim. Sole caller: `bim_iflash_copy_from_spi`. |
+| decomp-c     | `0x00056FBC` | 32  | `bim_iflash_check_slot_blank` | `flash.c`    | Internal-flash blank-page check, slot-indexed. Wraps `bim_iflash_rom_blank_check(slot << 13)` in a session begin/end bracket. Returns `0xFF` if the 8 KB page is blank (caller continues), 0 if not (caller bails). Sole caller: `bim_iflash_check_range_blank`. |
+| decomp-c     | `0x00056E40` | 50  | `bim_iflash_read`            | `flash.c`     | Internal-flash read primitive — memcpy from memory-mapped internal flash (`0x00000000..0x00057FFF`) to RAM, wrapped in an IRQ-disabled critical section via `bim_irq_disable_save` / `bim_irq_enable_restore` (so a concurrent program/erase from an ISR can't corrupt the read). Nested-safe: only re-enables IRQs on exit if they were enabled going in. Returns 0. Signature `(src, dst, len)` — distinct from `bim_spi_flash_read`'s `(addr, len, dst)` because the two flash media have separate OEM primitives. Sole caller: `bim_quick_scan_and_launch` (8-byte sniff + 44-byte short-header reads of already-promoted images). |
 | named        | `0x00056E0C` | 46  | `bim_iflash_session_begin`   | `flash.c` (extern) | Internal CC2642 flash bring-up. Calls slot [2] of ROM table at `0x100001D8` (= `ROM_API_TABLE` entry 22) with `FLASH_BASE` (`0x40034000`) — likely a "is the FCFG/flash controller ready?" status read. If non-ready, loops calling slot [1] (init) then re-reading slot [2] until ready. Returns the initial readiness state for the matching tear-down. Sole caller: `bim_iflash_program`. |
 | named        | `0x0005703C` | 16  | `bim_iflash_program_via_rom` | `flash.c` (extern) | Calls slot [6] of ROM table at `0x100001A8` with `(src, addr, count)` — TI's `FlashProgram` driverlib equivalent — then writes 0 to MMIO `0x42600484` (status clear or VIMS-side gate). Sole caller: `bim_iflash_program`. |
 | named        | `0x00057090` | 14  | `bim_iflash_session_end`     | `flash.c` (extern) | Internal flash session tear-down. Takes the bring-up's return value as the "should I tear down?" predicate. If non-zero, calls slot [1] of ROM table at `0x100001D8` — inverse of bring-up. Sole caller: `bim_iflash_program`. |
+| named        | `0x0005717C` | 10  | `bim_get_chip_entry`         | `crc.c` (extern)   | Returns the pointer at `g_chip_table_cursor` (`0x20000408`) — after a successful `bim_spi_probe_chip`, this points at the matched 8-byte chip-table entry inside `BIM_CHIP_TABLE_HEAD` (`0x000571A8`). First dword of every entry is the chip's total capacity in bytes (e.g. `0x04000000` = 64 MB for the installed MX25L51245G). Sole caller: `bim_crc32_buffer` (bounds CRC against the actual chip capacity). 6 B + 4 B literal. |
+| named        | `0x00057058` | ~24 | `bim_iflash_rom_blank_check` | `flash.c` (extern) | TI ROM-API blank-check primitive — checks whether the 8 KB page at `addr` is entirely `0xFF`. Returns non-zero if blank, 0 if not. Likely dispatches through one of the flash ROM tables at `0x100001A8` / `0x100001D8`. Sole in-source caller: `bim_iflash_check_slot_blank`. |
+| named        | `0x00057164` | 6   | `bim_irq_disable_save`       | `flash.c` (extern) | `mrs r0, PRIMASK; cpsid i; bx lr` — disables interrupts, returns prior PRIMASK so the caller can pair-call the matching enable-restore only when it was the one responsible for entering the critical section. Sole caller: `bim_iflash_read`. |
+| named        | `0x00057170` | 6   | `bim_irq_enable_restore`     | `flash.c` (extern) | `mrs r0, PRIMASK; cpsie i; bx lr` — mirror of `bim_irq_disable_save`. Sole caller: `bim_iflash_read` (only invoked when the disable saw IRQs enabled). |
 | decomp-c     | `0x00056F50` | 32  | `crc32_ieee_byte_step`       | `crc.c`       | 8-iteration CRC32-IEEE per-byte polynomial step (`crc >> 1`, XOR `0xEDB88320` on dropped bit). Equivalent to `crc32_table[byte]` materialised on demand. −10 B vs OEM (GCC's `and+lsrs+cbz+eors` shape vs OEM's carry-flag chain). |
 | decomp-c     | `0x00056B1C` | 72  | `bim_slot_iterator`          | `oad.c`       | Walks slots `start_slot..43` (4 KB stride), sniffs each via `FUN_000569E4`, returns slot index on "OAD NVM1" match, `-2` on scan exhaust, `-1` on the unreachable duplicate-match branch. Behaviour-equivalent (−10 B vs OEM). |
 | decomp-c     | `0x00056F74` | 32  | `oad_magic_match`            | `oad.c`       | 8-byte equality check against "OAD NVM1" at flash `0x000571E8`. Called by `bim_quick_scan_and_launch` and `bim_slot_iterator`. Same total size (32 B code + 4 B literal) as OEM; GCC walks pointers via post-decrement while OEM uses an indexed counter — behaviour-equivalent. |
@@ -839,13 +894,27 @@ Mirrors with browseable trees:
   — anyone who can write the image bytes can write a matching
   CRC32.
 - The remaining undecoded helpers around the OAD path:
-  `FUN_00056714` (secondary CRC check),
-  `FUN_0005653C` (primary CRC compute),
-  `FUN_00056E40` (small flash read — likely an alternate
-  read primitive distinct from `bim_spi_flash_read`),
-  `FUN_000570FA` (alt-source read, used by
-  `bim_crc32_image`'s alt path),
-  `FUN_00056D30` (flash-page read).
+  `FUN_000570FA` (alt-source read, used by `bim_crc32_image`'s
+  and `bim_crc32_buffer`'s alt paths — both dead in this build),
+  `FUN_00056D30` (flash-page read, used by `bim_crc32_image`'s
+  `use_flash` path).
+- ~~`FUN_00056714` is a secondary CRC check~~ — **resolved**:
+  it's `bim_iflash_copy_from_spi`, the OAD promote primitive
+  that copies a verified candidate from external SPI staging to
+  its internal-flash executable destination. The earlier
+  "secondary CRC" interpretation was wrong; the function performs
+  no CRC compute. The "two CRC checks" in `bim_full_scan_and_launch`
+  are actually (1) `bim_crc32_buffer` over the SPI staging copy
+  (pre-promote integrity) and (2) `bim_crc32_image` over the
+  internal-flash copy (post-promote re-verify).
+- ~~`FUN_0005653C` is the primary CRC compute~~ — **resolved**:
+  named `bim_crc32_buffer`. Sibling of `bim_crc32_image` with the
+  same per-byte algorithm but a flat-buffer call shape.
+- ~~`FUN_00056E40` is a small flash read~~ — **resolved**: it's
+  `bim_iflash_read`, an IRQ-safe memcpy from memory-mapped
+  internal flash. Distinct from `bim_spi_flash_read` (external
+  SPI); the quick-scan path uses it because it reads from
+  already-promoted images that live in internal flash.
 - ~~`FUN_00056CB8` (image-base derivation),
   `FUN_000567A0` (short flash write),
   `FUN_00056E72` (flash program),

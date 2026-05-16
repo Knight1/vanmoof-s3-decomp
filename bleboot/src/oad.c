@@ -52,19 +52,21 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(oad_short_header_t) == 44,
                "OAD short header must be 44 bytes");
 
-/* External helpers — three of the original FUN_* externs are
- * now decoded (`bim_spi_flash_read`, `bim_spi_flash_program`,
- * `bim_iflash_program`, `bim_oad_find_image_addr` — all in
- * `bim.h`). The remainder still need C decomp:
+/* All previously-extern OAD helpers are now decoded — see
+ * `bim.h` for the named declarations:
  *
- *   FUN_00056714 — secondary CRC check over the image body.
- *   FUN_0005653c — primary CRC compute; (dst_buf, src_addr, len).
- *   FUN_00056e40 — small flash read; (addr, dst, n_bytes). The
- *                  arg order here differs from `bim_spi_flash_read`
- *                  (addr, len, dst); pin once decoded. */
-extern int      FUN_00056714(uint32_t slot_base, uint32_t image_size, uint32_t image_base);
-extern uint32_t FUN_0005653c(uint32_t dst_buf, uint32_t src_addr, uint32_t len);
-extern void     FUN_00056e40(uint32_t addr, void *dst, uint32_t n_bytes);
+ *   FUN_00056714 → `bim_iflash_copy_from_spi` — the OAD promote
+ *                  primitive (SPI → internal flash, with
+ *                  pre-erase verification).
+ *   FUN_0005653c → `bim_crc32_buffer` — flat-buffer CRC32 over a
+ *                  contiguous SPI flash range, used as the
+ *                  primary integrity check.
+ *   FUN_00056e40 → `bim_iflash_read` — internal-flash memcpy
+ *                  with an IRQ-disabled critical-section
+ *                  bracket. Order is (src, dst, len) — different
+ *                  from `bim_spi_flash_read`'s (addr, len, dst)
+ *                  because the OEM has separate primitives for
+ *                  the two flash media. */
 
 /* "OAD NVM1" — the TI OAD image-identifier magic string that
  * tags every legitimate OAD image header. The OEM keeps a
@@ -301,7 +303,7 @@ void bim_verify_and_launch_image(void)
     }
 
     uint32_t image_base = bim_oad_find_image_addr(0, hdr.image_size);
-    if (FUN_00056714(0, hdr.image_size, image_base) != 0) {
+    if (bim_iflash_copy_from_spi(0, hdr.image_size, image_base) != 0) {
         bim_flash_release();
         return;
     }
@@ -351,12 +353,12 @@ void bim_quick_scan_and_launch(int start_slot)
     do {
         uint32_t slot_anchor = (uint32_t)slot << 13;
 
-        FUN_00056e40(slot_anchor, &buf, 8);
+        bim_iflash_read((const void *)slot_anchor, &buf, 8);
         if (oad_magic_match(buf.sniff) != 1) {
             goto next;
         }
 
-        FUN_00056e40(slot_anchor, &buf, 44);
+        bim_iflash_read((const void *)slot_anchor, &buf, 44);
 
         if (buf.hdr.flags != 1 && buf.hdr.flags != 3 && buf.hdr.flags != 7) {
             goto next;
@@ -386,23 +388,27 @@ void bim_quick_scan_and_launch(int start_slot)
  * consider, or a negative sentinel to stop), and for each slot:
  *
  *   1. Reads the 56-byte primary header at slot-anchor (stride 4 KB
- *      here, not 8 KB — the BIM keeps headers on a tighter grid than
- *      images).
+ *      here — slots are the OAD staging slots on external SPI flash).
  *   2. Filters on `hdr[16]==0xFE`, `hdr[12]==3`, `hdr[13]==1`, and
  *      `hdr[17] != 0xFC`.
- *   3. Runs the primary CRC `FUN_0005653c` and compares against
+ *   3. Runs the primary CRC32 via `bim_crc32_buffer` over the image
+ *      body (skipping the 12-byte OAD preamble) and compares against
  *      `hdr[8]`.
  *   4. If matched, reads a 44-byte secondary header, derives the
- *      image base via `FUN_00056cb8`, runs the secondary CRC
- *      `FUN_00056714`, writes a transient `0xFC` marker to slot+16
- *      (in-progress), then runs the hash via `FUN_000560d8` (seeded
- *      with `g_hw_id_cached`) and compares against the secondary
- *      header's `hdr2[8]`.
- *   5. On hash match: writes `0xFE` to slot+17 (verified marker) and
- *      to `image_base>>13`'s flash page at offset 17 (so the image
- *      itself carries the same marker), then launches via
- *      `bim_launch_image(hdr2[28])`.
- *   6. On hash mismatch: writes `0xFC` to slot+17 (rejected).
+ *      executable image base via `bim_oad_find_image_addr`, then
+ *      promotes the image: `bim_iflash_copy_from_spi` copies the
+ *      candidate from external SPI staging into its executable
+ *      location in internal CC2642 flash. Writes a transient `0xFC`
+ *      marker to slot+16 (in-progress) regardless of copy success.
+ *   5. If the copy succeeded, runs the paged CRC32
+ *      (`bim_crc32_image`) against the internal-flash side and
+ *      compares to `hdr2[8]`.
+ *   6. On final CRC match: writes `0xFE` to BOTH the external slot
+ *      anchor + 17 (verified marker on SPI flash) AND the internal
+ *      flash page at `image_base + 17` (so the image itself carries
+ *      the same marker for the quick-scan path to find), then
+ *      launches via `bim_launch_image(hdr2[28])`.
+ *   7. On final CRC mismatch: writes `0xFC` to slot+17 (rejected).
  *
  * Returns -1 if `bim_flash_prepare` fails, otherwise
  * 0 after walking every slot the iterator surfaces.
@@ -447,9 +453,9 @@ int bim_full_scan_and_launch(void)
         uint32_t image_size_primary = *(const uint32_t *)&hdr1[24];
         uint32_t image_crc_primary  = *(const uint32_t *)&hdr1[8];
 
-        uint32_t crc1 = FUN_0005653c(slot_base + 12,
-                                      image_size_primary - 12,
-                                      1u);
+        uint32_t crc1 = bim_crc32_buffer(slot_base + 12,
+                                          image_size_primary - 12,
+                                          1u);
         if (image_crc_primary != crc1) {
             continue;
         }
@@ -476,15 +482,17 @@ int bim_full_scan_and_launch(void)
         }
 
         /* The OEM rewrites the in-buffer copy of `image_size_sec`
-         * with a derived length before the next CRC call. We mirror
-         * that side-effect with a local — the in-memory buffer
-         * rewrite is a compiler artifact of the local variable; the
-         * derived length is what FUN_00056714 actually consumes. */
+         * with a derived length before the next promote call. We
+         * mirror that side-effect with a local — the in-memory
+         * buffer rewrite is a compiler artifact of the local
+         * variable; the derived length is what
+         * `bim_iflash_copy_from_spi` actually consumes (and what
+         * `bim_crc32_image` then re-CRCs against). */
         uint32_t derived_len = image_end_sec - image_base + 1u;
         *(uint32_t *)&hdr2[24] = derived_len;
 
         int crc2_status =
-            FUN_00056714(slot_base, derived_len, image_base);
+            bim_iflash_copy_from_spi(slot_base, derived_len, image_base);
 
         uint8_t status = 0xFCu;
         bim_spi_flash_program(slot_anchor + 16u, 1u, &status);

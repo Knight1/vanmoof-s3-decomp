@@ -91,6 +91,18 @@ uint32_t crc32_ieee_byte_step(uint32_t mixed_byte)
 extern void     FUN_000570fa(void *dst, uint32_t source_offset, uint32_t n);
 extern void     FUN_00056d30(uint32_t page, uint32_t off, void *dst, uint32_t n);
 
+/* Matched-chip entry getter (`FUN_0005717C` in the OEM, 6 B +
+ * 4 B literal). Returns the pointer at `g_chip_table_cursor`
+ * (`0x20000408`) — which, after a successful
+ * `bim_spi_probe_chip`, points at the matched 8-byte chip-table
+ * entry inside `BIM_CHIP_TABLE_HEAD` (= `0x000571A8`). The first
+ * dword of every entry is the chip's total capacity in bytes
+ * (see flash.c chip-table layout commentary). `bim_crc32_buffer`
+ * uses this to bound a CRC operation to the actual installed
+ * chip's size — refusing to read past the chip's last addressable
+ * byte. */
+extern const uint8_t *bim_get_chip_entry(void);
+
 uint32_t bim_crc32_image(uint32_t start_page,
                           uint32_t chunk_size,
                           uint32_t skip_offset_base,
@@ -200,6 +212,90 @@ uint32_t bim_crc32_image(uint32_t start_page,
 
     if (use_flash != 0u) {
         bim_flash_release();
+    }
+
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/* Flat-buffer CRC32-IEEE compute (`FUN_0005653C` in the OEM,
+ * 158 B). Sibling of `bim_crc32_image` — same per-byte CRC32-IEEE
+ * algorithm, same `crc32_ieee_byte_step` helper, but operating on
+ * a single contiguous flash range `[addr, addr + len)` instead of
+ * the paged OAD layout. Used by `bim_full_scan_and_launch` as the
+ * primary integrity check against `hdr[8]` before the more
+ * expensive paged CRC pass.
+ *
+ * Two sources, selected by `use_spi`:
+ *
+ *   - `use_spi != 0` — `bim_spi_flash_read(addr, 256, buf)`:
+ *     reads from the external SPI NOR flash via the SSI0
+ *     primitive. Bounded against the matched chip's capacity:
+ *     `bim_get_chip_entry()` returns a pointer to the matched
+ *     8-byte chip-table entry; its first dword is the chip size
+ *     in bytes. If `len > chip_size` the function bails — refuses
+ *     to CRC past the chip's last addressable byte. The release
+ *     teardown (`bim_flash_release`) on the failure branch is
+ *     defensive — the prepare side isn't paired here, suggesting
+ *     the caller has already brought the SPI flash up via
+ *     `bim_flash_prepare` and FUN_0005653C is only meant to drop
+ *     the session on the early-bail failure path.
+ *
+ *   - `use_spi == 0` — `FUN_000570FA(buf, addr, 256)`: reads
+ *     from the alt source. Same source `bim_crc32_image` uses
+ *     for its alt path; treated as offset-only with no SPI
+ *     precheck. Dead in this build (every in-source caller
+ *     passes `use_spi = 1`), but preserved for OEM fidelity.
+ *
+ * Inner loop: 256-byte chunks into a stack-allocated scratch
+ * buffer (the OEM allocates it as a stack-frame local via
+ * pc-relative literal `0x20000300` — the *same* address as
+ * `bim_crc32_image`'s `BIM_OAD_BUFFER`. Since `bim_crc32_buffer`
+ * runs only inside a single BIM thread of control, sharing the
+ * scratch is safe; the BIM never reenters either CRC routine).
+ *
+ * Per-byte step is identical to `bim_crc32_image`:
+ * `crc = crc32_ieee_byte_step((crc ^ byte) & 0xFF) ^ (crc >> 8)`.
+ *
+ * Returns the final CRC32-IEEE value (with the standard
+ * `^ 0xFFFFFFFF` post-XOR) on success, `0` on any failure
+ * (zero length, all-ones length, length exceeds chip capacity). */
+uint32_t bim_crc32_buffer(uint32_t addr, uint32_t len, uint8_t use_spi)
+{
+    if (len == 0u || len == 0xFFFFFFFFu) {
+        if (use_spi != 0u) {
+            bim_flash_release();
+        }
+        return 0u;
+    }
+
+    if (use_spi != 0u) {
+        const uint8_t *entry      = bim_get_chip_entry();
+        uint32_t       chip_bytes = *(const uint32_t *)entry;
+        if (chip_bytes < len) {
+            bim_flash_release();
+            return 0u;
+        }
+    }
+
+    uint8_t *buf = BIM_OAD_BUFFER;
+    uint32_t crc = 0xFFFFFFFFu;
+
+    while (len != 0u) {
+        uint32_t chunk = (len > BIM_BUF_BYTES) ? BIM_BUF_BYTES : len;
+
+        if (use_spi != 0u) {
+            bim_spi_flash_read(addr, BIM_BUF_BYTES, buf);
+        } else {
+            FUN_000570fa(buf, addr, BIM_BUF_BYTES);
+        }
+
+        addr += chunk;
+        len  -= chunk;
+
+        for (uint32_t i = 0u; i < chunk; i++) {
+            uint32_t mixed = (crc ^ (uint32_t)buf[i]) & 0xFFu;
+            crc = crc32_ieee_byte_step(mixed) ^ (crc >> 8);
+        }
     }
 
     return crc ^ 0xFFFFFFFFu;
