@@ -53,7 +53,12 @@ void Reset_Handler(void)
     );
 }
 
-__attribute__((naked, noreturn))
+/* 4-byte alignment is mandatory: the inline-asm `ldr rN, .L_*`
+ * literal-pool loads use Thumb's `[pc, #imm8*4]` encoding, which can
+ * only target word-aligned addresses. The literal pool sits 0x2C / 0x30
+ * bytes into the function body, so the function start itself must be
+ * word-aligned for those offsets to land on the literals. */
+__attribute__((naked, noreturn, aligned(4)))
 void ResetISR_body(void)
 {
     __asm__ volatile (
