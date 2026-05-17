@@ -82,6 +82,7 @@
 #define G_FLAG_116          (*(volatile uint8_t  *)0x20000116u)
 
 #define G_COUNTER           (*(volatile uint32_t *)0x200000F8u)  /* cmd-0x14 monotonic counter; reset by `sched_idle_reset` */
+#define G_SHIFT_ATTEMPT_CTR (*(volatile int32_t  *)0x2000011Cu)  /* per-shift retry counter; cleared on home-reset, incremented in `sched_task_beta` post-motion; ≥3 demotes G_STATE_FC to 6 */
 #define G_5C_BUSY           (*(volatile uint8_t  *)0x2000013Cu)
 #define G_5C_DEADLINE_BASE  (*(volatile uint32_t *)0x20000110u)
 #define G_5C_LATCH_BYTE     (*(volatile uint8_t  *)0x20000131u)  /* 0x20000130 + 1 */
@@ -308,9 +309,146 @@ static void sched_idle_reset(void)
     G_STATE_115 = 1u;
     flash_settings_commit();
 }
-static void    sched_task_alpha(void)            { TRAP_VOID(); } /* OEM @ 0x08003608 (178 B) */
-static void    sched_task_beta(void)             { TRAP_VOID(); } /* OEM @ 0x080033E2 (196 B) */
 static void    sched_task_extra(void)            { TRAP_VOID(); } /* OEM @ 0x080034A6 (60 B) */
+
+/* OEM @ 0x08003538 (134 B). Not yet decomp'd. Trapped so call-site
+ * compiles; signature taken from Ghidra (`int, int`) — caller in
+ * `sched_task_alpha` passes the current gear (`G_STATE_115`) and drive
+ * direction (`G_DRIVE_DIR`), so byte-typed locally. Rename to a real
+ * symbol once the function is translated. */
+static void sched_alpha_match_3538(uint8_t gear, uint8_t drive_dir)
+{
+    (void)gear; (void)drive_dir;
+    TRAP_VOID();
+}
+
+/* OEM @ 0x08003608 (178 B). The "alpha" round-robin task body. Two
+ * mutually-exclusive halves, gated on `sched_pick_task()` (the clamped
+ * `G_STATE_FC`):
+ *
+ *   - state 1: arm the cmd-0x14 follow-up — set `G_FLAG_117 = 1`,
+ *     `G_FLAG_13D = 1` (which `sched_run_task` cases 4/5 use to gate
+ *     `sched_task_beta`), and clear `G_FLAG_13E`. Returns immediately.
+ *
+ *   - state 2: the real shifter work. If the previously-seen position
+ *     (`G_FLAG_116`) differs from the current gear (`G_STATE_115`),
+ *     re-energise the H-bridge in the direction `G_DRIVE_DIR` is set
+ *     to (0x0F reverse or 0xF0 forward; anything else: don't touch the
+ *     bridge). Then poll `G_MOTION_REACHED`; if the position sensor
+ *     (or the stall-timeout fallback) has fired, brake the bridge and
+ *     classify by PA1 — PA1 low schedules task 6 and re-homes
+ *     `G_STATE_115` to 1; PA1 high schedules task 3. Either path
+ *     bumps `G_SHIFT_ATTEMPT_CTR` (shared with `sched_task_beta`);
+ *     after 5 attempts the OEM demotes `G_STATE_FC` to 6. Finally,
+ *     once `G_FLAG_116 == G_STATE_115`, hand off to the not-yet-
+ *     decomp'd post-match helper at `0x08003538` with the current
+ *     gear and drive-dir bytes.
+ *
+ * Note the asymmetry with `sched_task_beta`: beta uses a retry
+ * threshold of 3 (`cmp ; blt #3`); alpha uses 5 (`cmp ; blt #5`).
+ * Both feed the same counter slot. */
+static void sched_task_alpha(void)
+{
+    if (sched_pick_task() == 1u) {
+        G_FLAG_117 = 1u;
+        G_FLAG_13D = 1u;
+        G_FLAG_13E = 0u;
+        return;
+    }
+    if (sched_pick_task() == 2u) {
+        if (G_FLAG_116 != G_STATE_115) {
+            if (G_DRIVE_DIR == 0x0Fu) {
+                motor_h_bridge_set(0x0Fu);
+            } else if (G_DRIVE_DIR == 0xF0u) {
+                motor_h_bridge_set(0xF0u);
+            }
+            if (G_MOTION_REACHED == 1u) {
+                motor_h_bridge_set(0xFFu);
+                if (input_pa1() == 0u) {
+                    G_TASK_ID           = 6u;
+                    G_STATE_115         = 1u;
+                    G_SHIFT_ATTEMPT_CTR = G_SHIFT_ATTEMPT_CTR + 1;
+                } else {
+                    G_TASK_ID           = 3u;
+                    G_SHIFT_ATTEMPT_CTR = G_SHIFT_ATTEMPT_CTR + 1;
+                }
+                if (G_SHIFT_ATTEMPT_CTR >= 5) {
+                    G_STATE_FC = 6u;
+                }
+                state_flags_reset();
+            }
+        }
+        if (G_FLAG_116 == G_STATE_115) {
+            sched_alpha_match_3538(G_STATE_115, G_DRIVE_DIR);
+        }
+    }
+}
+
+/* OEM @ 0x080033E2 (196 B). Round-robin shifter task body, called by
+ * `sched_run_task` cases 4 and 5 (and from two more call sites in
+ * `main`'s tail, currently inside the gap region we extended back into
+ * `main`'s bounds on 2026-05-18). Two halves gated by the PA1 sensor:
+ *
+ *   - PA1 high: drive forward (G_DRIVE_DIR = 0xF0; H-bridge mask 0xF0).
+ *     Then, only if `G_MOTION_REACHED == 1`, branch on the gear-position
+ *     counter `G_STATE_115` to schedule the next state and pick the
+ *     next task slot:
+ *       gear == 4              → G_TASK_ID = 4, G_STATE_FC = 4
+ *       gear in {2, 3}         → G_TASK_ID = 5, G_STATE_FC = 5
+ *       gear == 1 && PA1 still → G_TASK_ID = 2, G_STATE_FC = 3
+ *     Brake the H-bridge (mask 0xFF, G_DRIVE_DIR = 0xFF), bump the
+ *     per-shift retry counter `G_SHIFT_ATTEMPT_CTR`, and if it reaches 3
+ *     demote `G_STATE_FC` to 6 (a give-up state). Tail-call
+ *     `state_flags_reset` to drop the shared task flags.
+ *
+ *   - PA1 low (home/sensor cleared): latch gear back to 1, brake the
+ *     motor, clear drive-dir + task-id + retry counter, raise the
+ *     deferred-commit flags `G_FLAG_117` and `G_5C_BUSY`, and arm
+ *     `G_STATE_FC = 2` so the next super-loop iteration runs the
+ *     follow-up task.
+ *
+ * The OEM uses a *signed* compare on the retry counter (`cmp r0,#3;
+ * blt`), hence `int32_t` for `G_SHIFT_ATTEMPT_CTR`. */
+static void sched_task_beta(void)
+{
+    if (input_pa1() == 1u) {
+        G_DRIVE_DIR = 0xF0u;
+        motor_h_bridge_set(0xF0u);
+        if (G_MOTION_REACHED == 1u) {
+            if (G_STATE_115 == 4u) {
+                G_TASK_ID  = 4u;
+                G_STATE_FC = 4u;
+            } else if (G_STATE_115 < 2u || G_STATE_115 > 3u) {
+                if (G_STATE_115 == 1u && input_pa1() == 1u) {
+                    G_TASK_ID  = 2u;
+                    G_STATE_FC = 3u;
+                }
+            } else {
+                /* G_STATE_115 ∈ {2, 3} */
+                G_TASK_ID  = 5u;
+                G_STATE_FC = 5u;
+            }
+
+            motor_h_bridge_set(0xFFu);
+            G_DRIVE_DIR = 0xFFu;
+            G_SHIFT_ATTEMPT_CTR = G_SHIFT_ATTEMPT_CTR + 1;
+            if (G_SHIFT_ATTEMPT_CTR >= 3) {
+                G_STATE_FC = 6u;
+            }
+            state_flags_reset();
+        }
+    }
+    if (input_pa1() == 0u) {
+        G_STATE_115         = 1u;
+        motor_h_bridge_set(0xFFu);
+        G_DRIVE_DIR         = 0u;
+        G_TASK_ID           = 0u;
+        G_SHIFT_ATTEMPT_CTR = 0;
+        G_FLAG_117          = 1u;
+        G_STATE_FC          = 2u;
+        G_5C_BUSY           = 1u;
+    }
+}
 
 /* ---- round-robin task dispatch --------------------------------------
  *

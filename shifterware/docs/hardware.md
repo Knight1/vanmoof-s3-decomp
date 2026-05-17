@@ -141,6 +141,7 @@ without a comment are still single-purpose unknowns.
 | `0x20000116` | `uint8_t` | `G_FLAG_116` | Snapshot of `G_FLAG_117` in the "extra task" branch of the round-robin. |
 | `0x20000117` | `uint8_t` | `G_FLAG_117` (a.k.a. `G_14_FLAG_A`) | Set to 1 by cmd 0x14 (when `G_MODE == 0`). |
 | `0x20000118` | `uint8_t` | `G_TASK_ID` | Stamped to one of {2, 4, 5, 7, 8} by the round-robin case handlers — a "what task ran this tick" marker. |
+| `0x2000011C` | `int32_t` | `G_SHIFT_ATTEMPT_CTR` | Per-shift retry counter. Incremented after each motion-reached cycle in `sched_task_beta`; when it hits 3 the OEM demotes `G_STATE_FC` to 6 (a give-up state). Cleared by the PA1-low home-reset branch of `sched_task_beta`. Signed because the OEM compares with `cmp ; blt`. |
 | `0x20000130` | `uint8_t` | `G_MOTOR_RUN_LATCH` | 1 once `G_MOTOR_RUN_START` has been captured this run; set by `motor_h_bridge_set` on its first call after energising. Cleared by `state_flags_reset` at the end of each state-task. |
 | `0x20000131` | `uint8_t` | `G_5C_LATCH_BYTE` | 1 once the 5C-consumer deadline has been captured; set by `main`'s post-loop bookkeeping, cleared after `FUN_080031E6` fires. |
 | `0x20000139` | `uint8_t` | `G_MOTOR_RUNNING` | 1 = H-bridge driving (set by `motor_h_bridge_set`), 0 = braked/idle. Gates cmd 0x14 and cmd 0x5A handlers (so the bike can't preempt an active shift) and the 2000-tick rollover in `main`. |

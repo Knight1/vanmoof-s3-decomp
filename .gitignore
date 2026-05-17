@@ -18,9 +18,16 @@ build/
 # speculative modules. Not for upstream.
 *.bak
 
-# Ghidra exports may be regenerated; keep small JSON, ignore large dumps
-ghidra/exports/*.bndb
-ghidra/exports/*.gar
+# Ghidra exports may be regenerated; keep small JSON, ignore large dumps.
+# Leading `**/` matches at any depth (the previous slash-anchored form
+# only matched at the repo root, so per-ware exports leaked through).
+**/ghidra/exports/*.bndb
+**/ghidra/exports/*.gar
+# Per-function / per-region scratch dumps produced by DumpShifterFunction.java,
+# DumpShifterRegion.java, SearchShifterPointer.java, etc. — each one
+# overwrites the previous run; meaningful findings get folded into
+# docs/progress.md as prose, so the raw .txt is throwaway.
+**/ghidra/exports/*.txt
 
 # OEM firmware images — never commit, even by accident
 shifterware_*.bin

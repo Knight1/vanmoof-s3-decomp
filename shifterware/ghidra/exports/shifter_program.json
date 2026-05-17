@@ -73,7 +73,7 @@
     {"addr":"0x080034a6","size":60,"name":"FUN_080034a6","auto_named":true,"signature":"undefined FUN_080034a6(void)","thunk":false,"external":false},
     {"addr":"0x08003538","size":134,"name":"FUN_08003538","auto_named":true,"signature":"undefined FUN_08003538(int param_1, int param_2)","thunk":false,"external":false},
     {"addr":"0x080035be","size":74,"name":"sched_pick_task","auto_named":false,"signature":"byte sched_pick_task(void)","thunk":false,"external":false},
-    {"addr":"0x08003608","size":178,"name":"FUN_08003608","auto_named":true,"signature":"undefined FUN_08003608(void)","thunk":false,"external":false},
+    {"addr":"0x08003608","size":178,"name":"sched_task_alpha","auto_named":false,"signature":"void sched_task_alpha(void)","thunk":false,"external":false},
     {"addr":"0x080036ba","size":26,"name":"sched_idle_reset","auto_named":false,"signature":"undefined sched_idle_reset(void)","thunk":false,"external":false},
     {"addr":"0x080036d4","size":74,"name":"motor_drive_step","auto_named":false,"signature":"void motor_drive_step(byte target)","thunk":false,"external":false},
     {"addr":"0x0800371e","size":28,"name":"uart1_send_byte","auto_named":false,"signature":"void uart1_send_byte(byte b)","thunk":false,"external":false},
