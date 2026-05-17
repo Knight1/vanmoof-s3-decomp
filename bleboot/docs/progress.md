@@ -9,15 +9,22 @@ hundred bytes shorter than 8 KB.
 ## Summary
 
 ```
-61 decomp-c / 2 vendor-stock / 0 named / 0 pending
+65 decomp-c / 0 vendor-stock / 1 named / 0 pending
 ```
 
-(`63` total functions in Ghidra at base `0x00056000`. **All
-`FUN_*` and all startup stubs decoded** — `ResetISR_body` and
-`Reset_Handler` are now hand-written naked inline asm in
-`src/startup.c`, matching the OEM byte shape exactly. The two
-remaining `vendor-stock` rows (`SetupTrimDevice`, `_auto_init_table`)
-are upstream TI driverlib / CGT runtime, linked not vendored.)
+(`66` total functions in Ghidra at base `0x00056000`. **Every
+function in the image is now decoded.** The remaining `named` row
+(`bim_memcpy_aligned` at `0x000565E0`, 152 B) is an alignment-
+optimised generic memcpy that only `cinit_generic_copy` tail-calls;
+our cinit_generic_copy uses a smaller portable byte loop instead, so
+this OEM helper has no caller in our build.
+
+The build now links and produces a comparable 8192-byte binary. Run
+`make compare` to diff against the OEM image. All static-data
+regions (chip table, ADI LUT, OAD magic strings, SPI opcodes, cinit
+records, BVER block, CCFG, 0xFF gap fill) are byte-identical to OEM;
+the remaining ~52% byte diff is GCC -Os vs TI CCS instruction
+choices in the code region.)
 
 **Major insight (recorded once, applies project-wide):** the BIM
 talks to an **external SPI NOR flash chip via SSI0** — the
@@ -900,8 +907,11 @@ layout in the TI SDK shipping CCS / IAR variants.
 | decomp-c     | `0x00057194` | 8   | `bim_panic_indicate`| `panic.c`     | Single write of `1<<2` to `GPIO_DOUTSET31_0` at `0x40022090` — drives DIO2 (panic LED) high. Behaviour-equivalent (GCC chose `r2/r3` where TI CCS chose `r0/r1`). |
 | decomp-c     | `0x000571A0` | 4   | `_system_pre_init`  | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`2001 4770`) |
 | decomp-c     | `0x000571A4` | 4   | `_exit`             | `rts_hooks.c` | TI CCS RTS hook, byte-equivalent (`bf00 e7fe`) |
-| vendor-stock | `0x0005667C` | 108 | `SetupTrimDevice`   | (TI driverlib) | `source/ti/devices/cc13x2_cc26x2/driverlib/setup.c` — device trim called before any MSP/FPU init; busy-waits on a status register at exit. Upstream linked, not vendored. |
-| vendor-stock | `0x00056BF0` | 50  | `_auto_init_table`  | (TI CGT RTS)  | TI compiler-runtime cinit descriptor-table walker. Upstream linked, not vendored. |
+| decomp-c     | `0x0005667C` | 108 | `SetupTrimDevice`   | `setup_trim.c` | TI driverlib silicon-trim entry called from `Reset_Handler` before anything else. Reads FCFG1.FCFG1_REVISION, asserts family/revision, runs the cold-reset HAPI[18] hook, optionally calls `bim_setup_after_cold_reset_cfg1`, sets FLASH/AON config bits, then spins on VIMS mode-change. +44 B vs OEM (152 B) — GCC emits separate literal-pool entries where TI CCS shares one base via `subs r0, #imm`. Behaviour-equivalent. |
+| decomp-c     | `0x00056BF0` | 50  | `_auto_init_table`  | `auto_init.c` | TI CGT runtime cinit walker. Compares `__TI_Handler_Table_Limit == _Base` and `__TI_CINIT_Limit == _Base` (always false in our build), then dispatches each 8-byte record through the handler table indexed by `body[0]`. +46 B vs OEM (96 B) — `volatile` indirection on the base/limit pointers prevents GCC from folding the always-false checks at link time. Behaviour-equivalent. |
+| decomp-c     | `0x00056924` | 104 | `cinit_byte_stream_copy` | `cinit_handlers.c` | TI CGT LZSS-style decompressor — handler type 0 in the dispatch table at `0x000571F8`. 12-bit window offset, variable-length back-reference encoding (length 3..18 base + LEB128-like extension), sentinel offset == 0xFFF. +22 B vs OEM (126 B) — GCC's bit-loop is wider than CCS's tightly hand-tuned version. For the single cinit record using this handler in bleboot, decompresses to 4 zero bytes at SRAM 0x20000408 (back-ref to dst[-1] which was already zero-filled by the prior record). |
+| decomp-c     | `0x00057148` | 14  | `cinit_generic_copy` | `cinit_handlers.c` | TI CGT generic memcpy handler — type 1 in the dispatch table. Reads length from `body+3` (misaligned word load), copies `length` bytes from `body+7` to `dst`. The OEM tail-calls `bim_memcpy_aligned` (152 B alignment-optimised memcpy at `0x000565E0`); ours uses a 24-byte portable byte loop instead — net −142 B compared to OEM's `(14 + 152)` total. No cinit record in bleboot uses this handler. Behaviour-equivalent. |
+| named        | `0x000565E0` | 152 | `bim_memcpy_aligned` | (TI CGT RTS)  | Alignment-optimised generic `memcpy(dst, src, n)` with separate inner loops for byte / halfword / word source alignment. Sole OEM caller is `cinit_generic_copy`; our build replaces that caller with a portable byte loop, so this helper is unreferenced and gets `--gc-sections`-discarded. Documented but not translated since it has no live caller in our reconstruction. |
 | decomp-c     | `0x00056DD8` | 52  | `ResetISR_body`     | `startup.c`   | Tail-called from `Reset_Handler` stub; sets MSP from `0x20014000`, enables FPU via `SCB->CPACR |= 0xF00000`, then `_system_pre_init` → `_auto_init_table` (when prev returned nonzero) → `main(0)` → `_exit(1)`. Naked + inline asm to pin the literal pool to OEM order (CPACR addr at body+0x2C, MSP init at body+0x30) and the trailing alignment pad to the T1 `46c0` encoding. Byte-equivalent to OEM except for the link-time relative offsets of `bl _system_pre_init` / `_auto_init_table` / `main` / `_exit`. |
 | decomp-c     | `0x00057126` | 10  | `Reset_Handler`     | `startup.c`   | Vector_table[1] entry. `push {r3, lr}; bl SetupTrimDevice; b.w ResetISR_body`. Naked + inline asm: a non-naked translation would emit `bl ResetISR_body; pop {r3, pc}` (12 B, wrong shape). 6 B of unreachable defensive epilogue at `0x57130..0x57135` in the OEM image (GCC artifact of compiling TI's upstream `ResetISR` whose tail-call target isn't marked `noreturn`) are not reproduced. Byte-equivalent except for the two link-time `bl` / `b.w` relative offsets. |
 

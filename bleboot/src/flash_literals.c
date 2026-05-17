@@ -101,14 +101,9 @@ extern void auto_init_zero_fill(const void *body, void *dst);
 
 typedef void (*cinit_handler_t)(const void *body, void *dst);
 
-/* Forward declarations for the two cinit handlers Ghidra hasn't
- * promoted to functions yet. They live at fixed flash addresses in
- * the OEM image; their bodies stay opaque until we decode them. The
- * dispatch table needs the pointers, so reference them as externs
- * the linker will resolve once they exist in C. For now, weak null
- * placeholders keep the build working. */
-__attribute__((weak)) void cinit_byte_stream_copy(const void *body, void *dst) { (void)body; (void)dst; }
-__attribute__((weak)) void cinit_generic_copy(const void *body, void *dst) { (void)body; (void)dst; }
+/* Real implementations live in cinit_handlers.c. */
+extern void cinit_byte_stream_copy(const void *body, void *dst);
+extern void cinit_generic_copy(const void *body, void *dst);
 
 __attribute__((section(".bim_flash.cinit_handlers"), used))
 cinit_handler_t const __TI_Handler_Table_Base[4] = {
