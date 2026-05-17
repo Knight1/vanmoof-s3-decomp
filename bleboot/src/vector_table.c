@@ -32,7 +32,10 @@ typedef void (*vector_t)(void);
 
 __attribute__((section(".isr_vector"), used))
 const vector_t g_pfnVectors[54] = {
-    (vector_t)&_estack,        /*  0  Initial SP                */
+    /* Cortex-M loads the initial SP from VT[0] as a 32-bit value; cast
+     * through uintptr_t to silence the C-pedantic data-to-fn-ptr
+     * warning without changing the emitted bytes. */
+    (vector_t)(uintptr_t)&_estack,  /*  0  Initial SP            */
     Reset_Handler,             /*  1  Reset                     */
     NMI_Handler,               /*  2  NMI                       */
     HardFault_Handler,         /*  3  HardFault                 */
