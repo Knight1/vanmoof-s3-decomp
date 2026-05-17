@@ -5,19 +5,21 @@
  * routed by every other vector slot. We preserve the three distinct
  * symbols so the vector table keeps three independent targets;
  * collapsing them into one would change the emitted byte sequence
- * and break the binary diff. */
+ * and break the binary diff. `noreturn` on each suppresses GCC's
+ * function epilogue; the empty `for(;;);` loop lowers to a single
+ * `b .` (0xE7FE) — byte-equivalent to OEM. */
 
-__attribute__((naked, noreturn)) void NMI_Handler(void)
+__attribute__((noreturn)) void NMI_Handler(void)
 {
-    __asm__ volatile ("b .");
+    for (;;) { }
 }
 
-__attribute__((naked, noreturn)) void HardFault_Handler(void)
+__attribute__((noreturn)) void HardFault_Handler(void)
 {
-    __asm__ volatile ("b .");
+    for (;;) { }
 }
 
-__attribute__((naked, noreturn)) void Default_Handler(void)
+__attribute__((noreturn)) void Default_Handler(void)
 {
-    __asm__ volatile ("b .");
+    for (;;) { }
 }

@@ -16,17 +16,14 @@ int _system_pre_init(void)
 
 /* `_exit` — TI CGT runtime calls this after `main` returns to
  * terminate the program. The weak default is a trap loop; the OEM
- * kept it. We render it as `nop; b .` to match the OEM byte
- * sequence (`bf00 e7fe`) rather than the canonical `b .` (`e7fe`)
- * alone — the leading nop comes from the TI CCS startup template
- * and is what the OEM image carries. */
-__attribute__((naked, noreturn)) void _exit(int status)
+ * kept it. Compiles to a single `b .` (Thumb 0xE7FE, 2 B). The OEM
+ * image carries a leading `nop` (`bf00`) before the branch, a TI
+ * CCS startup-template artifact (4 B vs our 2 B); behaviour is
+ * identical. */
+__attribute__((noreturn)) void _exit(int status)
 {
     (void)status;
-    __asm__ volatile (
-        "nop      \n\t"
-        "1: b 1b  \n\t"
-    );
+    for (;;) { }
 }
 
 #include <stdint.h>

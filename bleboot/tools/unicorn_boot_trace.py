@@ -378,13 +378,14 @@ OEM_SYMBOLS = {
 
 
 def run(binary_path, symbols, label, spi_dump_path=None):
-    global INSTR_COUNT, TRACE, PANIC_HIT, CHIP_PROBE_PATCHED, SYMBOLS, SPI_DUMP, SPI_READS
+    global INSTR_COUNT, TRACE, PANIC_HIT, CHIP_PROBE_PATCHED, SYMBOLS, SPI_DUMP, SPI_READS, PC_HITS
     INSTR_COUNT = 0
     TRACE = []
     PANIC_HIT = False
     CHIP_PROBE_PATCHED = False
     SYMBOLS = symbols
     SPI_READS = []
+    PC_HITS = {}
     if spi_dump_path and Path(spi_dump_path).exists():
         SPI_DUMP = Path(spi_dump_path).read_bytes()
         print(f'  Loaded SPI dump: {spi_dump_path} ({len(SPI_DUMP)} B = {len(SPI_DUMP)/1024/1024:.1f} MB)')

@@ -24,7 +24,27 @@ The build now links and produces a comparable 8192-byte binary. Run
 regions (chip table, ADI LUT, OAD magic strings, SPI opcodes, cinit
 records, BVER block, CCFG, 0xFF gap fill) are byte-identical to OEM;
 the remaining ~52% byte diff is GCC -Os vs TI CCS instruction
-choices in the code region.)
+choices in the code region.
+
+**Unicorn-validated**: `tools/unicorn_boot_trace.py compare` runs both
+OEM and our build through an emulated CC2642R1F + 64 MB SPI flash
+dump; both binaries hit identical milestones in the same order
+(Reset_Handler → SetupTrimDevice → ResetISR_body → cinit chain →
+main → bim_dispatch → full-scan → quick-scan → verify-and-launch →
+panic loop) and behave identically under all inputs simulated.
+
+**Inline-asm minimisation**: after the validation pass, every
+naked-function + inline-asm fragment that could be expressed in plain
+C was rewritten. What remains is architecturally mandated:
+- `src/startup.c`: a single `msr msp, %0` line in `ResetISR_body`
+  (Cortex-M has no C-level way to write MSP without CMSIS).
+- `src/flash.c`: `bim_irq_disable_save` / `bim_irq_enable_restore`
+  (PRIMASK manipulation via `mrs`/`cpsid`/`cpsie`).
+- `src/oad.c`: `bim_launch_image` (direct `sp` write + a forced T1
+  instruction encoding to preserve the OEM byte-exact `adds r0, r0,
+  #4` quirk).
+Everything else — exception handlers, `_exit`, the FPU enable in
+`ResetISR_body`, and `Reset_Handler` itself — is now plain C.)
 
 **Major insight (recorded once, applies project-wide):** the BIM
 talks to an **external SPI NOR flash chip via SSI0** — the
