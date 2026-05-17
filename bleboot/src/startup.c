@@ -37,15 +37,11 @@
  * nop (`bf00`) — TI CCS picks the legacy encoding for `.align` fill
  * inside a Thumb code region. Emitted via `.short 0x46c0`. */
 
-/* Vendor-stock from TI driverlib / CGT runtime, upstream-linked. Weak
- * placeholders so this build still links to a (non-runnable) image
- * before the TI sources get vendored. The OEM binary's behaviour
- * lives in the real upstream versions; replacing these stubs is a
- * separate task. `_system_pre_init`, `main`, and `_exit` are resolved
- * by other TUs in this tree; the inline-asm `bl`s bind them at link
- * time without needing C-level prototypes. */
-__attribute__((weak)) void SetupTrimDevice(void) { }
-__attribute__((weak)) void _auto_init_table(void) { }
+/* `_system_pre_init`, `_auto_init_table`, `main`, `_exit`, and
+ * `SetupTrimDevice` are resolved by other TUs in this tree (see
+ * `setup_trim.c`, `auto_init.c`, `main.c`, `rts_hooks.c`); the
+ * inline-asm `bl`s bind them at link time without needing C-level
+ * prototypes. */
 
 __attribute__((naked, noreturn))
 void Reset_Handler(void)

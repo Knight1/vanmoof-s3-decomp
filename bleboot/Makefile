@@ -70,7 +70,8 @@ $(BUILD_DIR)/$(PROJECT).elf: $(OBJS) $(LD_SCRIPT)
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
 
 $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
-	$(OBJCOPY) -O binary $< $@
+	$(OBJCOPY) -O binary --gap-fill=0xFF --pad-to=0x58000 \
+		-R .data -R .bss -R ._user_heap_stack $< $@
 
 $(BUILD_DIR)/$(PROJECT).hex: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O ihex $< $@
