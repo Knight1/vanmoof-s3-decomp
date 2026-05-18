@@ -98,6 +98,8 @@
 
 #define G_COUNTER           (*(volatile uint32_t *)0x200000F8u)  /* cmd-0x14 monotonic counter; reset by `sched_idle_reset` */
 #define G_SHIFT_ATTEMPT_CTR (*(volatile int32_t  *)0x2000011Cu)  /* per-shift retry counter; cleared on home-reset, incremented in `sched_task_beta` post-motion; ≥3 demotes G_STATE_FC to 6 */
+#define G_SETTLE_TICK_BASE  (*(volatile uint32_t *)0x20000134u)  /* tick snapshot when settling started; latched by `sched_alpha_match_3538` on first call */
+#define G_SETTLE_ARMED      (*(volatile uint8_t  *)0x20000138u)  /* 1 once `G_SETTLE_TICK_BASE` is valid; cleared when the settling completes */
 #define G_5C_BUSY           (*(volatile uint8_t  *)0x2000013Cu)
 #define G_5C_DEADLINE_BASE  (*(volatile uint32_t *)0x20000110u)
 #define G_5C_LATCH_BYTE     (*(volatile uint8_t  *)0x20000131u)  /* 0x20000130 + 1 */
@@ -121,13 +123,10 @@
 #define RCC_APB2_SYSCFGEN   (1u << 0)
 #define RCC_AHB_CRC_BIT     (1u << 6)
 
-/* ---- forward decls + trap stubs for not-yet-decomp'd OEM helpers --- */
-
-/* Each trap stub corresponds to a real OEM function whose decomp
- * hasn't landed yet. Comment after each is the OEM address. */
-
-#define TRAP_VOID()  do { for (;;) { /* unimplemented */ } } while (0)
-#define TRAP_RET(x)  do { for (;;) { /* unimplemented */ } __builtin_unreachable(); } while (0)
+/* ---- boot bring-up + scheduler tasks (all OEM-confirmed) ----------- *
+ *
+ * Every helper that was previously trap-stubbed has been translated.
+ * Per-function OEM addresses live in each function's comment. */
 
 /* OEM @ 0x0800428E (72 B). Classic CMSIS `SysTick_Config(HCLK/1000)`
  * pattern with a guard for HCLK > 1.024 GHz (which won't happen on
@@ -379,17 +378,87 @@ static void sched_idle_reset(void)
     G_STATE_115 = 1u;
     flash_settings_commit();
 }
-static void    sched_task_extra(void)            { TRAP_VOID(); } /* OEM @ 0x080034A6 (60 B) */
+/* OEM @ 0x080034A6 (60 B). The "extra" round-robin task body. Run
+ * from case 1 of `sched_run_task` after `G_FLAG_116` is updated to
+ * the new target (lifted from `G_FLAG_117`). Decides which way the
+ * H-bridge needs to drive by comparing the *current* gear position
+ * (`G_STATE_115`) to the *target* gear (`G_FLAG_116`):
+ *
+ *   current < target → `G_DRIVE_DIR = 0x0F` (pos_encoder_tick will
+ *                       increment `G_STATE_115` on each PA0 edge)
+ *   current > target → `G_DRIVE_DIR = 0xF0` (decrement on each edge)
+ *   equal           → `G_DRIVE_DIR = 0` (no drive — already at target)
+ *
+ * The two driving branches also raise `G_FLAG_13E` so the next
+ * iteration of case 1 picks `sched_task_alpha` instead of starting
+ * another `sched_task_extra` cycle. */
+static void sched_task_extra(void)
+{
+    if (G_STATE_115 < G_FLAG_116) {
+        G_DRIVE_DIR = 0x0Fu;
+        G_FLAG_13E  = 1u;
+    } else if (G_FLAG_116 < G_STATE_115) {
+        G_DRIVE_DIR = 0xF0u;
+        G_FLAG_13E  = 1u;
+    } else {
+        G_DRIVE_DIR = 0u;
+    }
+}
 
-/* OEM @ 0x08003538 (134 B). Not yet decomp'd. Trapped so call-site
- * compiles; signature taken from Ghidra (`int, int`) — caller in
- * `sched_task_alpha` passes the current gear (`G_STATE_115`) and drive
- * direction (`G_DRIVE_DIR`), so byte-typed locally. Rename to a real
- * symbol once the function is translated. */
+/* OEM @ 0x08003538 (134 B). Per-gear settling-time enforcement called
+ * by `sched_task_alpha` once `G_FLAG_116 == G_STATE_115` (position
+ * matched). Holds the bridge engaged for a small window so the motor
+ * physically settles before braking.
+ *
+ * First call latches `G_TICK_B` into `G_SETTLE_TICK_BASE` and arms
+ * `G_SETTLE_ARMED`. Each subsequent call compares the elapsed time
+ * (`G_TICK_B - G_SETTLE_TICK_BASE`) against a per-(gear, direction)
+ * threshold; once it passes, brakes the H-bridge, clears
+ * `G_DRIVE_DIR` / `G_TASK_ID` / `G_SHIFT_ATTEMPT_CTR` / `G_SETTLE_ARMED`,
+ * and tail-calls `state_flags_reset`.
+ *
+ * Thresholds (at 1 kHz tick → ms):
+ *   gear 1: 23 ms (any direction)
+ *   gear 2: 30 ms (only when drive_dir ∈ {0x0F, 0xF0})
+ *   gear 3 reverse (0x0F): 35 ms; gear 3 forward (0xF0): 25 ms
+ *   gear 4: 40 ms (any direction)
+ *   anything else: 0 (settle elapses immediately) */
 static void sched_alpha_match_3538(uint8_t gear, uint8_t drive_dir)
 {
-    (void)gear; (void)drive_dir;
-    TRAP_VOID();
+    if (G_SETTLE_ARMED == 0u) {
+        G_SETTLE_TICK_BASE = G_TICK_B;
+        G_SETTLE_ARMED     = 1u;
+    }
+
+    uint32_t threshold = 0u;
+    switch (gear) {
+    case 1u:
+        threshold = 0x17u;                     /* 23 ms */
+        break;
+    case 2u:
+        if (drive_dir == 0x0Fu || drive_dir == 0xF0u) {
+            threshold = 0x1Eu;                 /* 30 ms */
+        }
+        break;
+    case 3u:
+        if      (drive_dir == 0x0Fu) threshold = 0x23u;  /* 35 ms */
+        else if (drive_dir == 0xF0u) threshold = 0x19u;  /* 25 ms */
+        break;
+    case 4u:
+        threshold = 0x28u;                     /* 40 ms */
+        break;
+    default:
+        break;
+    }
+
+    if ((G_TICK_B - G_SETTLE_TICK_BASE) >= threshold) {
+        motor_h_bridge_set(0xFFu);
+        G_DRIVE_DIR         = 0u;
+        G_SETTLE_ARMED      = 0u;
+        G_TASK_ID           = 0u;
+        G_SHIFT_ATTEMPT_CTR = 0;
+        state_flags_reset();
+    }
 }
 
 /* OEM @ 0x08003608 (178 B). The "alpha" round-robin task body. Two
