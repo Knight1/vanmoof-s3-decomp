@@ -65,4 +65,10 @@ uint16_t settings_read_halfword(uint32_t offset); /* @ 0x080040A8 */
 /* Speculative. */
 bool flash_program_block(uint32_t addr, const void *data, size_t len_bytes);
 
+/* Program a halfword buffer to a flash region. Wraps the unlock / clear-
+ * status / loop / clear-status / lock dance around per-halfword writes
+ * via `flash_program_halfword`. Called only from the OTA chunk-staging
+ * path in `modbus_dispatch.c`. */
+void flash_program_range(uint16_t *dst, const uint16_t *src, uint32_t n_hw); /* @ 0x08003898 */
+
 #endif /* SHIFTER_FLASH_STORE_H */

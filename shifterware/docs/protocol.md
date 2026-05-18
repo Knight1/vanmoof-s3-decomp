@@ -123,7 +123,7 @@ switch as a `__gnu_thumb1_case_uqi` jump table.
 | `0x5C` | 3 | `cmd_5c_write3(G_5C_REGS[0..2])` (`image.c`, OEM @ 0x08003B86) — splice the three previously-staged register bytes into the image-status emit slots (`G_VERSION_BYTE`, `G_PKT_BYTES[0..1]`) and fire `report_image_status`. The bus sees a 7-byte status PDU; if `G_IMG_OK` is set, this also triggers a SYSRESETREQ — but normally the short-form is used as a status ping rather than a reset trigger. |
 | `0x5C` | 0x0F | Copy `G_RX_BUF[2]`, `[4]`, `[5]` into `G_5C_REGS[0..2]` and call `flash_settings_commit` (`flash_store.c`, OEM @ 0x080031E6). That helper persists `G_STATE_FC` + `G_COUNTER` (big-endian) + `G_5C_REGS[0..2]` into the **settings flash page at `0x08007800`** as 8 halfwords (one data byte per halfword, high byte cleared), clears the deferred-commit latch `G_5C_BUSY`, and resets the per-task flag bytes via `state_flags_reset`. Note: each halfword write goes through `settings_set_halfword` which **erases the whole 1 KB page** — so a single commit does 8 sequential page erases. The same commit helper is also fired from main's idle-reset epilogue (`sched_idle_reset`, after `G_STATE_FC` lands at 0) and from main's deferred-commit watchdog (50 ticks after `G_5C_BUSY` is latched). |
 | `0x81` | — | `image_apply()`. Validate the receive-slot at flash `0x08001800`; on success latch `G_IMG_OK_FLAG`, on failure erase the slot and reset receive-state RAM bytes. |
-| `0x82` | 0x10 | `cmd_82_fw_page` → `FUN_080039E6` — accept a 16-byte OTA payload page (long-frame only). |
+| `0x82` | 0x10 | `cmd_82_fw_page` (OEM @ 0x080039E6) — long-frame OTA payload entry. Pulls a 33-byte slice from `G_LONG_BUF[0xb..0x2b]`. **First packet** (`G_OTA_FIRST_PACKET == 0`): copies into `G_OTA_HEADER_BUF` (`0x20000189`), decodes the LE16 total image size from `G_OTA_HEADER_BUF[0xc..0xd]` → `G_OTA_TOTAL_SIZE` (`0x20000128`), seeds `G_OTA_REMAINING = total - 0x20`, flips first-packet flag, calls `ota_commit_chunk`. **Subsequent**: copies 33 bytes and decrements remaining by 32, or — if fewer than 32 bytes remain — copies just the tail and arms `G_OTA_FLUSH_FLAG`. Each packet ends in `ota_commit_chunk` which `flash_program_range`s the staged data at `G_OTA_WRITE_PTR` (auto-advanced) and emits a per-chunk 8-byte ACK echoing `G_LONG_BUF[0..5]` + CRC (`cmd_82_emit_ack`, OEM @ 0x08003852). On the final chunk, also clears `G_RX_FRAME_MODE`, `G_OTA_FIRST_PACKET`, `G_OTA_FLUSH_FLAG` to return to short-frame mode. |
 | `0x95` | — | `flash_erase_pages(0x08001800, 12)` + set `G_RX_FRAME_MODE = 1` so subsequent frames are accepted as 45-byte OTA payloads. |
 | _any other_ | — | Silent ignore (GCC switch falls through to the common epilogue). |
 
@@ -158,8 +158,14 @@ After the case body, dispatch always:
   the shifter periodically; the round-robin in `main` looks like
   it stages outbound updates by tick index but the cases aren't
   fully decomp'd yet.
-- **Long-frame payload format inside `G_LONG_BUF`** is unmapped —
-  needs `FUN_080039E6` (the OTA-page consumer) decomp'd first.
+- **Long-frame payload format inside `G_LONG_BUF`** for cmd 0x82
+  is now mapped (see cmd 0x82 entry above). First packet header is
+  `G_LONG_BUF[0xb..0x2b]` (33 bytes) with a LE16 total-size field
+  at offsets `0x17..0x18` (= `G_OTA_HEADER_BUF[0xc..0xd]` after
+  copy). Subsequent packets contribute 33 raw bytes each. The
+  validated long-frame thus has a per-packet 11-byte prefix before
+  the OTA payload — its semantics (slave addr, cmd, length, sub-id,
+  flags?) are not yet fully reverse-engineered.
 - **`G_5A_TARGET`** is the cmd 0x5A shift-direction byte; its
   consumer is `motor_drive_step` → `motor_h_bridge_set`, both
   decomp'd. The exact PA9/PA10 bit mapping for each mask is now

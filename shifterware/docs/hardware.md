@@ -123,8 +123,10 @@ without a comment are still single-purpose unknowns.
 | ---- | ---- | ---- | --------- |
 | `0x200000DA` | `uint8_t` | `G_IMG_OK_FLAG` | Latched to 1 by `image_apply` on a clean validation; consumed by `modbus_tx_finalize` to gate the SYSRESETREQ-after-7-byte-TX. |
 | `0x2000015C` | `uint8_t[45]` | `G_LONG_BUF` | Long-frame validated buffer (45 B = 43 PDU + 2 CRC). Same role as `G_RX_BUF` but for OTA payloads. |
+| `0x20000189` | `uint8_t[33]` | `G_OTA_HEADER_BUF` | Staged per-packet copy of `G_LONG_BUF[0xb..0x2b]`. The first packet's header (containing the LE16 total size at `[0xc..0xd]`) and each subsequent payload chunk land here before `ota_commit_chunk` programs them to flash via `flash_program_range`. |
 | `0x200001A9` | `uint8_t[8]` | `MODBUS_TX_BUF` | Module-local TX assembly buffer. Built by `report_image_status` and `modbus_reply_passthrough`; transmitted by `modbus_tx_finalize`. |
 | `0x200001B2` | `uint8_t[45]` | `G_RX_SCRATCH` | The IRQ-filled inbound byte buffer (max 45 B). First byte must be `0x20` for `modbus_rx_poll` to accept the frame; otherwise the head counter is reset and the frame is dropped. |
+| `0x200001E0` | `uint16_t[16]` | `G_OTA_STAGE_HW` | 32-byte halfword reformatter used by `ota_stage_chunk` — repacks the byte stream from `G_OTA_HEADER_BUF` into halfwords (`lo | (hi<<8)` per pair), then `flash_program_range` writes the whole batch to flash in one call. |
 
 ### Application state
 
@@ -143,6 +145,8 @@ without a comment are still single-purpose unknowns.
 | `0x20000117` | `uint8_t` | `G_FLAG_117` (a.k.a. `G_14_FLAG_A`) | Set to 1 by cmd 0x14 (when `G_MODE == 0`). |
 | `0x20000118` | `uint8_t` | `G_TASK_ID` | Stamped to one of {2, 4, 5, 7, 8} by the round-robin case handlers — a "what task ran this tick" marker. |
 | `0x2000011C` | `int32_t` | `G_SHIFT_ATTEMPT_CTR` | Per-shift retry counter. Incremented after each motion-reached cycle in `sched_task_beta`; when it hits 3 the OEM demotes `G_STATE_FC` to 6 (a give-up state). Cleared by the PA1-low home-reset branch of `sched_task_beta`. Signed because the OEM compares with `cmp ; blt`. |
+| `0x20000128` | `uint32_t` | `G_OTA_TOTAL_SIZE` | Total firmware-payload byte count, set on the first cmd 0x82 packet from the LE16 in `G_OTA_HEADER_BUF[0xc..0xd]`. |
+| `0x2000012C` | `uint32_t` | `G_OTA_REMAINING` | Bytes still to flash; seeded as `G_OTA_TOTAL_SIZE - 0x20` and decremented by 0x20 per full chunk. When `< 0x20` the next packet is the final partial. |
 | `0x20000130` | `uint8_t` | `G_MOTOR_RUN_LATCH` | 1 once `G_MOTOR_RUN_START` has been captured this run; set by `motor_h_bridge_set` on its first call after energising. Cleared by `state_flags_reset` at the end of each state-task. |
 | `0x20000134` | `uint32_t` | `G_SETTLE_TICK_BASE` | `G_TICK_B` snapshot at the moment `sched_alpha_match_3538` first arms its per-gear settling-time window. Compared against `G_TICK_B` on each subsequent call until the per-(gear, direction) threshold elapses (23/30/35-or-25/40 ms at 1 kHz). |
 | `0x20000138` | `uint8_t` | `G_SETTLE_ARMED` | 1 once `G_SETTLE_TICK_BASE` is valid; cleared by `sched_alpha_match_3538` after the settling window elapses and the H-bridge has been braked. |
@@ -153,7 +157,8 @@ without a comment are still single-purpose unknowns.
 | `0x2000013C` | `uint8_t` | `G_5C_BUSY` | 1 = the 0x32-tick 5C-consume countdown is active in `main`'s post-loop bookkeeping. |
 | `0x2000013D` | `uint8_t` | `G_FLAG_13D` (a.k.a. `G_14_FLAG_B`) | Set/cleared by cmd 0x14 depending on `G_MODE`; gates `sched_task_beta` in several round-robin cases. |
 | `0x2000013E` | `uint8_t` | `G_FLAG_13E` | Set to 1 by the "extra task" branch of the round-robin (case 1 epilogue). |
-| `0x2000013F..40` | `uint8_t[2]` | `G_OTA_OFF` | OTA staging offset (lo/hi). Reset on OTA-mode exit / timeout. |
+| `0x2000013F` | `uint8_t` | `G_OTA_FIRST_PACKET` | 0 = next cmd 0x82 frame is the first packet (decode header + total-size), 1 = subsequent. Cleared by `image_apply`'s erase-path and by `ota_commit_chunk` on the final chunk. Was `G_OTA_OFF` lo half in the speculative phase. |
+| `0x20000140` | `uint8_t` | `G_OTA_FLUSH_FLAG` | 1 = the next `ota_commit_chunk` is the final partial chunk (`G_OTA_REMAINING < 0x20`). Armed by `cmd_82_fw_page`, consumed + cleared by `ota_commit_chunk`. Was `G_OTA_OFF` hi half in the speculative phase. |
 | `0x20000141` | `uint8_t` | `G_VERSION_BYTE` (a.k.a. `G_0F_SUBID` in the cmd 0x0F path) | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]`. Written by `image_apply`, `cmd_5c_write3` (with `G_5C_REGS[0]`), and `cmd_0f_report_u32`. Emitted as PDU byte 2 by both `report_image_status` (7-byte) and `emit_counter_status_pdu` (9-byte). |
 | `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` (also the first 2 bytes of `G_0F_VALUE_BE` in the cmd 0x0F path) | Pair of bytes emitted as PDU bytes 3 and 4 by `report_image_status`. Written by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) or by `cmd_5c_write3` with the trailing two bytes of `G_5C_REGS`. Clobbered by `cmd_0f_report_u32` (which writes a 4-byte BE32 value spanning `0x20000142..0x20000145`). |
 | `0x20000144..45` | `uint8_t[2]` | tail of `G_0F_VALUE_BE` | Upper two bytes of the BE32 value staged by `cmd_0f_report_u32`. Not used by the image-status path. Emitted as PDU bytes 5 and 6 of the 9-byte cmd 0x0F response. |

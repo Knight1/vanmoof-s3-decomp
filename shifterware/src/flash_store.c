@@ -64,6 +64,23 @@ void flash_erase_pages(uint32_t base_addr, int n_pages)
     }
 }
 
+/* OEM @ 0x08003898 (54 B). Program `n_hw` halfwords from `src` to
+ * `dst`. Bracketed by the same unlock / clear-PGERR / .. / clear-EOP
+ * / lock dance as `flash_erase_page`. Used by the cmd 0x82 OTA chunk
+ * path. */
+void flash_program_range(uint16_t *dst, const uint16_t *src, uint32_t n_hw)
+{
+    flash_unlock();
+    flash_clear_status(FLASH_SR_PGERR_Msk
+                     | FLASH_SR_WRPRTERR_Msk
+                     | FLASH_SR_EOP_Msk);   /* 0x34 */
+    for (uint32_t i = 0; i < n_hw; i++) {
+        (void)flash_program_halfword((uint32_t)&dst[i], src[i]);
+    }
+    flash_clear_status(FLASH_SR_EOP_Msk);   /* 0x20 */
+    flash_lock();
+}
+
 #define FLASH_WAIT_LIMIT    0x0FFFu  /* OEM-chosen poll budget */
 #define FLASH_PG_WAIT_LIMIT 0x000Fu  /* shorter budget used per halfword program (OEM literal) */
 

@@ -49,8 +49,12 @@
 #define G_14_FLAG_A     (*(volatile uint8_t  *)0x20000117u)
 #define G_MOTOR_RUNNING (*(volatile uint8_t  *)0x20000139u) /* 1 = H-bridge driving (set by motor_h_bridge_set); gates cmd 0x14 and cmd 0x5A so the bike can't preempt an active shift */
 #define G_14_FLAG_B     (*(volatile uint8_t  *)0x2000013Du)
-#define G_OTA_OFF_LO    (*(volatile uint8_t  *)0x2000013Fu) /* OTA staging offset (lo) */
-#define G_OTA_OFF_HI    (*(volatile uint8_t  *)0x20000140u) /* OTA staging offset (hi) */
+#define G_OTA_TOTAL_SIZE   (*(volatile uint32_t *)0x20000128u) /* full image size, set from first packet's BE16 header */
+#define G_OTA_REMAINING    (*(volatile uint32_t *)0x2000012Cu) /* bytes still to flash; decremented per chunk */
+#define G_OTA_FIRST_PACKET (*(volatile uint8_t  *)0x2000013Fu) /* 0 = first packet, 1 = subsequent */
+#define G_OTA_FLUSH_FLAG   (*(volatile uint8_t  *)0x20000140u) /* 1 = next ota_commit_chunk is the final partial chunk */
+#define G_OTA_HEADER_BUF   ((volatile uint8_t   *)0x20000189u) /* 33-byte staging copy of G_LONG_BUF[0xb..0x2b] */
+#define G_OTA_STAGE_HW     ((volatile uint16_t  *)0x200001E0u) /* 16-halfword (32 B) buffer for flash_program_range */
 #define G_0F_SUBID      (*(volatile uint8_t  *)0x20000141u) /* cmd 0x0F: 7-bit sub-id echo (RX[5]&0x7F)<<1 */
 #define G_0F_VALUE_BE   ((volatile uint8_t   *)0x20000142u) /* cmd 0x0F: 4-byte BE value (typically G_COUNTER) */
 
@@ -137,11 +141,121 @@ static void cmd_5b_selftest(void)
     }
 }
 
-/* OEM @ 0x080039E6 (160 B). Case 0x82, len==0x10 — accept a 16-byte
- * payload (probably an OTA flash-write page). */
+/* OEM @ 0x08003852 (70 B). Cmd 0x82 ACK emitter — echo the first 6
+ * bytes of the validated long-frame back, append the CRC, send. The
+ * OEM keeps this distinct from `modbus_reply_passthrough` because the
+ * source buffer is `G_LONG_BUF` (the validated long-frame buffer at
+ * `0x2000015C`), not the short-frame `G_RX_BUF`. */
+static void cmd_82_emit_ack(void)
+{
+    volatile uint8_t *const tx = G_TX_BUF;
+    tx[0] = G_LONG_BUF[0];
+    tx[1] = G_LONG_BUF[1];
+    tx[2] = G_LONG_BUF[2];
+    tx[3] = G_LONG_BUF[3];
+    tx[4] = G_LONG_BUF[4];
+    tx[5] = G_LONG_BUF[5];
+    modbus_crc16_compute((const uint8_t *)tx, 6);
+    tx[6] = G_CRC_LO;
+    tx[7] = G_CRC_HI;
+    modbus_tx_finalize(8u);
+}
+
+/* OEM @ 0x080038ce (100 B). Reformat `n_bytes` of byte-stream payload
+ * into halfwords (lo byte first, then hi byte → packed LE16) inside
+ * `G_OTA_STAGE_HW`, then program the whole buffer to `target` via
+ * `flash_program_range`. The OEM rounds odd lengths up to even and
+ * emits the flash call on the same iteration that completes the last
+ * halfword, so this is one-shot — not "every 16 halfwords". */
+static void ota_stage_chunk(uint16_t *target, const uint8_t *bytes, uint32_t n_bytes)
+{
+    if ((n_bytes & 1u) != 0u) n_bytes++;
+
+    uint16_t *cur_target = target;
+    uint32_t  hw_idx     = 0u;
+
+    for (uint32_t i = 0; i < n_bytes; i += 2u) {
+        const uint8_t lo = bytes[0];
+        const uint8_t hi = bytes[1];
+        bytes += 2;
+
+        const uint32_t next = (hw_idx + 1u) & 0xFFFFu;
+        G_OTA_STAGE_HW[hw_idx] = (uint16_t)(lo | ((uint16_t)hi << 8));
+
+        if ((n_bytes >> 1) == next) {
+            flash_program_range(cur_target, (const uint16_t *)G_OTA_STAGE_HW, next);
+            cur_target += next;
+            hw_idx = 0u;
+        } else {
+            hw_idx = next;
+        }
+    }
+}
+
+/* OEM @ 0x0800399e (72 B). Flush one accumulated OTA chunk to flash.
+ * Two arms keyed on `G_OTA_FLUSH_FLAG`:
+ *  - 0: a full 32-byte chunk has just been gathered → program 32 bytes
+ *    from `G_OTA_HEADER_BUF` at `G_OTA_WRITE_PTR`, then advance the
+ *    write pointer by 32, send ACK.
+ *  - 1: the final partial chunk → program `G_OTA_REMAINING` bytes,
+ *    send ACK, then clear all OTA state (back to short-frame mode). */
+static void ota_commit_chunk(void)
+{
+    if (G_OTA_FLUSH_FLAG == 0u) {
+        ota_stage_chunk((uint16_t *)G_OTA_WRITE_PTR,
+                        (const uint8_t *)G_OTA_HEADER_BUF, 0x20u);
+        G_OTA_WRITE_PTR += 0x20u;
+        cmd_82_emit_ack();
+    } else {
+        ota_stage_chunk((uint16_t *)G_OTA_WRITE_PTR,
+                        (const uint8_t *)G_OTA_HEADER_BUF, G_OTA_REMAINING);
+        cmd_82_emit_ack();
+        G_RX_FRAME_MODE    = 0u;
+        G_OTA_FIRST_PACKET = 0u;
+        G_OTA_FLUSH_FLAG   = 0u;
+    }
+}
+
+/* OEM @ 0x080039E6 (160 B). Case 0x82 (long-frame, byte-count = 0x10).
+ * Extracts a 33-byte OTA payload from `G_LONG_BUF[0xb..0x2b]`, with
+ * two paths:
+ *  - First packet (`G_OTA_FIRST_PACKET == 0`): copies the 33-byte
+ *    header+payload, decodes the LE16 image size from header bytes
+ *    [0xc..0xd] of the staged buffer, computes the bytes-remaining
+ *    accounting (`G_OTA_REMAINING = total - 0x20`), flips the
+ *    first-packet flag, and commits the first 32-byte chunk.
+ *  - Subsequent packets: either copy a full 33 bytes (decrementing
+ *    `G_OTA_REMAINING` by 0x20) or — if fewer than 32 bytes remain —
+ *    copy just the remaining `G_OTA_REMAINING + 1` bytes (the OEM
+ *    iterates `0xb..0xb + remaining + 1` non-inclusive) and arm the
+ *    flush flag so `ota_commit_chunk` knows this is the last one.
+ *
+ * Each path ends in `ota_commit_chunk` which programs the staged
+ * data to flash and emits the per-chunk ACK. */
 static void cmd_82_fw_page(void)
 {
-    for (;;) { /* TODO: implement (decomp pending) */ }
+    if (G_OTA_FIRST_PACKET == 0u) {
+        for (int i = 0xb; i < 0x2c; i++) {
+            G_OTA_HEADER_BUF[i - 0xb] = G_LONG_BUF[i];
+        }
+        G_OTA_TOTAL_SIZE = ((uint32_t)G_OTA_HEADER_BUF[0xd] << 8) | G_OTA_HEADER_BUF[0xc];
+        G_OTA_REMAINING  = G_OTA_TOTAL_SIZE - 0x20u;
+        G_OTA_FIRST_PACKET = 1u;
+        ota_commit_chunk();
+    } else {
+        if (G_OTA_REMAINING >= 0x20u) {
+            for (int i = 0xb; i < 0x2c; i++) {
+                G_OTA_HEADER_BUF[i - 0xb] = G_LONG_BUF[i];
+            }
+            G_OTA_REMAINING -= 0x20u;
+        } else if (G_OTA_REMAINING < 0x20u) {       /* OEM re-checks same predicate */
+            for (int i = 0xb; i < (int)G_OTA_REMAINING + 0xc; i++) {
+                G_OTA_HEADER_BUF[i - 0xb] = G_LONG_BUF[i];
+            }
+            G_OTA_FLUSH_FLAG = 1u;
+        }
+        ota_commit_chunk();
+    }
 }
 
 /* ---- the dispatcher itself ----------------------------------------
@@ -243,10 +357,10 @@ void modbus_dispatch_pdu(uint8_t cmd, uint8_t len)
  */
 static void rx_reset_ota_state(void)
 {
-    G_RX_FRAME_MODE = 0u;
-    G_OTA_OFF_LO    = 0u;
-    G_OTA_OFF_HI    = 0u;
-    G_OTA_WRITE_PTR = FLASH_IMAGE_SLOT;
+    G_RX_FRAME_MODE    = 0u;
+    G_OTA_FIRST_PACKET = 0u;
+    G_OTA_FLUSH_FLAG   = 0u;
+    G_OTA_WRITE_PTR    = FLASH_IMAGE_SLOT;
 }
 
 void modbus_rx_poll(void)

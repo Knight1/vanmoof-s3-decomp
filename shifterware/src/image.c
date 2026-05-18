@@ -76,11 +76,11 @@ int image_verify_crc(void)
  * Accessed by raw address to match OEM bytes; will be replaced by
  * proper `extern` declarations once their owning modules are
  * identified. */
-#define G_C8_SCRATCH  ((volatile uint8_t    *)0x200000C8u)
-#define G_D80_BYTE    (*(volatile uint8_t   *)0x20000140u)
-#define G_D88_PTR     (*(volatile const void **)0x200000E0u)
-#define G_D90_BYTE    (*(volatile uint8_t   *)0x200000D9u)
-#define G_D94_BYTE    (*(volatile uint8_t   *)0x2000013Fu)
+#define G_C8_SCRATCH       ((volatile uint8_t    *)0x200000C8u)
+#define G_OTA_FLUSH_FLAG   (*(volatile uint8_t   *)0x20000140u)
+#define G_OTA_WRITE_PTR    (*(volatile const void **)0x200000E0u)
+#define G_RX_FRAME_MODE    (*(volatile uint8_t   *)0x200000D9u)
+#define G_OTA_FIRST_PACKET (*(volatile uint8_t   *)0x2000013Fu)
 #define G_VERSION_BYTE (*(volatile uint8_t  *)0x20000141u)
 #define G_PKT_BYTES   ((volatile uint8_t    *)0x20000142u)
 #define G_IMG_STATUS  (*(volatile uint8_t   *)0x200000E9u)
@@ -158,9 +158,9 @@ void image_apply(void)
         G_IMG_OK = 1u;
     } else {
         flash_erase_pages((uint32_t)g_image, 12);
-        G_D90_BYTE = 0u;
-        G_D94_BYTE = 0u;
-        G_D80_BYTE = 0u;
-        G_D88_PTR  = g_image;
+        G_RX_FRAME_MODE    = 0u;
+        G_OTA_FIRST_PACKET = 0u;
+        G_OTA_FLUSH_FLAG   = 0u;
+        G_OTA_WRITE_PTR    = g_image;
     }
 }
