@@ -27,12 +27,12 @@ _Last refresh from `ghidra/exports/shifter_program.json`: 2026-05-18
 
 | Status | Count | % of bytes |
 | --- | --- | --- |
-| pending      |  34 | ~28% |
+| pending      |   0 |   0 |
 | in-progress  |   0 |   0 |
 | named        |   1 | <1% |
-| decomp-c     |  83 | ~62% |
+| decomp-c     |  88 | ~66% |
 | byte-eq      |   0 |   0 |
-| deferred     |  13 | ~10% |
+| deferred     |  42 | ~33% |
 
 _Total functions: 130 (the `USART1_IRQHandler` at `0x0800450C` was
 created in an earlier round; `main` at `0x080042D6` was created when
