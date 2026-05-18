@@ -129,9 +129,57 @@
 #define TRAP_VOID()  do { for (;;) { /* unimplemented */ } } while (0)
 #define TRAP_RET(x)  do { for (;;) { /* unimplemented */ } __builtin_unreachable(); } while (0)
 
-static void boot_init_periphs_a(void)            { TRAP_VOID(); } /* OEM @ 0x0800428E (72 B) */
-static void boot_init_periphs_b(void)            { TRAP_VOID(); } /* OEM @ 0x080041C6 (88 B) */
-static void boot_init_periphs_c(void)            { TRAP_VOID(); } /* OEM @ 0x080040B2 (126 B) */
+/* OEM @ 0x0800428E (72 B). Classic CMSIS `SysTick_Config(HCLK/1000)`
+ * pattern with a guard for HCLK > 1.024 GHz (which won't happen on
+ * this part, but the OEM emits the check anyway). Bracketed by two
+ * `NVIC_SetPriority(SysTick_IRQn, _)` calls — priority 3 (lowest on
+ * Cortex-M0) during the LOAD/VAL/CTRL writes, then 0 (highest) once
+ * the timer is running, so SysTick can't preempt anything mid-config
+ * but immediately reaches the front of the queue afterwards. */
+static void boot_init_systick(void)
+{
+    const uint32_t ticks_per_ms = G_HCLK_HZ / 1000u;
+    if (ticks_per_ms - 1u > 0x00FFFFFFu) {       /* SysTick LOAD is 24-bit */
+        for (;;) { /* unsupported HCLK */ }
+    }
+    SYSTICK->LOAD = ticks_per_ms - 1u;
+    nvic_set_priority(-1, 3);                    /* SysTick_IRQn = -1 */
+    SYSTICK->VAL  = 0u;
+    SYSTICK->CTRL = 0x7u;                        /* CLKSRC | TICKINT | ENABLE */
+    nvic_set_priority(-1, 0);
+}
+
+/* OEM @ 0x080041C6 (88 B). Boot-time GPIO pin map. Enables GPIOA +
+ * GPIOB clocks together (`rcc_ahben_bits(0x60000, 1)` — AHBENR bits
+ * 17 and 18), then drives the four pins we care about from
+ * hardware.md:
+ *   PA9, PA10 → output 50 MHz push-pull (motor H-bridge halves), then
+ *               BRR them both low so the bridge is parked off at boot.
+ *   PA0, PA1  → input floating (the position-sensor lines).
+ *
+ * USART1's PB6/PB7 are configured later by `uart1_init`, so this
+ * function doesn't touch them. The `b 0x08004268` past the literal
+ * pool in the asm is just a compiler-generated jump over an embedded
+ * literal pool block — the function is logically contiguous. */
+static void boot_init_gpio(void)
+{
+    rcc_ahben_bits(0x60000u, 1);                 /* IOPAEN | IOPBEN (AHBENR bits 17, 18) */
+
+    void *const gpioa = (void *)0x48000000u;
+
+    /* PA9, PA10: output 50 MHz push-pull (CRH nibble 0x3). */
+    gpio_pin_cfg_t cfg = { .pin_mask = 0x0600u, .mode_extra = 3u, .flags = 0x10u };
+    gpio_pin_configure(gpioa, &cfg);
+
+    /* PA0, PA1: input floating (CRL nibble 0x4). */
+    cfg.pin_mask   = 0x0003u;
+    cfg.mode_extra = 3u;
+    cfg.flags      = 0x04u;
+    gpio_pin_configure(gpioa, &cfg);
+
+    gpio_brr_write(gpioa, 0x0200u);              /* PA9 low */
+    gpio_brr_write(gpioa, 0x0400u);              /* PA10 low */
+}
 /* OEM @ 0x080052E8 (24 B). Read-modify-write the `MEM_MODE` field
  * (bits 0..1) of `SYSCFG_CFGR1` at `0x40010000`. On the STM32F0
  * family this selects boot-time memory remap (Flash / System
@@ -550,11 +598,11 @@ int main(void)
     __asm__ volatile ("cpsie i");
 
     /* Per-peripheral bring-up. */
-    boot_init_periphs_a();
-    boot_init_periphs_b();
+    boot_init_systick();
+    boot_init_gpio();
     uart1_init(9600u);
     RCC->AHBENR |= RCC_AHB_CRC_BIT;
-    boot_init_periphs_c();
+    settings_load();
 
     /* TIM2 1 kHz periodic IRQ. Prescaler = HCLK/100000 - 1, ARR = 99
      * → update event every (psc+1)*(arr+1) HCLK cycles. The `uxth`

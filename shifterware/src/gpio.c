@@ -3,6 +3,18 @@
 #include "gpio.h"
 #include "mm32f031.h"
 
+/* Raw byte offsets used by the OEM `gpio_pin_configure`. The
+ * STM32F1-style GPIO layout the MM32F031 actually uses puts:
+ *   CRL @ 0x00, CRH @ 0x04, IDR @ 0x08, ODR @ 0x0C, BSRR @ 0x10,
+ *   BRR @ 0x14, LCKR @ 0x18.
+ * (The speculative `gpio_t` struct in `mm32f031.h` is the STM32F0
+ * layout — wrong for this MCU — which is why these accesses bypass
+ * the struct and use raw offsets.) */
+#define GPIO_CRL_OFFS    0x00u
+#define GPIO_CRH_OFFS    0x04u
+#define GPIO_BSRR_OFFS   0x10u
+#define GPIO_BRR_OFFS    0x14u
+
 void gpio_port_clock_enable(const gpio_t *port)
 {
     uint32_t bit = 0u;
@@ -121,4 +133,61 @@ void gpio_bsrr_write(void *port, uint32_t mask)
 void gpio_brr_write(void *port, uint32_t mask)
 {
     *(volatile uint32_t *)((char *)port + 0x14u) = mask;
+}
+
+/* OEM @ 0x08004CCE (222 B). Configure one or more pins via CRL/CRH +
+ * optional initial-level write. The OEM CRL/CRH encoding is 4-bit
+ * MODE+CNF (STM32F1 style). Originally lived in uart.c (the only
+ * caller until `boot_init_gpio` was decomp'd); now shared, so the
+ * function moved here together with its `gpio_pin_cfg_t` (in
+ * gpio.h). */
+void gpio_pin_configure(void *port, const gpio_pin_cfg_t *cfg)
+{
+    char *base = (char *)port;
+
+    uint32_t val = (uint32_t)(cfg->flags & 0xFu);
+    if ((cfg->flags & 0x10u) != 0u) {
+        val |= cfg->mode_extra;
+    }
+
+    /* low 8 pins via CRL */
+    if ((cfg->pin_mask & 0xFFu) != 0u) {
+        volatile uint32_t *crl = (volatile uint32_t *)(base + GPIO_CRL_OFFS);
+        uint32_t cr = *crl;
+        for (int pin = 0; pin < 8; pin++) {
+            const uint32_t bit = 1u << pin;
+            if ((cfg->pin_mask & bit) == 0u) continue;
+
+            const uint32_t shift = (uint32_t)pin * 4u;
+            cr = (cr & ~(0xFu << shift)) | (val << shift);
+
+            if (cfg->flags == 0x28u) {
+                *(volatile uint32_t *)(base + GPIO_BRR_OFFS)  = bit;
+            } else if (cfg->flags == 0x48u) {
+                *(volatile uint32_t *)(base + GPIO_BSRR_OFFS) = bit;
+            }
+        }
+        *crl = cr;
+    }
+
+    /* high 8 pins via CRH */
+    if (cfg->pin_mask > 0xFFu) {
+        volatile uint32_t *crh = (volatile uint32_t *)(base + GPIO_CRH_OFFS);
+        uint32_t cr = *crh;
+        for (int pin = 0; pin < 8; pin++) {
+            const uint32_t p16 = (uint32_t)pin + 8u;
+            const uint32_t bit = 1u << p16;
+            if ((cfg->pin_mask & bit) == 0u) continue;
+
+            const uint32_t shift = (uint32_t)pin * 4u;
+            cr = (cr & ~(0xFu << shift)) | (val << shift);
+
+            if (cfg->flags == 0x28u) {
+                *(volatile uint32_t *)(base + GPIO_BRR_OFFS)  = bit;
+            } else if (cfg->flags == 0x48u) {
+                *(volatile uint32_t *)(base + GPIO_BSRR_OFFS) = bit;
+            }
+        }
+        *crh = cr;
+    }
 }

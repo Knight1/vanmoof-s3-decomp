@@ -49,6 +49,19 @@ void settings_set_halfword(uint32_t offset, uint16_t value); /* @ 0x08003178 */
  * by Modbus cmd 0x5C long-form and by main's idle-reset epilogue. */
 void flash_settings_commit(void);                 /* @ 0x080031E6 */
 
+/* Load the persisted shifter settings from `FLASH_SETTINGS_PAGE` into
+ * their SRAM globals during boot. Restores `G_STATE_FC` (or zeros it
+ * if the page is blank, i.e. halfword 0 == 0xFFFF), `G_COUNTER` (BE32
+ * across 4 halfwords), and `G_5C_REGS[0..2]`. Inverse of
+ * `flash_settings_commit`. Called once from main's boot prologue. */
+void settings_load(void);                         /* @ 0x080040B2 */
+
+/* Read one halfword (16 bits) from offset within `FLASH_SETTINGS_PAGE`.
+ * The OEM exposes this as a one-instruction inline helper called by
+ * `settings_load`; we materialise it as a separate symbol so the call
+ * graph stays one-to-one with the OEM. */
+uint16_t settings_read_halfword(uint32_t offset); /* @ 0x080040A8 */
+
 /* Speculative. */
 bool flash_program_block(uint32_t addr, const void *data, size_t len_bytes);
 

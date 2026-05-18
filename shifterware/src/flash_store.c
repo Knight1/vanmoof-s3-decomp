@@ -211,6 +211,64 @@ void flash_settings_commit(void)
     state_flags_reset();
 }
 
+/* SRAM globals shared with main.c. Mirroring the existing
+ * convention in this file (`extern void state_flags_reset(void)`),
+ * raw pointers to the relevant slots rather than a shared header. */
+#define G_STATE_FC_BYTE     (*(volatile uint8_t  *)0x200000FCu)
+#define G_STATE_FC_WORD     (*(volatile uint32_t *)0x200000FCu)
+#define G_COUNTER_BE        (*(volatile uint32_t *)0x200000F8u)
+#define G_5C_REGS           ((volatile uint8_t  *)0x20000100u)
+
+/* OEM @ 0x080040A8 (10 B). One-line halfword fetch from the settings
+ * page. Standalone symbol because the OEM emits it as a real call,
+ * not an inline — `settings_load` calls it 8 times. */
+uint16_t settings_read_halfword(uint32_t offset)
+{
+    return *(volatile uint16_t *)(FLASH_SETTINGS_PAGE + offset);
+}
+
+/* OEM @ 0x080040B2 (126 B). Inverse of `flash_settings_commit`.
+ * Reads halfword 0 first as a magic / first-boot probe: if it's
+ * `0xFFFF` (blank/erased flash) then `G_STATE_FC` and `G_COUNTER` are
+ * both reset to zero — the rest of the records are still read but
+ * `G_COUNTER` is gated off by the `G_STATE_FC != 0` test at the end.
+ * Otherwise halfword 0 is re-read into `G_STATE_FC` (low byte), and
+ * halfwords 2/4/6/8 are reassembled big-endian into `G_COUNTER`.
+ * Halfwords 10/12/14 always go to `G_5C_REGS[0..2]` regardless of
+ * the magic check. Three slots are stored as 32-bit `str` even when
+ * the destination is only a byte — the OEM C source presumably
+ * declared them as `int`; we mirror that to stay byte-equivalent in
+ * the store-width pattern (the upper 3 bytes are unused padding in
+ * the SRAM layout). */
+void settings_load(void)
+{
+    if (settings_read_halfword(0u) == 0xFFFFu) {
+        G_STATE_FC_WORD = 0u;
+    } else {
+        G_STATE_FC_WORD = (uint32_t)settings_read_halfword(0u);
+    }
+
+    /* Read the 4 BE-byte halfwords up front (OEM keeps them live in
+     * r3/r4/r5/r6 across the next group of calls). */
+    const uint16_t b3 = settings_read_halfword(2u);
+    const uint16_t b2 = settings_read_halfword(4u);
+    const uint16_t b1 = settings_read_halfword(6u);
+    const uint16_t b0 = settings_read_halfword(8u);
+
+    G_5C_REGS[0] = (uint8_t)settings_read_halfword(10u);
+    G_5C_REGS[1] = (uint8_t)settings_read_halfword(12u);
+    G_5C_REGS[2] = (uint8_t)settings_read_halfword(14u);
+
+    if (G_STATE_FC_BYTE == 0u) {
+        G_COUNTER_BE = 0u;
+    } else {
+        G_COUNTER_BE = ((uint32_t)b3 << 24)
+                     | ((uint32_t)b2 << 16)
+                     | ((uint32_t)b1 << 8)
+                     |  (uint32_t)b0;
+    }
+}
+
 /* ---- Speculative (no OEM evidence yet) ----------------------------- */
 
 bool flash_program_block(uint32_t addr, const void *data, size_t len_bytes)

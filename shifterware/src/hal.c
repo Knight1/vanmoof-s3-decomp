@@ -24,6 +24,33 @@ void nvic_configure(const nvic_cfg_t *cfg)
     }
 }
 
+/* OEM @ 0x080030F0 (110 B). CMSIS-style `NVIC_SetPriority`. Two
+ * branches selected by the sign of `irq`:
+ *   irq < 0  → write into SCB->SHP word at SCB+0x14 + (((irq&0xF)-8)
+ *              & ~3), byte position `(irq<<30)>>27`. For SysTick (-1)
+ *              that resolves to SCB+0x18 byte 3 = the SHP slot at
+ *              SCB+0x1B, per the Cortex-M0 SHP layout.
+ *   irq ≥ 0 → write into NVIC->IPR word at NVIC+0x300 + (irq&~3),
+ *              byte position `(irq<<30)>>27` (i.e. irq&3 within the
+ *              word).
+ * The priority byte itself is `((priority<<30)>>24)` — i.e.
+ * `(priority & 3) << 6` — Cortex-M0 has 2 implemented priority bits
+ * in the top half of each 8-bit field, so values 0..3 map to byte
+ * values 0/0x40/0x80/0xC0. */
+void nvic_set_priority(int irq, int priority)
+{
+    const uint32_t shift = ((uint32_t)irq << 30) >> 27;     /* 0/8/16/24 */
+    const uint32_t pbyte = ((uint32_t)priority << 30) >> 24;/* (prio&3)<<6 */
+    volatile uint32_t *word;
+    if (irq < 0) {
+        const uintptr_t off = ((uint32_t)(irq & 0xF) - 8u) & ~3u;
+        word = (volatile uint32_t *)(SCB_BASE + 0x14u + off);
+    } else {
+        word = (volatile uint32_t *)(NVIC_BASE + 0x300u + ((uint32_t)irq & ~3u));
+    }
+    *word = (*word & ~(0xFFu << shift)) | (pbyte << shift);
+}
+
 /* OEM @ 0x080051A8 (28 B). */
 void rcc_ahben_bits(uint32_t mask, int enable)
 {

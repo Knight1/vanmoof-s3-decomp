@@ -50,4 +50,19 @@ bool input_pa1(void);
 void gpio_bsrr_write(void *port, uint32_t mask);
 void gpio_brr_write(void *port, uint32_t mask);
 
+/* OEM @ 0x08004CCE (222 B). Packed config for one or more pins on
+ * a single GPIO port. STM32F1-style CRL/CRH 4-bit MODE+CNF encoding
+ * — the OEM bypasses the speculative `gpio_t` struct and writes
+ * through raw byte offsets, so we keep `void *` for the port. */
+typedef struct {
+    uint16_t pin_mask;      /* 0x00 — bitmask of pins to configure */
+    uint8_t  mode_extra;    /* 0x02 — OR'd into the per-pin nibble when flags bit 4 is set */
+    uint8_t  flags;         /* 0x03 — low nibble = base CRL/CRH value;
+                             *        bit 4 = "OR mode_extra into the nibble";
+                             *        full value 0x48 = output, initial HIGH (BSRR);
+                             *        full value 0x28 = output, initial LOW  (BRR). */
+} gpio_pin_cfg_t;
+
+void gpio_pin_configure(void *port, const gpio_pin_cfg_t *cfg);
+
 #endif /* SHIFTER_GPIO_H */

@@ -15,6 +15,14 @@ typedef struct {
 
 void nvic_configure(const nvic_cfg_t *cfg);
 
+/* CMSIS-style NVIC priority setter. Negative `irq` indexes the
+ * Cortex-M0 system handlers (SVCall=-5, PendSV=-2, SysTick=-1) via
+ * SCB->SHP at 0xE000ED18; non-negative `irq` indexes the external
+ * interrupts via NVIC->IPR at 0xE000E400. Only the top 2 bits of
+ * `priority` are honoured (Cortex-M0 has 2 implemented priority
+ * bits). */
+void nvic_set_priority(int irq, int priority);
+
 void rcc_ahben_bits(uint32_t mask, int enable);
 void rcc_apb1en_bits(uint32_t mask, int enable);
 void rcc_apb2en_bits(uint32_t mask, int enable);
