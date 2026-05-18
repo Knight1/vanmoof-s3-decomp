@@ -62,7 +62,7 @@ Named (in Ghidra) but no C yet:
 Deferred (renamed in Ghidra with `unused_` prefix; MM32 stdlib leftovers
 the linker didn't GC — zero callers anywhere in the image, so no C
 source was written):
-- `unused_rcc_get_flag_status` (`0x08004FAA`, 48 B), `unused_rcc_wait_for_hse_startup` (`0x08004FDA`, 60 B), `unused_flash_erase_option_bytes` (`0x080047FA`, 70 B), `unused_flash_enable_readout_protection` (`0x08004840`, 150 B), `unused_flash_erase_option_bytes_v2` (`0x080048D6`, 120 B), `unused_flash_program_option_word` (`0x0800494E`, 100 B), `unused_flash_program_option_halfword` (`0x080049F2`, 74 B), `unused_flash_program_option_byte` (`0x08004A3C`, 100 B), `unused_flash_program_write_protection` (`0x08004AA0`, 182 B), `unused_flash_user_option_byte_config` (`0x08004B72`, 86 B), `unused_gpio_deinit` (`0x08004C64`, 106 B), `unused_rcc_reset_periph_by_base` (`0x08005364`, 54 B), `unused_gpio_pin_af_config` (`0x0800561A`, 86 B), `unused_system_init` (`0x0800462A`, 66 B), `unused_set_sysclock` (`0x08004622`, 8 B), `unused_set_sysclock_to_48` (`0x080045B8`, 106 B). Total **16** functions, **~1416 B** of stdlib bytes that the OEM image carries but never executes.
+- `unused_rcc_get_flag_status` (`0x08004FAA`, 48 B), `unused_rcc_wait_for_hse_startup` (`0x08004FDA`, 60 B), `unused_flash_erase_option_bytes` (`0x080047FA`, 70 B), `unused_flash_enable_readout_protection` (`0x08004840`, 150 B), `unused_flash_erase_option_bytes_v2` (`0x080048D6`, 120 B), `unused_flash_program_option_word` (`0x0800494E`, 100 B), `unused_flash_program_option_halfword` (`0x080049F2`, 74 B), `unused_flash_program_option_byte` (`0x08004A3C`, 100 B), `unused_flash_program_write_protection` (`0x08004AA0`, 182 B), `unused_flash_user_option_byte_config` (`0x08004B72`, 86 B), `unused_gpio_deinit` (`0x08004C64`, 106 B), `unused_rcc_reset_periph_by_base` (`0x08005364`, 54 B), `unused_gpio_pin_af_config` (`0x0800561A`, 86 B), `unused_system_init` (`0x0800462A`, 66 B), `unused_set_sysclock` (`0x08004622`, 8 B), `unused_set_sysclock_to_48` (`0x080045B8`, 106 B), `unused_tim_caller` (`0x080044BC`, 32 B), `unused_tim_get_it_status` (`0x080059A8`, 38 B), `unused_tim_clear_it_pending` (`0x080059CE`, 8 B), `unused_tim_select_input_trigger` (`0x08005A1E`, 24 B), `unused_tim_select_slave_mode` (`0x08005A36`, 24 B), `unused_tim_tix_external_clock` (`0x08005A4E`, 58 B), `unused_tim_etr_config` (`0x08005A88`, 26 B), `unused_tim_etr_clock_mode1` (`0x08005AA2`, 50 B), `unused_tim_etr_clock_mode2` (`0x08005AD4`, 34 B), `unused_tim_encoder_interface` (`0x08005B2C`, 66 B), `unused_tim_oc2_preload_fast` (`0x08005838`, 20 B), `unused_tim_oc2_init` (`0x0800584C`, 72 B), `unused_tim_oc1_preload_fast` (`0x08005894`, 18 B), `unused_tim_oc1_init` (`0x080058A6`, 58 B), `unused_tim_oc_init_dispatch` (`0x080058E0`, 62 B), `unused_startup_bx_thunk` (`0x080030E4`, 4 B), `unused_decor_tim2_thunk` (`0x08005CBC`, 2 B), `unused_decor_tim2_irq` (`0x08005CC0`, 2 B), `unused_libc_init_array` (`0x08005D90`, 36 B), `unused_default_handler_data` (`0x08005E2A`, 78 B), `unused_decor_reset_handler` (`0x08005E78`, 38 B), `unused_decor_vec_nmi` (`0x08005E9E`, 2 B), `unused_decor_vec_hardfault` (`0x08005EA0`, 2 B), `unused_decor_vec_reserved_3` (`0x08005EA2`, 2 B), `unused_decor_vec_reserved_4` (`0x08005EA4`, 2 B), `unused_decor_vec_reserved_5` (`0x08005EA6`, 2 B). Total **42** functions, **~2176 B** of OEM bytes that never execute (~33% of the image: stdlib leftovers + decorative vector-table targets + dead OEM startup chain).
 
 > 🛠 **Plan-1 complete (USART):** `usart_t` in `include/mm32f031.h`
 > rewritten to the full MM32 layout (`TDR / RDR / SR / ISR / IER / ICR
@@ -96,8 +96,9 @@ Two concrete examples already worked out:
 
 - Slot 15 (would-be `SysTick_Handler`) points at `0x08005CF0` — this is
   actually `crc32_word(uint word)`, a CRC peripheral helper.
-- Slot 31 (would-be `TIM2_IRQHandler`) points at `0x08005CBC`, a 2-byte
-  thunk to `FUN_08005CC0` (also 2 bytes — probably a `b .` stub).
+- Slot 31 (would-be `TIM2_IRQHandler`) points at `0x08005CBC`
+  (`unused_decor_tim2_thunk`), a 2-byte `b 0x08005CC0` thunk to a
+  2-byte `bx lr` stub (`unused_decor_tim2_irq`).
 
 The only OEM-confirmed name we keep from the vector table is
 `Reset_Handler` (slot 1, `0x08005E78`).
@@ -115,7 +116,7 @@ any target in `0x08005E78–0x08005EB1`.
 | # | Cortex-M0 vector | OEM target | C handler | Status |
 | --- | --- | --- | --- | --- |
 | 0 | `Initial SP` | `0x20000400` | n/a | n/a |
-| 1 | `Reset_Handler` | `0x08005E79` | `Reset_Handler` (startup_mm32f031.S) | pending |
+| 1 | `Reset_Handler` | `0x08005E79` | n/a — slot is zero-filled `unused_decor_reset_handler` | decorative |
 | 2 | `NMI_Handler` | `0x08005E9F` | `Default_Handler` | default-handler |
 | 3 | `HardFault_Handler` | `0x08005EA1` | `Default_Handler` | default-handler |
 | 4 | _(reserved)_ | `0x08005EA3` | `Default_Handler` | default-handler |
@@ -129,7 +130,7 @@ any target in `0x08005E78–0x08005EB1`.
 | 12 | _(reserved)_ | `0x08005EAB` | `Default_Handler` | default-handler |
 | 13 | _(reserved)_ | `0x00000000` | n/a | unused |
 | 14 | `PendSV_Handler` | `0x08005EAD` | `Default_Handler` | default-handler |
-| 15 | `SysTick_Handler` | `0x08005CF1` | `SysTick_Handler` | **pending** |
+| 15 | `SysTick_Handler` | `0x08005CF1` | n/a — slot decoratively points at `crc32_word` body (live as a CRC helper, NOT a handler) | decorative |
 | 16 | `WWDG_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 17 | `PVD_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 18 | `RTC_IRQHandler` | `0x00000000` | n/a | unused |
@@ -145,33 +146,40 @@ any target in `0x08005E78–0x08005EB1`.
 | 28 | `ADC_COMP_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 29 | `TIM1_BRK_UP_TRG_COM_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 30 | `TIM1_CC_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
-| 31 | `TIM2_IRQHandler` | `0x08005CBD` | `TIM2_IRQHandler` | **pending** |
+| 31 | `TIM2_IRQHandler` | `0x08005CBD` | n/a — slot points at `unused_decor_tim2_thunk` → `unused_decor_tim2_irq` (`bx lr` empty body) | decorative |
 | 32 | `TIM3_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 33 | `TIM6_IRQHandler` | `0x00000000` | n/a | unused |
 | 34 | _(reserved)_ | `0x00000000` | n/a | unused |
 | 35 | `TIM14_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
 | 36 | `TIM15_IRQHandler` | `0x00000000` | n/a | unused |
 | 37 | `TIM16_IRQHandler` | `0x08005EB1` | `Default_Handler` | default-handler |
-| 38 | `TIM17_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 39 | `I2C1_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 40 | `I2C2_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 41 | `SPI1_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 42 | `SPI2_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 43 | `USART1_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 44 | `USART2_IRQHandler` | _dump truncated_ | _pending_ | pending |
-| 45 | _(reserved)_ | _dump truncated_ | n/a | pending |
-| 46 | _(reserved)_ | _dump truncated_ | n/a | pending |
-| 47 | _(reserved)_ | _dump truncated_ | n/a | pending |
+| 38 | `TIM17_IRQHandler` | (decorative) | n/a | decorative |
+| 39 | `I2C1_IRQHandler` | (decorative) | n/a | decorative |
+| 40 | `I2C2_IRQHandler` | (decorative) | n/a | decorative |
+| 41 | `SPI1_IRQHandler` | (decorative) | n/a | decorative |
+| 42 | `SPI2_IRQHandler` | (decorative) | n/a | decorative |
+| 43 | `USART1_IRQHandler` | (decorative) | n/a | decorative |
+| 44 | `USART2_IRQHandler` | (decorative) | n/a | decorative |
+| 45 | _(reserved)_ | overlaps executable code at `0x080030DC` (dead startup stub) | n/a | decorative |
+| 46 | _(reserved)_ | overlaps executable code at `0x080030E0` (`bl unused_libc_init_array`) | n/a | decorative |
+| 47 | _(reserved)_ | overlaps executable code at `0x080030E4` (`unused_startup_bx_thunk`) | n/a | decorative |
 
-Real (non-default) ISRs to attack: **`SysTick_Handler`** (`0x08005CF0`)
-and **`TIM2_IRQHandler`** (`0x08005CBC`), plus whatever non-default
-targets land in vectors 38–47 once the dump is fixed.
+**Update 2026-05-18:** there are no real ISRs to attack here — every
+non-default vector slot turned out to be decorative once the targets
+were identified. Slot 1 (`Reset_Handler`) points into a zero-filled
+region; slot 15 (`SysTick_Handler`) points at the body of `crc32_word`
+(coincidental, that function is a CRC helper called by `crc32_words`,
+not a tick handler); slot 31 (`TIM2_IRQHandler`) points at a 2-byte
+thunk to an empty `bx lr` stub. The CM0-has-no-VTOR observation is
+the structural reason: shifterboot's table at `0x08000000` is the
+only live one, and shifterware's at `0x08003028` is inert linker
+output.
 
 ## Functions
 
 | Address | Size | Name | Module | Status | Notes / Commit |
 | --- | --- | --- | --- | --- | --- |
-| `0x080030e4` |    4 | `FUN_080030e4` |  | pending |  |
+| `0x080030e4` |    4 | `unused_startup_bx_thunk` | (stdlib) | deferred | dead — `ldr r0,[lit]; bx r0` where literal `0x08005AD7` jumps into mid-body of `unused_tim_etr_clock_mode2`; whole startup chain at 0x080030DC unreachable (shifterboot branches directly to `main`) |
 | `0x080030f0` |  110 | `nvic_set_priority` | hal | decomp-c | CMSIS-style: negative irq → SCB->SHP, non-neg → NVIC->IPR; top 2 bits of priority byte honoured |
 | `0x0800315e` |   26 | `state_flags_reset` | main | decomp-c | clears 6 shared task-flag bytes; called by 5 different state-tasks at their tails |
 | `0x08003178` |  110 | `settings_set_halfword` | flash_store | decomp-c | RMW one halfword in settings page; full 8-HW read-erase-write per call |
@@ -219,7 +227,7 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x080041c6` |   88 | `boot_init_gpio` | main | decomp-c | RCC AHBENR.IOPAEN+IOPBEN, configure PA9/PA10 output 50MHz PP + park low, configure PA0/PA1 input floating |
 | `0x0800428e` |   72 | `boot_init_systick` | main | decomp-c | `SysTick_Config(HCLK/1000)`; trap-loop on overflow; sets SysTick priority to 3 during config then 0 |
 | `0x080042d6` |  486 | `main` | main | decomp-c | boot + super-loop; 14 helper trap-stubs noted at OEM addresses. Ghidra bounds restored to 486 B (0x080042D6..0x080044BB) on 2026-05-18 — see 🔎 note above the table. |
-| `0x080044bc` |   32 | `FUN_080044bc` |  | pending | created 2026-05-18 (see 🔎 note); orphan helper, zero static xrefs; increments G_COUNTER + sibling counter at `0x200000D4`, calls `FUN_080059ce(0x40000000)`; likely OEM dead code |
+| `0x080044bc` |   32 | `unused_tim_caller` | (stdlib) | deferred | dead — sole caller of `unused_tim_clear_it_pending(TIM2, ...)`; zero static xrefs, zero flash pointer hits |
 | `0x080044dc` |   20 | `modbus_tick` | modbus | decomp-c | decrement-if-nonzero on inter-byte timeout @ `0x200000C4` |
 | `0x080045b8` |  106 | `unused_set_sysclock_to_48` | (stdlib) | deferred | dead — PLL → 48 MHz + `FLASH->ACR = 0x11`; zero callers (Reset_Handler slot points at zero-bytes) |
 | `0x08004622` |    8 | `unused_set_sysclock` | (stdlib) | deferred | dead — wrapper that calls unused_set_sysclock_to_48 |
@@ -247,9 +255,9 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08004df8` |    4 | `gpio_brr_write` | gpio | decomp-c | raw BRR write at port+0x14 |
 | `0x08004e22` |   70 | `gpio_set_af` | uart | decomp-c | AFRL/AFRH nibble write |
 | `0x08004e74` |  106 | `nvic_configure` | uart | decomp-c | priority + ISER/ICER |
-| `0x08004faa` |   48 | `FUN_08004faa` |  | pending |  |
-| `0x08004fda` |   60 | `FUN_08004fda` |  | pending |  |
-| `0x08005108` |  160 | `FUN_08005108` |  | pending |  |
+| `0x08004faa` |   48 | `unused_rcc_get_flag_status` | (stdlib) | deferred | dead — MM32 stdlib `RCC_GetFlagStatus`; zero callers (see FAA-cluster note) |
+| `0x08004fda` |   60 | `unused_rcc_wait_for_hse_startup` | (stdlib) | deferred | dead — MM32 stdlib `RCC_WaitForHSEStartUp`; zero callers (see FAA-cluster note) |
+| `0x08005108` |  160 | `rcc_get_clocks_freq` | hal | decomp-c | decodes RCC->CFGR.SWS → SYSCLK then derives HCLK/PCLK1/PCLK2 via APBAHBPrescTable; called by `usart_init` for BRR computation |
 | `0x080051a8` |   28 | `rcc_ahben_bits` | uart | decomp-c | set/clear bits in RCC->AHBENR |
 | `0x080051c4` |   28 | `rcc_apb2en_bits` | uart | decomp-c | set/clear bits in RCC->APB2ENR |
 | `0x080051e0` |   28 | `rcc_apb1en_bits` | hal | decomp-c | RMW bits in RCC->APB1ENR (offset 0x1C); peer of rcc_ahben_bits / rcc_apb2en_bits |
@@ -261,22 +269,22 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x080053e4` |   18 | `tim_time_base_config_init` | timer | decomp-c | TIM_TimeBaseInitTypeDef default: PSC=0, ARR=0xFFFF, CKD=0, Mode=0, RCR=0 |
 | `0x08005498` |   26 | `tim_enable` | timer | decomp-c | toggle TIMx->CR1.CEN (bit 0); disable uses `& 0xFFFE` (literal materialised as `0xFF8F+0x6F`) |
 | `0x0800561a` |   86 | `unused_gpio_pin_af_config` | (stdlib) | deferred | dead — GPIO AFRL/AFRH nibble setter (`gpio_set_af` in uart.c is the live equivalent); zero callers |
-| `0x08005838` |   20 | `FUN_08005838` |  | pending |  |
-| `0x0800584c` |   72 | `FUN_0800584c` |  | pending |  |
-| `0x08005894` |   18 | `FUN_08005894` |  | pending |  |
-| `0x080058a6` |   58 | `FUN_080058a6` |  | pending |  |
-| `0x080058e0` |   62 | `FUN_080058e0` |  | pending |  |
+| `0x08005838` |   20 | `unused_tim_oc2_preload_fast` | (stdlib) | deferred | dead — clears CCMR1 bits 10-11 (OC2FE/OC2PE), ORs (param & 0xff)<<8; zero external callers |
+| `0x0800584c` |   72 | `unused_tim_oc2_init` | (stdlib) | deferred | dead — `TIM_OC2Init` equivalent (CCMR1 high byte + CCER bits 4-7); only called from intra-cluster + dead `unused_tim_tix_external_clock` |
+| `0x08005894` |   18 | `unused_tim_oc1_preload_fast` | (stdlib) | deferred | dead — clears CCMR1 bits 2-3 (OC1FE/OC1PE), ORs param; zero external callers |
+| `0x080058a6` |   58 | `unused_tim_oc1_init` | (stdlib) | deferred | dead — `TIM_OC1Init` equivalent (CCMR1 low byte + CCER bits 0-3); only called from intra-cluster + dead `unused_tim_tix_external_clock` |
+| `0x080058e0` |   62 | `unused_tim_oc_init_dispatch` | (stdlib) | deferred | dead — channel dispatcher: param_2[0]==0 → OC1 path, ==4 → OC2 path; zero callers |
 | `0x0800596e` |   26 | `tim_dier_bits` | timer | decomp-c | RMW bits in TIMx->DIER (offset 0x0C); disable path ANDs with `~mask & 0xFFFF` |
 | `0x080059a0` |    8 | `tim_clear_flag` | timer | decomp-c | `TIMx->SR = ~flag` (SR is rc_w0; writing 0 clears the matching bit) |
-| `0x080059a8` |   38 | `FUN_080059a8` |  | pending |  |
-| `0x080059ce` |    8 | `FUN_080059ce` |  | pending |  |
-| `0x08005a1e` |   24 | `FUN_08005a1e` |  | pending |  |
-| `0x08005a36` |   24 | `FUN_08005a36` |  | pending |  |
-| `0x08005a4e` |   58 | `FUN_08005a4e` |  | pending |  |
-| `0x08005a88` |   26 | `FUN_08005a88` |  | pending |  |
-| `0x08005aa2` |   50 | `FUN_08005aa2` |  | pending |  |
-| `0x08005ad4` |   34 | `FUN_08005ad4` |  | pending |  |
-| `0x08005b2c` |   66 | `FUN_08005b2c` |  | pending |  |
+| `0x080059a8` |   38 | `unused_tim_get_it_status` | (stdlib) | deferred | dead — `TIM_GetITStatus` equivalent (SR & DIER & mask); zero callers |
+| `0x080059ce` |    8 | `unused_tim_clear_it_pending` | (stdlib) | deferred | dead — `TIM_ClearITPendingBit` equivalent (`~mask → SR`); only caller is the orphan `unused_tim_caller` |
+| `0x08005a1e` |   24 | `unused_tim_select_input_trigger` | (stdlib) | deferred | dead — `TIM_SelectInputTrigger` (write SMCR.TS); zero external callers |
+| `0x08005a36` |   24 | `unused_tim_select_slave_mode` | (stdlib) | deferred | dead — wraps unused_tim_select_input_trigger and ORs SMS=7; zero callers |
+| `0x08005a4e` |   58 | `unused_tim_tix_external_clock` | (stdlib) | deferred | dead — `TIM_TIxExternalClockConfig` with TI1FP1 (0x60) branch; zero callers |
+| `0x08005a88` |   26 | `unused_tim_etr_config` | (stdlib) | deferred | dead — `TIM_ETRConfig`: write SMCR high byte (ETP/ETPS/ETF); zero callers |
+| `0x08005aa2` |   50 | `unused_tim_etr_clock_mode1` | (stdlib) | deferred | dead — `TIM_ETRClockMode1Config` (SMS=7, TS=7); zero callers |
+| `0x08005ad4` |   34 | `unused_tim_etr_clock_mode2` | (stdlib) | deferred | dead — `TIM_ETRClockMode2Config` (sets SMCR.ECE=1); zero callers |
+| `0x08005b2c` |   66 | `unused_tim_encoder_interface` | (stdlib) | deferred | dead — `TIM_EncoderInterfaceConfig`: SMCR + CCMR1 (CC1S/CC2S=01) + CCER polarity; zero callers |
 | `0x08005b9c` |   54 | `rcc_reset_usart` | hal | decomp-c | pulse APB1RSTR.USART2RST or APB2RSTR.USART1RST per base address; promoted from `named` after FAA-cluster dependencies landed |
 | `0x08005bd2` |  116 | `usart_init` | uart | decomp-c | CR_1C + CR_18 framing + BRR from config struct |
 | `0x08005c60` |   24 | `usart_set_enable` | uart | decomp-c | toggle UE (bit 0 of CR_18) |
@@ -284,8 +292,8 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08005ca0` |    6 | `usart_write_data` | uart | decomp-c | static; `*(base+0) = byte` |
 | `0x08005ca6` |    8 | `usart_read_data` | uart | decomp-c | read RDR @ offset 0x04 |
 | `0x08005cae` |   16 | `usart_test_flag` | uart | decomp-c | static; `(*(base+8) & mask) != 0` |
-| `0x08005cbc` |    2 | `thunk_FUN_08005cc0` |  | pending |  |
-| `0x08005cc0` |    2 | `FUN_08005cc0` |  | pending |  |
+| `0x08005cbc` |    2 | `unused_decor_tim2_thunk` | (stdlib) | deferred | decorative — slot 31 TIM2_IRQHandler thunk (`b 0x08005CC0`); CM0 has no VTOR, vector table at 0x08003028 inert |
+| `0x08005cc0` |    2 | `unused_decor_tim2_irq` | (stdlib) | deferred | decorative — empty `bx lr` handler body, target of unused_decor_tim2_thunk |
 | `0x08005cc4` |   20 | `usart_check_status` | uart | decomp-c | test bits in ISR @ offset 0x0C |
 | `0x08005cd8` |    4 | `usart_clear_flag` | uart | decomp-c | write ICR @ offset 0x14 |
 | `0x08005ce8` |    8 | `crc_reset` | crc | decomp-c | OEM `CRC->CR = RESET_Msk` |
@@ -293,12 +301,12 @@ targets land in vectors 38–47 once the dump is fixed.
 | `0x08005d08` |   32 | `crc32_words` | crc | decomp-c | OEM CRC loop (merged 0x08005D0C) |
 | `0x08005d40` |   44 | `__aeabi_uidiv` | runtime | decomp-c | Cortex-M0 unsigned 32-bit softdiv (restoring 31-shift loop); GCC auto-emits calls for every `/` and `%` on uint32_t |
 | `0x08005d6c` |   36 | `memcpy` | util | decomp-c | word-fast + byte tail; **void return** (non-POSIX) |
-| `0x08005d90` |   36 | `FUN_08005d90` |  | pending |  |
+| `0x08005d90` |   36 | `unused_libc_init_array` | (stdlib) | deferred | dead — libc_init_array-style ctor loop walking 0x080075F0..0x08007610, then `bl unused_startup_bx_thunk`; only caller is the dead startup stub at 0x080030E0 |
 | `0x08005db4` |   28 | `__gnu_thumb1_case_uqi` | libgcc | named | compiler-runtime jump-table dispatcher; not project code |
-| `0x08005e2a` |   78 | `FUN_08005e2a` |  | pending |  |
-| `0x08005e78` |   38 | `FUN_08005e78` |  | pending |  |
-| `0x08005e9e` |    2 | `FUN_08005e9e` |  | pending |  |
-| `0x08005ea0` |    2 | `FUN_08005ea0` |  | pending |  |
-| `0x08005ea2` |    2 | `FUN_08005ea2` |  | pending |  |
-| `0x08005ea4` |    2 | `FUN_08005ea4` |  | pending |  |
-| `0x08005ea6` |    2 | `FUN_08005ea6` |  | pending |  |
+| `0x08005e2a` |   78 | `unused_default_handler_data` | (stdlib) | deferred | decorative — data block inside the Default_Handler region; Ghidra mis-disassembled, only "xref" is an analysis false-positive from a literal pool in `unused_system_init` |
+| `0x08005e78` |   38 | `unused_decor_reset_handler` | (stdlib) | deferred | decorative — zero-filled `Reset_Handler` slot region (vector slot 1 points here; CM0 has no VTOR so inert) |
+| `0x08005e9e` |    2 | `unused_decor_vec_nmi` | (stdlib) | deferred | decorative — would-be NMI_Handler 2-byte slot fragment |
+| `0x08005ea0` |    2 | `unused_decor_vec_hardfault` | (stdlib) | deferred | decorative — would-be HardFault_Handler 2-byte slot fragment |
+| `0x08005ea2` |    2 | `unused_decor_vec_reserved_3` | (stdlib) | deferred | decorative — reserved slot fragment |
+| `0x08005ea4` |    2 | `unused_decor_vec_reserved_4` | (stdlib) | deferred | decorative — reserved slot fragment |
+| `0x08005ea6` |    2 | `unused_decor_vec_reserved_5` | (stdlib) | deferred | decorative — reserved slot fragment |
