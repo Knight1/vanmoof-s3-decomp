@@ -66,6 +66,7 @@ shift command can keep the bridge energised.
 
 | Peripheral | Base | Used for | Source |
 | ---------- | ---- | -------- | ------ |
+| TIM2       | `0x40000000` | Boot-configured for a 1 kHz periodic update IRQ (prescaler = `HCLK/100000 - 1`, ARR = 99). NVIC IRQ 15, priority 1. Brought up by `tim2_init_periodic` from `main`'s boot prologue. Clock gated on via RCC APB1ENR bit 0. | `tim2_init_periodic` @ `0x08004048` |
 | USART1     | `0x40013800` | Modbus RTU link to main module (9600 baud, 8-N-1). RX IRQ at IRQ27, priority 3. | `uart1_init` |
 | GPIOA      | `0x48000000` | Digital inputs PA0, PA1 (above). | `gpio_idr_test` callers |
 | GPIOB      | `0x48000400` | USART1 TX/RX. Clock gated on via RCC AHBENR bit 18. | `uart1_init` |
@@ -154,7 +155,7 @@ without a comment are still single-purpose unknowns.
 | `0x20000141` | `uint8_t` | `G_VERSION_BYTE` (a.k.a. `G_0F_SUBID` in the cmd 0x0F path) | Bits 1..7 of a big-endian uint16 lifted out of `G_RX_BUF[4..5]`. Written by `image_apply`, `cmd_5c_write3` (with `G_5C_REGS[0]`), and `cmd_0f_report_u32`. Emitted as PDU byte 2 by both `report_image_status` (7-byte) and `emit_counter_status_pdu` (9-byte). |
 | `0x20000142..43` | `uint8_t[2]` | `G_PKT_BYTES` (also the first 2 bytes of `G_0F_VALUE_BE` in the cmd 0x0F path) | Pair of bytes emitted as PDU bytes 3 and 4 by `report_image_status`. Written by `image_apply` (`[0] = 0`, `[1] = G_IMG_STATUS`) or by `cmd_5c_write3` with the trailing two bytes of `G_5C_REGS`. Clobbered by `cmd_0f_report_u32` (which writes a 4-byte BE32 value spanning `0x20000142..0x20000145`). |
 | `0x20000144..45` | `uint8_t[2]` | tail of `G_0F_VALUE_BE` | Upper two bytes of the BE32 value staged by `cmd_0f_report_u32`. Not used by the image-status path. Emitted as PDU bytes 5 and 6 of the 9-byte cmd 0x0F response. |
-| `0x20000148` | `uint32_t` | `G_HASH_SEED_PTR` | Pointer passed to `boot_hash(*, 100000)` during early boot. Likely a flash-resident integrity table. |
+| `0x20000148` | `uint32_t` | `G_HCLK_HZ` | **HCLK frequency in Hz** (typically 48,000,000). Set during boot bring-up (`boot_init_periphs_b`, pending) and read by `main` (to derive the TIM2 prescaler: `psc = HCLK/100000 - 1`) and by `boot_init_periphs_a` (the SysTick init wrapper, also pending: SysTick LOAD = HCLK/1000 - 1). The pre-decomp model labelled this `G_HASH_SEED_PTR`; that name was an artifact of mis-identifying the consuming functions. |
 
 The 0xC0-byte block at `0x20000000` is `.data`, copied by `main` from
 flash `0x08004828`. Many of the entries above sit inside it.

@@ -19,6 +19,7 @@
 
 #include "uart.h"
 #include "gpio.h"
+#include "hal.h"
 #include "mm32f031.h"
 
 static volatile uint8_t  s_rx_buf[UART_RX_BUFFER_SIZE];
@@ -97,46 +98,8 @@ static void usart_set_enable(usart_t *u, int enable)
     else        u->CCR &= ~1u;
 }
 
-/* ---- NVIC + RCC leaves --------------------------------------------- */
-
-typedef struct {
-    uint8_t irq;            /* 0x00 */
-    uint8_t priority;       /* 0x01 */
-    uint8_t enable;         /* 0x02 */
-} nvic_cfg_t;
-
-/* OEM @ 0x08004E74 (106 B). */
-static void nvic_configure(const nvic_cfg_t *cfg)
-{
-    volatile uint32_t *const nvic = (volatile uint32_t *)0xE000E100u;
-    if (cfg->enable != 0u) {
-        volatile uint32_t *ip = (volatile uint32_t *)((char *)nvic + 0x300);
-        const uint32_t shift = (uint32_t)(cfg->irq & 0x3u) * 8u + 4u;
-        const uint32_t idx   = (uint32_t)cfg->irq >> 2;
-        uint32_t w = ip[idx];
-        w &= ~(0xFFu << shift);
-        w |= (((uint32_t)cfg->priority & 0xFu) << shift);
-        ip[idx] = w;
-        nvic[0] = 1u << (cfg->irq & 0x1Fu);                /* ISER[0] */
-    } else {
-        volatile uint32_t *icer = (volatile uint32_t *)((char *)nvic + 0x80);
-        icer[0] = 1u << (cfg->irq & 0x1Fu);
-    }
-}
-
-/* OEM @ 0x080051C4 (28 B). */
-static void rcc_apb2en_bits(uint32_t mask, int enable)
-{
-    if (enable) RCC->APB2ENR |= mask;
-    else        RCC->APB2ENR &= ~mask;
-}
-
-/* OEM @ 0x080051A8 (28 B). */
-static void rcc_ahben_bits(uint32_t mask, int enable)
-{
-    if (enable) RCC->AHBENR |= mask;
-    else        RCC->AHBENR &= ~mask;
-}
+/* NVIC + RCC HAL leaves now live in hal.c (shared with timer.c and
+ * main.c). See `include/hal.h`. */
 
 /* ---- GPIO HAL ------------------------------------------------------
  *

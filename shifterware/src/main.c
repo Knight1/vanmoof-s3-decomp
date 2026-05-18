@@ -12,9 +12,15 @@
  *      bring up the rest of the peripherals (TIM / ADC / etc., not yet
  *      decomp'd).
  *   5. `uart1_init(9600)`, then RCC AHBENR bit 6 (likely CRC clock).
- *   6. A boot-time hash/check pair: `FUN_08005D40` over the .data at
- *      `*(uint32_t*)0x20000148` for 100,000 bytes, then `FUN_08004048`
- *      applies the result to a status field.
+ *   6. TIM2 1 kHz periodic-tick init. The OEM reads HCLK from
+ *      `*(uint32_t*)0x20000148`, computes `HCLK/100000 - 1` (via the
+ *      Cortex-M0 softdiv `__aeabi_uidiv` at OEM @ 0x08005D40), then
+ *      calls `tim2_init_periodic` (OEM @ 0x08004048) with that
+ *      prescaler and ARR = 99 — a 1 ms (1 kHz) update IRQ.
+ *      (The pre-decomp model speculated this was a "boot-time hash
+ *      check"; once the two functions were translated it became clear
+ *      that 0x08005D40 is just `uidiv` and 0x08004048 is a TIM2
+ *      configure — see commit history.)
  *   7. A two-stage `FUN_080033CC` check that latches the state byte
  *      at `0x200000FC` to 1 or 2 and gates the operating mode at
  *      `0x20000115` and `0x2000013B`.
@@ -52,6 +58,8 @@
 #include "util.h"
 #include "gpio.h"
 #include "flash_store.h"
+#include "hal.h"
+#include "timer.h"
 #include "mm32f031.h"
 #include <stdint.h>
 
@@ -61,8 +69,15 @@
 #define DATA_INIT_SRC       ((const void *)0x08004828u)
 #define DATA_INIT_LEN       0xC0u
 
-#define G_HASH_SEED_PTR     (*(volatile uint32_t *)0x20000148u)
-#define G_HASH_LEN          100000u  /* 0x186A0 — matches OEM literal */
+/* OEM literal at flash 0x20000148 holds the **HCLK frequency in Hz**,
+ * not a hash seed as the speculative pre-decomp model assumed. The
+ * value is established by `boot_init_periphs_b` (still pending) and
+ * read by both `main` (to derive the TIM2 prescaler) and
+ * `boot_init_periphs_a` (the SysTick init wrapper — also pending,
+ * which we now know divides by 1000 not "hashes for 100,000"). */
+#define G_HCLK_HZ           (*(volatile uint32_t *)0x20000148u)
+#define TIM2_TICK_BASE_HZ   100000u  /* OEM divisor: HCLK/100000 = 100 kHz timer base */
+#define TIM2_TICK_PERIOD    99u      /* TIM2 ARR — IRQ every 100 base ticks = 1 ms */
 
 #define G_STATE_FC          (*(volatile uint8_t  *)0x200000FCu)
 #define G_STATE_115         (*(volatile uint8_t  *)0x20000115u)
@@ -131,8 +146,15 @@ static void syscfg_set_mem_mode(uint32_t mode)
     *cfgr1 = (*cfgr1 & 0xFFFFFFFCu) | (mode & 0x3u);
 }
 
-static int  boot_hash(const void *p, uint32_t n) { (void)p; (void)n; TRAP_RET(0); } /* OEM @ 0x08005D40 (44 B) */
-static void boot_apply_hash(uint16_t v, int t)   { (void)v; (void)t; TRAP_VOID(); } /* OEM @ 0x08004048 (96 B) */
+/* What main.c previously called `boot_hash` (FUN_08005D40) is in fact
+ * `__aeabi_uidiv` — the Cortex-M0 unsigned 32-bit softdiv (see
+ * src/runtime.c). The OEM uses it here to compute the TIM2 prescaler
+ * (`HCLK / 100000`) and earlier inside `boot_init_periphs_a` (SysTick
+ * init) to compute `HCLK / 1000`. Both call sites are now plain `/`
+ * operators in C; GCC emits the runtime call automatically.
+ *
+ * `boot_apply_hash` (FUN_08004048) is `tim2_init_periodic` (see
+ * src/timer.c). */
 
 /* OEM @ 0x080033CC and 0x0800325C are `input_pa1` / `input_pa0` in
  * gpio.c — thin wrappers over `gpio_idr_test`. Calls below go direct
@@ -534,10 +556,13 @@ int main(void)
     RCC->AHBENR |= RCC_AHB_CRC_BIT;
     boot_init_periphs_c();
 
-    /* Boot-time integrity check. */
+    /* TIM2 1 kHz periodic IRQ. Prescaler = HCLK/100000 - 1, ARR = 99
+     * → update event every (psc+1)*(arr+1) HCLK cycles. The `uxth`
+     * truncation to 16 bits is the OEM's: TIM2->PSC is a 16-bit
+     * register. */
     {
-        const int h = boot_hash((const void *)G_HASH_SEED_PTR, G_HASH_LEN);
-        boot_apply_hash((uint16_t)((unsigned)h - 1u), 99);
+        const uint32_t psc = (G_HCLK_HZ / TIM2_TICK_BASE_HZ) - 1u;
+        tim2_init_periodic((uint16_t)psc, TIM2_TICK_PERIOD);
     }
 
     /* Pre-loop state-machine sync. PA1 gates a 2→1 demotion and the
