@@ -72,3 +72,70 @@ void rcc_apb2en_bits(uint32_t mask, int enable)
     if (enable) RCC->APB2ENR |= mask;
     else        RCC->APB2ENR &= ~mask;
 }
+
+/* OEM @ 0x08005218 (28 B). RMW on RCC->APB1RSTR (offset 0x10). */
+void rcc_apb1_reset_bits(uint32_t mask, int enable)
+{
+    if (enable) RCC->APB1RSTR |= mask;
+    else        RCC->APB1RSTR &= ~mask;
+}
+
+/* OEM @ 0x080051FC (28 B). RMW on RCC->APB2RSTR (offset 0x0C). */
+void rcc_apb2_reset_bits(uint32_t mask, int enable)
+{
+    if (enable) RCC->APB2RSTR |= mask;
+    else        RCC->APB2RSTR &= ~mask;
+}
+
+/* OEM @ 0x08005B9C (54 B). Pulse the matching peripheral-reset bit
+ * for the USART instance at `u`. The OEM stdlib has a separate set/
+ * clear call pair rather than a single "pulse with cycle" — match
+ * that exactly. */
+void rcc_reset_usart(void *u)
+{
+    if (u == (void *)0x40004400u) {             /* USART2 (APB1) */
+        rcc_apb1_reset_bits(1u << 17, 1);       /* APB1RSTR.USART2RST */
+        rcc_apb1_reset_bits(1u << 17, 0);
+    }
+    if (u == (void *)0x40013800u) {             /* USART1 (APB2) */
+        rcc_apb2_reset_bits(1u << 14, 1);       /* APB2RSTR.USART1RST */
+        rcc_apb2_reset_bits(1u << 14, 0);
+    }
+}
+
+/* OEM @ 0x08005108 (160 B). Standard MM32 `RCC_GetClocksFreq`.
+ *
+ * Decode the active SYSCLK source from RCC->CFGR.SWS, then compute
+ * HCLK / PCLK1 / PCLK2 via the AHB/APB prescaler shift table. The
+ * literal SYSCLK values were resolved from the OEM literal pool at
+ * 0x080052A8..0x080052D0:
+ *   SWS == 0  (HSI) → 8 MHz / 12 MHz depending on RCC->CR bit 20
+ *   SWS == 1  (HSE) → 8 MHz (the OEM ships HSE = 8 MHz)
+ *   SWS == 2  (PLL) → 48 MHz / 72 MHz depending on RCC->CR bit 20
+ *   SWS == 3  ("LSI"-encoded extra source) → 40 kHz
+ *
+ * The OEM stores APBAHBPrescTable in RAM (.data) at 0x2000014C; we
+ * put it in flash (.rodata) which is behaviour-equivalent. */
+static const uint8_t APBAHBPrescTable[16] = {
+    0, 0, 0, 0, 1, 2, 3, 4, 1, 2, 3, 4, 6, 7, 8, 9
+};
+
+void rcc_get_clocks_freq(rcc_clocks_t *out)
+{
+    const uint32_t cfgr = RCC->CFGR;
+    const uint32_t cr   = RCC->CR;
+    const uint32_t sws  = cfgr & 0x0Cu;
+
+    if (sws == 0x04u) {
+        out->sysclk = 8000000u;
+    } else if (sws == 0x08u) {
+        out->sysclk = ((cr & 0x100000u) == 0u) ? 48000000u : 72000000u;
+    } else if (sws == 0x0Cu) {
+        out->sysclk = 40000u;
+    } else {
+        out->sysclk = ((cr & 0x100000u) == 0u) ? 8000000u : 12000000u;
+    }
+    out->hclk  = out->sysclk >> APBAHBPrescTable[(cfgr & 0x00F0u) >> 4];
+    out->pclk1 = out->hclk   >> APBAHBPrescTable[(cfgr & 0x0700u) >> 8];
+    out->pclk2 = out->hclk   >> APBAHBPrescTable[(cfgr & 0x3800u) >> 11];
+}

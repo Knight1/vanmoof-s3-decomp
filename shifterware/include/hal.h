@@ -27,4 +27,22 @@ void rcc_ahben_bits(uint32_t mask, int enable);
 void rcc_apb1en_bits(uint32_t mask, int enable);
 void rcc_apb2en_bits(uint32_t mask, int enable);
 
+/* RMW on the peripheral-reset registers (RCC->APB1RSTR @ offset 0x10,
+ * RCC->APB2RSTR @ offset 0x0C). `enable=1` sets the bits, `0` clears. */
+void rcc_apb1_reset_bits(uint32_t mask, int enable);
+void rcc_apb2_reset_bits(uint32_t mask, int enable);
+
+/* Pulse the peripheral reset bit for USART1 or USART2 (decoded from
+ * the base-address argument). */
+void rcc_reset_usart(void *u);
+
+typedef struct {
+    uint32_t sysclk;    /* 0x00 */
+    uint32_t hclk;      /* 0x04 */
+    uint32_t pclk1;     /* 0x08 */
+    uint32_t pclk2;     /* 0x0C */
+} rcc_clocks_t;
+
+void rcc_get_clocks_freq(rcc_clocks_t *out);
+
 #endif

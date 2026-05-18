@@ -71,15 +71,19 @@ typedef struct {
     uint16_t ccr_b;         /* 0x0C — OR'd into CCR */
 } usart_config_t;
 
-#define USART_PCLK_HZ   48000000u
-
-/* OEM @ 0x08005BD2 (116 B). */
+/* OEM @ 0x08005BD2 (116 B). The OEM derives PCLK at runtime via
+ * `rcc_get_clocks_freq`: USART1 on APB2 uses PCLK2; USART2 on APB1
+ * uses PCLK1. The base-address `u` decides which one to consult. */
 static void usart_init(usart_t *u, const usart_config_t *cfg)
 {
     u->FCR = (u->FCR & ~0xCFu) | cfg->fcr_a | cfg->fcr_b | cfg->fcr_c;
     u->CCR = (u->CCR & ~0x1Fu) | cfg->ccr_a | cfg->ccr_b;
 
-    const uint32_t divisor = USART_PCLK_HZ / cfg->baud;
+    rcc_clocks_t clocks;
+    rcc_get_clocks_freq(&clocks);
+    const uint32_t pclk = (u == (usart_t *)0x40013800u) ? clocks.pclk2 : clocks.pclk1;
+
+    const uint32_t divisor = pclk / cfg->baud;
     u->BRR_INT = divisor >> 4;
     u->BRR_FRA = divisor & 0xFu;
 }
