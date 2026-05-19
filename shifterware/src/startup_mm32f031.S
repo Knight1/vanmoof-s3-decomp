@@ -133,9 +133,16 @@ Reset_Handler:
     b       .Lcopy_data
 .Lcopy_data_done:
 
-    /* Zero .bss. */
+    /* Zero .bss AND the SRAM region holding the OEM's hard-coded
+     * globals (G_TICK_B, the OTA staging buffer, modbus scratch, …).
+     * The OEM firmware does NOT zero this region itself — it relies
+     * on cold-reset SRAM being clear. When we're chain-loaded from
+     * shifterboot the region may hold leftover loader state, so we
+     * clear it explicitly. `_sram_clear_end` stops short of the
+     * stack reservation so we don't trash the frame we're executing
+     * on. */
     ldr     r0, =_sbss
-    ldr     r1, =_ebss
+    ldr     r1, =_sram_clear_end
     movs    r2, #0
 .Lzero_bss:
     cmp     r0, r1

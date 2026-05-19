@@ -124,6 +124,18 @@ SECTIONS
         __bss_end__ = _ebss;
     } > SRAM
 
+    /* The OEM firmware accesses dozens of globals at hard-coded SRAM
+     * addresses (G_TICK_B @ 0x200000D0, G_OTA_STAGE_HW @ 0x200001E0,
+     * the cmd-0x82 OTA staging halfword buffer, the modbus RX/TX
+     * scratch, etc.) without declaring them in any source object.
+     * They live in the SRAM hole between `_ebss` and the stack
+     * reservation, and the OEM relies on cold-reset SRAM being zero
+     * — `main` never zero-fills them. Reset_Handler does it for us;
+     * `_sram_clear_end` marks the upper bound of the region it must
+     * clear. We stop short of `._user_heap_stack` because that range
+     * is owned by the live stack we're executing on. */
+    _sram_clear_end = ORIGIN(SRAM) + LENGTH(SRAM) - _Min_Stack_Size - _Min_Heap_Size;
+
     ._user_heap_stack :
     {
         . = ALIGN(8);
