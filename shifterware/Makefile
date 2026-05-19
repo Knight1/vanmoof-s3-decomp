@@ -73,6 +73,7 @@ $(BUILD_DIR)/$(PROJECT).elf: $(OBJS) $(LD_SCRIPT)
 
 $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O binary $< $@
+	@python3 tools/patch_image_crc.py $@
 
 $(BUILD_DIR)/$(PROJECT).hex: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O ihex $< $@
