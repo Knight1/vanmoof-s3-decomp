@@ -46,6 +46,23 @@ uint32_t image_read_u32_le(const uint16_t *src,
  * Uses the hardware CRC peripheral at `0x40023000` (see `crc.h`). */
 int image_verify_crc(void);
 
+/* Boot an application by reading its initial stack pointer and
+ * Reset_Handler entry from the Cortex-M0 vector table at
+ * `vec_table` and transferring control to that Reset_Handler.
+ *
+ * The OEM calls this from `main` at `0x0800031C` with the
+ * argument `slot2_base + 40` (= `0x08004800 + 0x28 = 0x08004828`),
+ * i.e. the vector table of the image staged into slot 2. The
+ * pre-conditions are that slot 2 has already been validated +
+ * populated by `flash_copy_region` and that interrupts have been
+ * disabled (or that the app is prepared for them to fire
+ * immediately against the new vector table).
+ *
+ * Does not return on a normal app boot (Reset_Handler runs main()
+ * and main() spins forever). The function's epilogue (`pop {r4,
+ * pc}`) is dead code preserved by the OEM. */
+void boot_app(const uint32_t *vec_table);
+
 #ifdef __cplusplus
 }
 #endif

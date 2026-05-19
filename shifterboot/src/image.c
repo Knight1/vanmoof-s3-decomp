@@ -137,3 +137,45 @@ int image_verify_crc(void)
     const uint32_t stored_crc = ((const uint32_t *)g_image)[2];
     return (got == stored_crc) ? IMAGE_OK : IMAGE_CRC_MISMATCH;
 }
+
+/* OEM @ 0x080016F0 (26 B). Application-boot trampoline. Reads the
+ * application's vector table at `vec_table` and:
+ *
+ *   1. Stashes `vec_table[1]` (Reset_Handler with Thumb LSB) at
+ *      SRAM `0x20000018` — a fixed scratch slot. This is necessary
+ *      because the next instruction overwrites MSP, which
+ *      invalidates the current stack frame; we can't keep
+ *      Reset_Handler in a stack-local across that point.
+ *   2. `MSR MSP, vec_table[0]` — installs the application's
+ *      initial stack pointer. The current stack frame is now
+ *      invalid; do not touch any locals beyond this point.
+ *   3. Reads the stashed Reset_Handler back from SRAM 0x20000018
+ *      and `BLX` to it.
+ *
+ * Sole caller is `main` at `0x0800031C` with the argument
+ * `slot2_base + IMAGE_HDR_SIZE = 0x08004828` — i.e. the vector
+ * table of the OTA-staged image at slot 2.
+ *
+ * The function's `pop {r4, pc}` epilogue is dead — a normal app
+ * Reset_Handler does not return. We preserve the OEM body shape.
+ *
+ * The OEM uses BLX (which saves LR) rather than BX (which doesn't).
+ * For app boot the LR save is meaningless, but matches OEM bytes.
+ */
+void boot_app(const uint32_t *vec_table)
+{
+    /* Fixed SRAM scratch slot — must survive the MSP change because
+     * any stack-local would be unaddressable after `MSR MSP, ...`. */
+    volatile uint32_t *const boot_stash = (volatile uint32_t *)0x20000018u;
+
+    *boot_stash = vec_table[1];                 /* Reset_Handler */
+    __asm__ volatile ("msr msp, %0"
+                      :
+                      : "r" (vec_table[0])
+                      : "memory");
+
+    /* Re-read Reset_Handler from the SRAM stash (locals are invalid
+     * after the MSR; the OEM also re-reads through the global slot). */
+    void (*reset_handler)(void) = (void (*)(void))*boot_stash;
+    reset_handler();
+}

@@ -131,7 +131,7 @@
     {"addr":"0x0800160e","size":58,"name":"FUN_0800160e","auto_named":true,"signature":"undefined FUN_0800160e(void)","thunk":false,"external":false},
     {"addr":"0x08001658","size":78,"name":"ota_program_chunk","auto_named":false,"signature":"void ota_program_chunk(uint dst, uchar * frame, uchar count_bytes)","thunk":false,"external":false},
     {"addr":"0x080016a6","size":74,"name":"flash_copy_region","auto_named":false,"signature":"void flash_copy_region(uint src, uint dst)","thunk":false,"external":false},
-    {"addr":"0x080016f0","size":26,"name":"FUN_080016f0","auto_named":true,"signature":"undefined FUN_080016f0(void)","thunk":false,"external":false},
+    {"addr":"0x080016f0","size":26,"name":"boot_app","auto_named":false,"signature":"void boot_app(uint * vec_table)","thunk":false,"external":false},
     {"addr":"0x08001714","size":44,"name":"FUN_08001714","auto_named":true,"signature":"undefined FUN_08001714(void)","thunk":false,"external":false},
     {"addr":"0x08001740","size":36,"name":"memcpy","auto_named":false,"signature":"void memcpy(void * dst, void * src, uint count)","thunk":false,"external":false},
     {"addr":"0x08001764","size":36,"name":"_init_data_bss","auto_named":false,"signature":"void _init_data_bss(void)","thunk":false,"external":false},

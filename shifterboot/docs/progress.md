@@ -24,7 +24,7 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | ?? | pending (VanMoof-custom, awaiting decomp) |
 | 6  | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 26 | decomp (asm or c) |
+| 27 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -99,6 +99,20 @@ The pending count will tighten as more functions are classified as
   +0xC); they're never read back and `-Os` drops them. Same role
   as shifterware's `image_verify_crc` @ `0x08003AC6` (same 100 B
   size, same shape).
+- `image.c` — `boot_app` (26 B @ `0x080016F0`). **Application-boot
+  trampoline.** Stashes the target's Reset_Handler at SRAM
+  `0x20000018` (a fixed scratch slot — pool word at `0x08001710`),
+  `MSR MSP, vec[0]` to install the app's initial SP, then re-reads
+  the stash and `BLX`es into Reset_Handler. The scratch round-trip
+  is required because `MSR MSP` invalidates the current stack
+  frame, so locals can't survive across the switch.
+  Sole caller is `main` at `0x0800031C` with the argument
+  `0x08004828` (= slot 2 base + `IMAGE_HDR_SIZE`). This **closes
+  the boot-handoff question** we'd flagged in earlier progress
+  notes — shifterboot DOES branch into another image region; the
+  prior "no direct branch found" observation missed this BLX
+  through a stashed function pointer. The handoff is triggered by
+  the cmd-0x81 OTA-apply path, not by cold reset.
 - `ota.c` — `ota_program_chunk` (78 B @ `0x08001658`). Per-chunk
   flash writer used by `main`'s cmd-0x82 Modbus OTA streaming
   loop (sole caller, at `0x080004B6`). Walks `count_bytes` of an
@@ -249,6 +263,7 @@ single `Default_Handler` definition.
 | `0x08000158` | 100 | `image_verify_crc` | decomp-c | image header + payload CRC validator @ slot 1. Returns 0 ok / 1 CRC mismatch / 2 header invalid. Calls `CRC_ResetDR` (vendor-stock) + `memcpy` + `crc32_words`. Same shape as shifterware's `image_verify_crc` @ `0x08003AC6`. |
 | `0x080013cc` | 32 | `crc32_words` | decomp-c | feed `count` u32 words from `src` into the MM32F031 hardware CRC engine at `0x40023000`, return accumulated CRC. |
 | `0x08001740` | 36 | `memcpy` | decomp-c | word-fast + byte tail; void return (non-POSIX). Word path triggers on `(dst \| src) & 3 == 0`. |
+| `0x080016f0` | 26 | `boot_app` | decomp-c | application-boot trampoline: stash Reset_Handler @ SRAM `0x20000018`, MSR MSP from vec[0], BLX to the stash. Sole caller is `main` at `0x0800031C` with `0x08004828` (slot 2 + 40). Closes the boot-handoff question. |
 | `0x08001764` | 36 | `_init_data_bss` | named | called from `_cold_reset`; CMSIS-style .data copy + .bss zero — likely VanMoof-written rather than vendor (the MindMotion BSP relies on Keil `__main` instead). To confirm by inspection. |
 | `0x0800054c` | 106 | `set_sysclock_to_48m` | decomp-c | VanMoof-tuned clock-tree bring-up: HSI on → clear two MM32-specific `RCC->CR` bits (20, 2) → `RCC->CFGR = 0x400` (PPRE=/2) → `FLASH->ACR = 0x11` (1 WS + prefetch) → switch `SW` to `10` (PLL) → wait `SWS == 10`. Skips the standard MindMotion PLLMUL/PLLSRC/PLLON sequence — relies on MM32F031's "SW=PLL with PLLMUL=0" routing 48 MHz directly. |
 | `0x080000c8` | 28 | `uart1_send_byte` | decomp-c | UART1 single-byte send-and-wait: `USART_SendData(USART1, b)` then spin on `USART_GetFlagStatus(USART1, 1)` (SR bit 0 = TX-ready). VanMoof-custom wrapper; calls vendor-stock HAL primitives. |
