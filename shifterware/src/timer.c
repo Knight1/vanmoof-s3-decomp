@@ -1,84 +1,46 @@
-/* timer.c — SysTick millis counter and TIM3 step-pulse generator.
+/* timer.c — OEM TIM HAL + TIM2 1 kHz tick ISR.
  *
- * The systick/TIM3 code below is speculative pre-decomp scaffolding;
- * the real OEM SysTick handler is `FUN_0800428E` (boot_init_periphs_a,
- * still pending). The OEM TIM HAL helpers added at the bottom — the
- * `tim_time_base_*` family and `tim2_init_periodic` — are decomp-c
- * and live behind real `FUN_*` addresses. */
+ * Two layers in this file:
+ *
+ *   1. The OEM TIM HAL — `tim_time_base_config_init`, `tim_time_base_init`,
+ *      `tim_clear_flag`, `tim_dier_bits`, `tim_enable`, and the
+ *      `tim2_init_periodic` wrapper. These are decomp-c and live behind
+ *      real OEM addresses (see `docs/progress.md` for the OEM offsets).
+ *
+ *   2. The strong `TIM2_IRQHandler` — provides the 1 kHz tick that drives
+ *      main's super-loop scheduler via the `G_TICK_B` global at
+ *      SRAM `0x200000D0`. Each UIE event increments G_TICK_B by 1, which
+ *      main's `if (G_TICK_A != G_TICK_B)` predicate detects and consumes.
+ *
+ * Earlier speculative SysTick + TIM3 step-pulse scaffolding has been
+ * removed: the OEM doesn't use TIM3 (vector slot 32 stays on
+ * Default_Handler now that no strong override exists). The OEM's SysTick
+ * setup (`boot_init_systick` in `main.c`) IS called at boot, but its
+ * handler is decomp-pending — slot 15 currently lands on Default_Handler
+ * unless/until a strong `SysTick_Handler` is provided. */
 
 #include "timer.h"
 #include "hal.h"
 #include "mm32f031.h"
 
-static volatile uint32_t s_millis;
+/* SRAM tick counter incremented every TIM2 update event (1 kHz). Pinned
+ * to the OEM SRAM address because every consumer (main super-loop,
+ * `motor_h_bridge_set` stall timeout, `sched_alpha_match_3538` settle
+ * window, 5C deadline tracker) accesses it via the same hard-coded
+ * pointer. */
+#define G_TICK_B (*(volatile uint32_t *)0x200000D0u)
 
-void systick_init(void)
+/* OEM @ unknown — vector slot 31 (`TIM2_IRQHandler`). The handler body
+ * itself hasn't been decomp'd yet; this version is the minimal correct
+ * behaviour the rest of the firmware needs: ack the update interrupt and
+ * advance the tick. If/when we identify the OEM ISR body (e.g. by
+ * decomp'ing shifterboot's vector-table relocation, since CM0 has no
+ * VTOR), this strong symbol gets replaced with the real translation. */
+void TIM2_IRQHandler(void)
 {
-    SYSTICK->LOAD = (SYSCLK_HZ / 1000u) - 1u;
-    SYSTICK->VAL  = 0u;
-    SYSTICK->CTRL = 0x7u;   /* CLKSOURCE=core | TICKINT | ENABLE */
-}
-
-uint32_t systick_millis(void)
-{
-    return s_millis;
-}
-
-void systick_delay_ms(uint32_t ms)
-{
-    const uint32_t start = s_millis;
-    while ((s_millis - start) < ms) {
-        /* spin */
-    }
-}
-
-void SysTick_Handler(void)
-{
-    s_millis++;
-}
-
-/* TIM3 is run as a periodic timebase; each update event drives one
- * micro-step from the motor driver. */
-void tim3_step_init(uint32_t step_hz)
-{
-    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN_Msk;
-
-    TIM3->CR1  = 0u;
-    TIM3->PSC  = 47u;        /* 48 MHz / (47+1) = 1 MHz tick */
-    TIM3->DIER = TIM_DIER_UIE_Msk;
-
-    tim3_step_set_rate(step_hz);
-
-    TIM3->EGR = TIM_EGR_UG_Msk;
-    TIM3->SR  = 0u;
-
-    NVIC->ISER[0] = 1u << 16;     /* TIM3 IRQ = 16 */
-}
-
-void tim3_step_set_rate(uint32_t step_hz)
-{
-    uint32_t arr = (step_hz != 0u) ? (1000000u / step_hz) : 0xFFFFu;
-    if (arr == 0u) arr = 1u;
-    if (arr > 0xFFFFu) arr = 0xFFFFu;
-    TIM3->ARR = arr - 1u;
-}
-
-void tim3_step_start(void)
-{
-    TIM3->SR  = 0u;
-    TIM3->CR1 |= TIM_CR1_CEN_Msk;
-}
-
-void tim3_step_stop(void)
-{
-    TIM3->CR1 &= ~TIM_CR1_CEN_Msk;
-}
-
-void TIM3_IRQHandler(void)
-{
-    if ((TIM3->SR & TIM_SR_UIF_Msk) != 0u) {
-        TIM3->SR = (uint32_t)~TIM_SR_UIF_Msk;
-        motor_step_tick();
+    if ((TIM2->SR & TIM_SR_UIF_Msk) != 0u) {
+        TIM2->SR = (uint32_t)~TIM_SR_UIF_Msk;
+        G_TICK_B = G_TICK_B + 1u;
     }
 }
 

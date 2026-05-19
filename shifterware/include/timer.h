@@ -6,21 +6,9 @@
 
 #define SYSCLK_HZ    48000000u
 
-void     systick_init(void);
-uint32_t systick_millis(void);
-void     systick_delay_ms(uint32_t ms);
-
-void     tim3_step_init(uint32_t step_hz);
-void     tim3_step_set_rate(uint32_t step_hz);
-void     tim3_step_start(void);
-void     tim3_step_stop(void);
-
-void     SysTick_Handler(void);
-void     TIM3_IRQHandler(void);
-
-/* Called from TIM3_IRQHandler when one step has elapsed.
- * Implemented by the motor driver. */
-void     motor_step_tick(void);
+/* TIM2 1 kHz update-event handler; advances `G_TICK_B` at SRAM
+ * 0x200000D0 which the main super-loop polls for scheduler ticks. */
+void     TIM2_IRQHandler(void);
 
 /* ---- OEM TIM HAL ------------------------------------------------------ *
  * Shared TIM-init helpers, one per OEM symbol. The OEM uses these for
