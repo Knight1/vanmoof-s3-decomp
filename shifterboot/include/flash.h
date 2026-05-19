@@ -109,6 +109,41 @@ void flash_busy_step(void);
  * final non-BUSY status or `FLASH_ST_TIMEOUT` (synthetic). */
 int flash_wait_status(int timeout);
 
+/* Program a single halfword at flash `addr` with value `value`. Caller
+ * is expected to have already unlocked the flash and cleared the
+ * sticky SR error bits. Returns the same `FLASH_ST_*` enumeration as
+ * `flash_do_page_erase`. Internally uses a much shorter poll budget
+ * (`FLASH_PROGRAM_WAIT_LIMIT` = 15) than the erase path; programming
+ * a single halfword is fast. */
+int flash_program_halfword(uint32_t addr, uint16_t value);
+
+/* Program `count` consecutive halfwords at flash `dst` from the
+ * source halfword array `src`. The wrapper:
+ *   - flash_unlock
+ *   - flash_clear_status(PGERR | WRPRTERR | EOP)
+ *   - for i in 0..count-1: flash_program_halfword(dst + i*2, src[i])
+ *   - flash_clear_status(EOP)
+ *   - flash_lock
+ * Used by the OTA chain (FUN_080016A6 = "halfword copier") and by
+ * FUN_08001658 (both still pending decomp). */
+void flash_program_range(uint32_t dst, const uint16_t *src, uint16_t count);
+
+/* Copy a flash region of size `(dst - src)` bytes from `src` to `dst`,
+ * page by page (1 KB pages), routed through an SRAM scratch buffer
+ * at `0x200000F2`. The size is **implicit**: the OEM's caller (main's
+ * image-sync path) relies on the two image slots being placed
+ * contiguously in flash, so `dst - src` equals the size of the source
+ * region. For the OEM layout — slot 1 at `0x08001800`, slot 2 at
+ * `0x08004800` — this gives `n_pages = 12` (= 12 KB).
+ *
+ * Caller is responsible for ensuring `dst` is erased first
+ * (`flash_erase_pages` over the destination range). */
+void flash_copy_region(uint32_t src, uint32_t dst);
+
+/* Poll budget used by `flash_program_halfword`. The OEM materialises
+ * `15` as `movs r0, #0xF`. */
+#define FLASH_PROGRAM_WAIT_LIMIT  15
+
 #ifdef __cplusplus
 }
 #endif

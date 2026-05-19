@@ -24,7 +24,7 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | ?? | pending (VanMoof-custom, awaiting decomp) |
 | 6  | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 18 | decomp (asm or c) |
+| 22 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -66,6 +66,22 @@ The pending count will tighten as more functions are classified as
     (at `0x08000228`, `0x08000232`, `0x0800024A`, `0x08000270`,
     `0x080002CE`, `0x080002FA`) — almost certainly one read per
     u32 field of the VanMoof image header.
+- `ota.c` — `ota_program_chunk` (78 B @ `0x08001658`). Per-chunk
+  flash writer used by `main`'s cmd-0x82 Modbus OTA streaming
+  loop (sole caller, at `0x080004B6`). Walks `count_bytes` of an
+  inbound Modbus frame's payload starting at `frame + 11` (the
+  11-byte Modbus header offset is materialised by the OEM as
+  `adds r4, #0xB`), packs each consecutive byte pair as
+  little-endian halfwords into the SRAM scratch buffer at
+  `0x200000F2` (shared with `flash_copy_region`), then flushes
+  16 halfwords (32 B, materialised as `movs r2, #0x10`) to flash
+  at `dst` via `flash_program_range`. The flush size is **fixed
+  at 16 halfwords** regardless of `count_bytes` — for a partial
+  last chunk where `count_bytes < 32`, the scratch buffer's
+  tail still contains stale halfwords from the previous call,
+  which the OEM (and we) write to flash unchanged. The inner
+  counters (`buf_idx`, `stream_pos`) are `uxtb`-clamped to 8
+  bits.
 - `flash.c` — embedded-flash unlock / lock / status-clear primitives
   plus the page-erase wrapper. Same partitioning as shifterware's
   `flash_store.c`.
@@ -119,6 +135,28 @@ The pending count will tighten as more functions are classified as
   rewritten to cite shifterboot's own evidence. Cross-firmware
   comparisons in this repo stay strictly as "post-decomp
   confirmation", not as "decomp inputs".
+  - `flash_program_halfword` (64 B @ `0x08000946`) — inner halfword
+    writer. Caller is expected to have already unlocked the flash
+    and cleared the sticky SR bits. Polls `flash_wait_status(15)`
+    (short budget — programming a halfword is fast), sets PG, writes
+    `*(uint16_t *)addr = value`, polls again, clears PG via
+    `FLASH->CR &= 0x1FFE`. The OEM materialises `0x1FFE` as
+    `0x1FFD + 1` (`adds r1, #1`) so the literal pool word from the
+    page-erase path is shared. Returns `FLASH_ST_*`.
+  - `flash_program_range` (54 B @ `0x080014FE`) — `unlock` →
+    `clear PGERR|WRPRTERR|EOP` → loop calling
+    `flash_program_halfword(dst + i*2, src[i])` with `i` `uxth`-clamped
+    → `clear EOP` → `lock`. Callers: `flash_copy_region` (below) and
+    `FUN_08001658` (still pending). Mirrors `flash_erase_page`.
+  - `flash_copy_region` (74 B @ `0x080016A6`) — page-by-page region
+    copy. Reads each 1-KB page from `src` into a 1-KB SRAM scratch
+    buffer at `0x200000F2` via `image_copy_halfwords`, then writes
+    the scratch buffer to flash at `dst` via `flash_program_range`.
+    **Size is implicit**: `n_pages = (dst - src) / 0x400`. The OEM's
+    slot placement (slot 1 @ `0x08001800`, slot 2 @ `0x08004800`,
+    12 KB apart) makes this `12 pages`. Sole caller is `main` at
+    `0x08000296`, used to mirror slot 1 → slot 2 after slot 2 has
+    been erased and slot 1's CRC has been validated.
   - `flash_erase_pages` (32 B @ `0x08000138`) — signed counted
     loop that calls `flash_erase_page(base_addr + i * 0x400)` for
     `i = 0..n_pages-1`. The OEM uses `blt` so `n_pages <= 0` is a
@@ -188,6 +226,10 @@ single `Default_Handler` definition.
 | `0x0800071a` | 44 | `flash_wait_status` | decomp-c | polls `flash_get_status` until !BUSY or timeout. Writes `FLASH_ST_TIMEOUT` unconditionally when `timeout == 0`. |
 | `0x080006ca` | 54 | `flash_get_status` | decomp-c | priority cascade BSY > PGERR > WRPRTERR > READY against `FLASH->SR`. Isolates BSY via `lsls/lsrs #0x1F`. |
 | `0x08000700` | 26 | `flash_busy_step` | decomp-c | `volatile int i = 0; i = 0xFF; while (i) i--;` — double-initial-store pattern in the disasm is the giveaway that `i` is volatile. |
+| `0x08000946` | 64 | `flash_program_halfword` | decomp-c | inner halfword writer: `wait_status(15)` → set PG → write halfword → `wait_status(15)` → clear PG via `& 0x1FFE` (= `0x1FFD + 1`, shares the page-erase pool word). |
+| `0x080014fe` | 54 | `flash_program_range` | decomp-c | wrapper: unlock → clear PGERR/WRPRTERR/EOP → loop `flash_program_halfword(dst + i*2, src[i])` → clear EOP → lock. Mirrors `flash_erase_page`'s structure. Callers: `flash_copy_region` and `FUN_08001658` (pending). |
+| `0x080016a6` | 74 | `flash_copy_region` | decomp-c | page-by-page region copy through an SRAM scratch buffer at `0x200000F2`. Size implicit: `n_pages = (dst - src) / 0x400`. Sole caller is `main`'s slot1→slot2 image-sync path. |
+| `0x08001658` | 78 | `ota_program_chunk` | decomp-c | per-chunk inbound-OTA flasher. Skips 11 bytes of Modbus frame header, packs LE halfwords from the payload into scratch at `0x200000F2`, flushes 16 halfwords (32 B) to flash at `dst` via `flash_program_range`. Sole caller is `main`'s cmd-0x82 streaming loop at `0x080004B6`. |
 | `0x080006b0` | 12 | `flash_unlock` | decomp-c | canonical KEY1 (`0x45670123`) + KEY2 (`0xCDEF89AB`) to `FLASH->KEYR`. Used by `flash_erase_page` and the pending flash-programmer wrapper `FUN_080014FE`. |
 | `0x080006bc` | 14 | `flash_lock` | decomp-c | `FLASH->CR |= 0x80` (LOCK bit). Same two callers as `flash_unlock`. |
 | `0x08000bde` |  6 | `flash_clear_status` | decomp-c | `FLASH->SR = bits` (W1C the chosen flag bits). Called 2× from `flash_erase_page` and 2× from `FUN_080014FE`. |

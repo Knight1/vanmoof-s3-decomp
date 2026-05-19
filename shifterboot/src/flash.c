@@ -9,6 +9,7 @@
  */
 
 #include "flash.h"
+#include "image.h"
 
 #include <stdint.h>
 
@@ -33,6 +34,77 @@
  * equivalent — but the literal-pool word at `0x080000A7C` encodes
  * `0x1FFD` specifically, and we mirror it. */
 #define FLASH_CR_CLEAR_PER_MASK  0x1FFDu
+
+/* Mask the OEM uses to clear `FLASH_CR.PG` while preserving the
+ * other CR bits. `0x1FFE = (0x1FFD) + 1` — the OEM materialises this
+ * by adding 1 to the same `0x1FFD` literal pool word the page-erase
+ * path uses, saving a second literal slot. */
+#define FLASH_CR_PG    (1u << 0)   /* program enable */
+#define FLASH_CR_CLEAR_PG_MASK   0x1FFEu
+
+/* OEM @ 0x08000946 (64 B). Inner halfword programmer. Sole caller
+ * is `flash_program_range` (which precedes the call with unlock +
+ * SR clear, the same recipe `flash_erase_page` uses for the inner
+ * erase).
+ *
+ *   1. `flash_wait_status(15)` — short poll budget; programming a
+ *      halfword is fast. If not READY, bail and return that status.
+ *      The OEM materialises `15` as `movs r0, #0xF`.
+ *   2. Set `FLASH->CR.PG` (bit 0 — `movs r1, #1`).
+ *   3. `*(uint16_t *)addr = value` — the actual flash write.
+ *   4. Poll again. If BUSY (= timeout under our enum mapping), bail
+ *      without clearing PG — same dead-but-preserved branch as the
+ *      erase path.
+ *   5. Clear PG via `FLASH->CR &= 0x1FFE`. The OEM materialises
+ *      `0x1FFE` as `0x1FFD + 1` (`adds r1, r1, #1`) so the literal
+ *      pool word `0x1FFD` can be shared with `flash_do_page_erase`. */
+int flash_program_halfword(uint32_t addr, uint16_t value)
+{
+    int status = flash_wait_status(FLASH_PROGRAM_WAIT_LIMIT);
+    if (status != FLASH_ST_READY) {
+        return status;
+    }
+
+    FLASH_CR = FLASH_CR | FLASH_CR_PG;
+    *(volatile uint16_t *)addr = value;
+
+    status = flash_wait_status(FLASH_PROGRAM_WAIT_LIMIT);
+    if (status == FLASH_ST_BUSY) {
+        return status;
+    }
+
+    FLASH_CR = FLASH_CR & FLASH_CR_CLEAR_PG_MASK;
+
+    return status;
+}
+
+/* OEM @ 0x080014FE (54 B). Program `count` consecutive halfwords at
+ * flash `dst` from the source halfword array `src`. Wraps:
+ *   - `flash_unlock`
+ *   - `flash_clear_status(PGERR | WRPRTERR | EOP)` (mask 0x34)
+ *   - per-halfword loop calling `flash_program_halfword(dst + i*2,
+ *     src[i])` with `i` `uxth`-clamped to 16 bits
+ *   - `flash_clear_status(EOP)` (mask 0x20)
+ *   - `flash_lock`
+ *
+ * The OEM discards each `flash_program_halfword` return value (it's
+ * the caller's responsibility, if any, to detect partial-write
+ * errors). Same partitioning as `flash_erase_page`. */
+void flash_program_range(uint32_t dst, const uint16_t *src, uint16_t count)
+{
+    flash_unlock();
+    flash_clear_status(FLASH_SR_PGERR_Msk
+                       | FLASH_SR_WRPRTERR_Msk
+                       | FLASH_SR_EOP_Msk);
+
+    for (uint16_t i = 0u; i < count; i = (uint16_t)(i + 1u)) {
+        (void)flash_program_halfword(dst, src[i]);
+        dst += 2u;
+    }
+
+    flash_clear_status(FLASH_SR_EOP_Msk);
+    flash_lock();
+}
 
 /* OEM @ 0x08000746 (72 B). Inner page-erase.
  *
@@ -151,6 +223,40 @@ int flash_wait_status(int timeout)
         status = FLASH_ST_TIMEOUT;
     }
     return status;
+}
+
+/* OEM @ 0x080016A6 (74 B). Copy one flash region to another, page
+ * by page, via the SRAM scratch buffer at `0x200000F2`. Used by
+ * `main` (called at `0x08000296`) to mirror slot 1 (`0x08001800`)
+ * into slot 2 (`0x08004800`) once slot 1 has been validated and
+ * slot 2 has been erased.
+ *
+ * The size is implicit — derived as `(dst - src) / 0x400`. The OEM
+ * encodes the operation's size into the slot placement:
+ *   slot 1 = 0x08001800..0x08004800  (12 KB)
+ *   slot 2 = 0x08004800..0x08007800  (12 KB)
+ * → `(0x08004800 - 0x08001800) / 0x400 = 12 pages`.
+ *
+ * Each iteration reads one page from `src` into the scratch via
+ * `image_copy_halfwords` (which goes halfword-by-halfword to
+ * tolerate misalignment) then writes the page back to flash at
+ * `dst` via `flash_program_range`. The OEM materialises `512`
+ * (halfwords per page) as `movs r2, #1; lsls r2, #9` and `0x400`
+ * (page-size byte stride) as `movs r0, #1; lsls r0, #10`. */
+#define FLASH_COPY_SCRATCH      ((uint16_t *)0x200000F2u)
+#define HALFWORDS_PER_PAGE      (FLASH_PAGE_SIZE / 2u)  /* 512 */
+
+void flash_copy_region(uint32_t src, uint32_t dst)
+{
+    const uint32_t n_pages = (dst - src) / FLASH_PAGE_SIZE;
+
+    for (uint32_t i = 0u; i < n_pages; i++) {
+        image_copy_halfwords((const uint16_t *)src, FLASH_COPY_SCRATCH,
+                             HALFWORDS_PER_PAGE);
+        flash_program_range(dst, FLASH_COPY_SCRATCH, HALFWORDS_PER_PAGE);
+        src += FLASH_PAGE_SIZE;
+        dst += FLASH_PAGE_SIZE;
+    }
 }
 
 /* OEM @ 0x080006B0. The canonical STM32F0 / MM32F031 unlock
