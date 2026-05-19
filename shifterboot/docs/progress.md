@@ -24,7 +24,7 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | ?? | pending (VanMoof-custom, awaiting decomp) |
 | 6  | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 3  | decomp (asm or c) |
+| 18 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -40,6 +40,109 @@ The pending count will tighten as more functions are classified as
   MindMotion template has `b .` for SysTick; VanMoof installed a
   countdown decrementer that drives a millisecond-delay variable at
   SRAM `0x20000010`.
+- `uart.c` — `uart1_send_byte` (28 B @ `0x080000C8`) and
+  `uart1_send_buf` (28 B @ `0x080000E4`). VanMoof-custom wrappers
+  around MindMotion HAL `USART_SendData` / `USART_GetFlagStatus`;
+  the byte-send spins on USART SR bit 0 (TX-ready/complete on MM32),
+  and the buffer-send is a decrement-then-test loop with a
+  `uxth`-clamped 16-bit length. Build-incomplete state: the HAL
+  primitives are declared `extern` in `uart.c` and resolve once the
+  MindMotion BSP is vendored in. Compile-clean (-Wall -Wextra
+  -Wpedantic -Wshadow); link still produces undefined references
+  for the HAL leaves and the missing `Reset_Handler` chain, as
+  expected.
+- `image.c` — halfword-stream helpers used by `main` to parse the
+  image header during OTA verification.
+  - `image_read_halfword` (6 B @ `0x080014F8`) — single `*p` halfword
+    load. Called by `image_copy_halfwords` and once directly from
+    `main` at `0x08000260`.
+  - `image_copy_halfwords` (34 B @ `0x08001554`) — `memcpy` for
+    halfword-aligned buffers, `count` is `uint16_t` (the OEM emits
+    `uxth` on the index each iteration). Also called from
+    `FUN_080016A6` (pending).
+  - `image_read_u32_le` (28 B @ `0x080001BC`) — assembles a 32-bit
+    little-endian value from two halfword reads, leaving the
+    halfwords in the caller's staging buffer. Called 6× from `main`
+    (at `0x08000228`, `0x08000232`, `0x0800024A`, `0x08000270`,
+    `0x080002CE`, `0x080002FA`) — almost certainly one read per
+    u32 field of the VanMoof image header.
+- `flash.c` — embedded-flash unlock / lock / status-clear primitives
+  plus the page-erase wrapper. Same partitioning as shifterware's
+  `flash_store.c`.
+  - `flash_unlock` (12 B @ `0x080006B0`) — KEY1 (`0x45670123`) +
+    KEY2 (`0xCDEF89AB`) to `FLASH->KEYR`. Callers:
+    `flash_erase_page` and the still-pending flash-programmer
+    wrapper at `FUN_080014FE`.
+  - `flash_lock` (14 B @ `0x080006BC`) — `FLASH->CR |= 1<<7`. Same
+    two callers as `flash_unlock`.
+  - `flash_clear_status` (6 B @ `0x08000BDE`) — `FLASH->SR = bits`.
+    Used 2× in each of `flash_erase_page` and `FUN_080014FE`
+    (pre-op clear of PGERR/WRPRTERR/EOP, post-op clear of EOP).
+  - `flash_erase_page` (32 B @ `0x08001534`) — wrapper:
+    `flash_unlock` → `flash_clear_status(PGERR|WRPRTERR|EOP)` →
+    `flash_do_page_erase(page_addr)` (still pending @ `FUN_08000746`)
+    → `flash_clear_status(EOP)` → `flash_lock`. Sole caller is
+    `flash_erase_pages` (the multi-page iterator below).
+    The OEM discards the inner erase's return value; we mirror
+    that (cast to `(void)`).
+  - `flash_do_page_erase` (72 B @ `0x08000746`) — inner page-erase.
+    Sole caller is `flash_erase_page`. Polls `flash_wait_status`
+    for `READY`, sets PER + AR + STRT, polls again, then clears
+    PER via `FLASH->CR &= 0x1FFD`. Returns one of `FLASH_ST_*`
+    (cannot actually return BUSY — preserved dead-but-harmless
+    branch matches OEM bytes). Byte-size-equivalent to the OEM
+    (56 B body + 16 B pool = 72 B total).
+  - `flash_get_status` (54 B @ `0x080006CA`) — decodes
+    `FLASH->SR` into a `FLASH_ST_*` code with priority BSY >
+    PGERR > WRPRTERR > READY. Isolates BSY via `lsls #0x1F;
+    lsrs #0x1F`; isolates PGERR/WRPRTERR via `ands` against
+    `4` / `0x10`.
+  - `flash_busy_step` (26 B @ `0x08000700`) — `volatile int i = 0;
+    i = 0xFF; while (i) i--;`. The double-initial-store and
+    stack-slot access pattern in the disassembly only makes
+    sense if `i` is volatile (otherwise gcc folds the
+    assignment).
+  - `flash_wait_status` (44 B @ `0x0800071A`) — polls
+    `flash_get_status` until !BUSY or `timeout == 0`. On
+    timeout-exhaustion writes `FLASH_ST_TIMEOUT` (5) — the OEM
+    does this unconditionally on `timeout == 0`, so a valid
+    non-BUSY status read on the final iteration is overwritten
+    to TIMEOUT. Preserved.
+
+  **Discipline note (2026-05-19)**: an earlier revision of this
+  file imported the `FLASH_ST_*` enum values from shifterware
+  by analogy without grounding them in shifterboot's own
+  disassembly. The values were subsequently verified directly
+  from shifterboot's `flash_get_status` body (which loads `1`,
+  `2`, `3`, `4` per cascade branch) and `flash_wait_status`
+  (which writes `5` on timeout); the source comments were
+  rewritten to cite shifterboot's own evidence. Cross-firmware
+  comparisons in this repo stay strictly as "post-decomp
+  confirmation", not as "decomp inputs".
+  - `flash_erase_pages` (32 B @ `0x08000138`) — signed counted
+    loop that calls `flash_erase_page(base_addr + i * 0x400)` for
+    `i = 0..n_pages-1`. The OEM uses `blt` so `n_pages <= 0` is a
+    no-op. Called 4× from `main` (`0x0800028E`, `0x080002C6`,
+    `0x080002F2`, `0x080003F8`) — wipes different flash regions
+    before / during OTA. Structurally identical to shifterware's
+    `flash_erase_pages` at `0x08003832` (same signature, same
+    page constant, same `unlock-every-iteration` inefficiency).
+- `clock.c` — `set_sysclock_to_48m` (106 B @ `0x0800054C`). Called
+  by the vendor-stock `SetSysClock` trampoline at `0x080005B6`,
+  which is itself called at the tail of vendor-stock `SystemInit`
+  (`0x080005BE`) during Reset_Handler. **NOT** byte-identical to
+  MindMotion's published `SetSysClockTo48M` — the OEM skips the
+  explicit PLLMUL / PLLSRC / PLLON dance and instead writes a
+  cleared `RCC->CFGR` with PPRE = /2, then switches `SW` to `10`
+  (PLL position) and spins on `SWS == 10`. The shifterware-side
+  `rcc_get_clocks_freq` (in `shifterware/src/hal.c`) confirms
+  this yields SYSCLK = 48 MHz when `RCC->CR` bit 20 is clear
+  (which this function ensures). Flash latency set to 1 wait
+  state with prefetch buffer enabled (`FLASH->ACR = 0x11`).
+  Two MM32F031-specific `RCC->CR` bits (bit 20 and bit 2) are
+  cleared during setup; their precise roles are TBD without the
+  vendor RM, but bit 20 is the documented "48 MHz vs 72 MHz"
+  selector per the shifterware decomp.
 
 ## Functions
 
@@ -72,12 +175,22 @@ single `Default_Handler` definition.
 | `0x080014ae` | 20 | `systick_tick` | decomp-c | decrements `g_systick_countdown` if non-zero |
 | `0x080014c2` | 8  | `SysTick_Handler` | decomp-c | trampoline to `systick_tick` |
 | `0x08001764` | 36 | `_init_data_bss` | named | called from `_cold_reset`; CMSIS-style .data copy + .bss zero — likely VanMoof-written rather than vendor (the MindMotion BSP relies on Keil `__main` instead). To confirm by inspection. |
-| `0x0800054c` | 106 | `FUN_0800054c` | pending | likely `SetSysClockToXXM` (called from stock `SetSysClock`); could be either vendor stock or a VanMoof-tuned clock setup — inspect first |
-| `0x080000c8` | 28 | `FUN_080000c8` | pending | UART1 single-byte send-and-wait (`USART_SendData` + spin on `USART_GetFlagStatus(TX-done)`). Wrapper is custom; uses HAL primitives. |
-| `0x080000e4` | 28 | `FUN_080000e4` | pending | UART1 buffer transmit loop on top of `FUN_080000c8` |
-| `0x08000138` | 32 | `FUN_08000138` | pending | iterates a callback over `n` 1-KB pages — likely a flash-erase or CRC-N-pages helper |
+| `0x0800054c` | 106 | `set_sysclock_to_48m` | decomp-c | VanMoof-tuned clock-tree bring-up: HSI on → clear two MM32-specific `RCC->CR` bits (20, 2) → `RCC->CFGR = 0x400` (PPRE=/2) → `FLASH->ACR = 0x11` (1 WS + prefetch) → switch `SW` to `10` (PLL) → wait `SWS == 10`. Skips the standard MindMotion PLLMUL/PLLSRC/PLLON sequence — relies on MM32F031's "SW=PLL with PLLMUL=0" routing 48 MHz directly. |
+| `0x080000c8` | 28 | `uart1_send_byte` | decomp-c | UART1 single-byte send-and-wait: `USART_SendData(USART1, b)` then spin on `USART_GetFlagStatus(USART1, 1)` (SR bit 0 = TX-ready). VanMoof-custom wrapper; calls vendor-stock HAL primitives. |
+| `0x080000e4` | 28 | `uart1_send_buf`  | decomp-c | UART1 buffer transmit loop on top of `uart1_send_byte`; `len` is `uint16_t` (compiler emits `uxth` on each iteration). |
+| `0x080014f8` |  6 | `image_read_halfword` | decomp-c | `return *p` halfword load; non-inlined leaf used by `image_copy_halfwords` and once directly from `main`. |
+| `0x08001554` | 34 | `image_copy_halfwords` | decomp-c | halfword memcpy; the OEM `uxth`-clamps the index → `count` is `uint16_t`. Also called by `FUN_080016A6` (pending). |
+| `0x080001bc` | 28 | `image_read_u32_le` | decomp-c | Reads a 32-bit LE value from `src` as two halfwords (via `image_copy_halfwords`, count=2), then OR's them: `(staging[1] << 16) \| staging[0]`. Called 6× from `main` — one per u32 field of the image header. |
+| `0x08000138` | 32 | `flash_erase_pages` | decomp-c | signed counted loop calling `flash_erase_page(base + i*0x400)` for `n_pages` iterations. Called 4× from `main` to wipe flash regions before OTA. Same shape and signature as shifterware's `flash_erase_pages` @ `0x08003832`. |
 | `0x080001bc` | 28 | `FUN_080001bc` | pending | reads a 32-bit value (two halfwords, LE-assembled) from a stream — flash-image header reader |
-| `0x08001534` | 32 | `FUN_08001534` | pending | per-page workhorse called from `FUN_08000138`; sends a multi-byte sequence over UART around a page payload |
+| `0x08001534` | 32 | `flash_erase_page` | decomp-c | five-step page-erase wrapper: unlock → clear PGERR/WRPRTERR/EOP → `flash_do_page_erase` → clear EOP → lock. The "multi-byte UART sequence" speculation in the prior progress note was wrong — the `0x34` and `0x20` constants are `FLASH->SR` W1C masks, not UART bytes. |
+| `0x08000746` | 72 | `flash_do_page_erase` | decomp-c | inner page-erase: wait READY → PER → AR=addr → STRT → wait → clear PER via `& 0x1FFD`. Returns `FLASH_ST_*` status. Byte-size-equivalent to OEM (72 B total). |
+| `0x0800071a` | 44 | `flash_wait_status` | decomp-c | polls `flash_get_status` until !BUSY or timeout. Writes `FLASH_ST_TIMEOUT` unconditionally when `timeout == 0`. |
+| `0x080006ca` | 54 | `flash_get_status` | decomp-c | priority cascade BSY > PGERR > WRPRTERR > READY against `FLASH->SR`. Isolates BSY via `lsls/lsrs #0x1F`. |
+| `0x08000700` | 26 | `flash_busy_step` | decomp-c | `volatile int i = 0; i = 0xFF; while (i) i--;` — double-initial-store pattern in the disasm is the giveaway that `i` is volatile. |
+| `0x080006b0` | 12 | `flash_unlock` | decomp-c | canonical KEY1 (`0x45670123`) + KEY2 (`0xCDEF89AB`) to `FLASH->KEYR`. Used by `flash_erase_page` and the pending flash-programmer wrapper `FUN_080014FE`. |
+| `0x080006bc` | 14 | `flash_lock` | decomp-c | `FLASH->CR |= 0x80` (LOCK bit). Same two callers as `flash_unlock`. |
+| `0x08000bde` |  6 | `flash_clear_status` | decomp-c | `FLASH->SR = bits` (W1C the chosen flag bits). Called 2× from `flash_erase_page` and 2× from `FUN_080014FE`. |
 | `0x08001554` | 34 | `FUN_08001554` | pending | halfword-stream copy: `memcpy_halfwords` via `FUN_080014f8` |
 | ... | | | | (~57 more pending) |
 
