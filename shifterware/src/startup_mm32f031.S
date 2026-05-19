@@ -1,96 +1,125 @@
 /* startup_mm32f031.S
  *
- * Cortex-M0 vector table + reset stub for MM32F031F6U6.
+ * Functional shifterware bring-up: VanMoof image header + Cortex-M0
+ * vector table + Reset_Handler + Default_Handler. This file produces
+ * a self-contained image that — when loaded by shifterboot at flash
+ * 0x08003000 — will:
  *
- * Vector layout: 16 system vectors + 32 device IRQs = 48 entries (192
- * bytes). Names follow STM32F031/CMSIS convention; the MM32F031 IRQ map
- * matches closely. Each handler is WEAK and aliased to Default_Handler so
- * unimplemented vectors trap into a known infinite loop.
+ *   1. Run our Reset_Handler (slot 1 of the vector table at 0x08003028).
+ *   2. Defensively reload MSP from `_estack` (slot 0 already loaded it,
+ *      but shifterboot may have entered with its own SP).
+ *   3. Copy `.data` initialisers from FLASH to SRAM.
+ *   4. Zero `.bss`.
+ *   5. Hand off to `main()` (the decomp'd OEM super-loop).
  *
- * Reset_Handler does the C runtime startup that is universally required:
- *   1. set MSP to _estack (already done by hardware from vector[0], but
- *      we redo it defensively).
- *   2. copy .data initialisers from FLASH to SRAM.
- *   3. zero .bss.
- *   4. call SystemInit() — clock tree, flash latency, peripheral reset.
- *   5. call main(). If main returns, spin.
+ * Image layout (at flash 0x08003000):
  *
- * Replace any specific handler in another .c file with a non-weak symbol
- * of the same name, e.g.  void TIM3_IRQHandler(void) { ... }
+ *   0x08003000..0x08003027  (40 B)   VanMoof image header
+ *   0x08003028..0x080030E7  (192 B)  Cortex-M0 vector table (48 entries)
+ *   0x080030E8..           ( ... )   .text / .rodata / .data initialisers
+ *
+ * Differences from the OEM image:
+ *
+ *   - The image header CRC is left at 0; we don't yet know the
+ *     algorithm shifterboot uses to validate. `imageSize` is computed
+ *     at link time via `_image_end - g_vanmoof_image_header`.
+ *   - The vector table entries point at OUR Reset_Handler / handlers
+ *     (the OEM table is decorative, with raw addresses into OEM-only
+ *     code — see `docs/memory-map.md`'s VTOR caveat). Each IRQ slot
+ *     is a weak symbol aliased to Default_Handler; a strong override
+ *     in another .c file replaces it.
  */
 
     .syntax unified
     .cpu    cortex-m0
     .thumb
 
-/* ---------- Vector table ----------------------------------------------- */
+/* ---------- VanMoof image header (40 B) -------------------------------- */
+    .section  .vanmoof_header, "a", %progbits
+    .global   g_vanmoof_image_header
+    .type     g_vanmoof_image_header, %object
+g_vanmoof_image_header:
+    .word   0xAA55AA55                  /* +0x00  magic                   */
+    .word   0x00ED02C1                  /* +0x04  build id (placeholder)  */
+    .word   0x00000000                  /* +0x08  CRC32 — post-build patch (algorithm TBD; see shifterboot decomp) */
+    .word   _image_end - g_vanmoof_image_header
+                                        /* +0x0C  imageSize               */
+    .ascii  "Dec 24 1985"               /* +0x10  build date (12 B w/ NUL)*/
+    .byte   0
+    .ascii  "00:00:00"                  /* +0x1C  build time (9 B w/ NUL) */
+    .byte   0
+    .byte   0xFF, 0xFF, 0xFF            /* +0x25  padding                 */
+    .size   g_vanmoof_image_header, .-g_vanmoof_image_header
+
+/* ---------- Cortex-M0 vector table (192 B) ----------------------------- */
     .section  .isr_vector, "a", %progbits
+    .global   g_pfnVectors
     .type     g_pfnVectors, %object
-    .size     g_pfnVectors, .-g_pfnVectors
-
 g_pfnVectors:
-    /* Cortex-M0 system vectors */
-    .word   _estack                     /*  0: initial SP             */
-    .word   Reset_Handler               /*  1: reset                  */
-    .word   NMI_Handler                 /*  2: NMI                    */
-    .word   HardFault_Handler           /*  3: hard fault             */
-    .word   0                           /*  4: reserved               */
-    .word   0                           /*  5: reserved               */
-    .word   0                           /*  6: reserved               */
-    .word   0                           /*  7: reserved               */
-    .word   0                           /*  8: reserved               */
-    .word   0                           /*  9: reserved               */
-    .word   0                           /* 10: reserved               */
-    .word   SVC_Handler                 /* 11: SVCall                 */
-    .word   0                           /* 12: reserved               */
-    .word   0                           /* 13: reserved               */
-    .word   PendSV_Handler              /* 14: PendSV                 */
-    .word   SysTick_Handler             /* 15: SysTick                */
+    /* System vectors (16 entries) */
+    .word   _estack                     /*  0: initial SP                 */
+    .word   Reset_Handler               /*  1: reset                      */
+    .word   NMI_Handler                 /*  2: NMI                        */
+    .word   HardFault_Handler           /*  3: hard fault                 */
+    .word   0                           /*  4: reserved                   */
+    .word   0                           /*  5: reserved                   */
+    .word   0                           /*  6: reserved                   */
+    .word   0                           /*  7: reserved                   */
+    .word   0                           /*  8: reserved                   */
+    .word   0                           /*  9: reserved                   */
+    .word   0                           /* 10: reserved                   */
+    .word   SVC_Handler                 /* 11: SVCall                     */
+    .word   0                           /* 12: reserved                   */
+    .word   0                           /* 13: reserved                   */
+    .word   PendSV_Handler              /* 14: PendSV                     */
+    .word   SysTick_Handler             /* 15: SysTick                    */
 
-    /* MM32F031 device interrupts (matches STM32F031 layout) */
-    .word   WWDG_IRQHandler             /*  0 / 16                    */
-    .word   PVD_IRQHandler              /*  1 / 17                    */
-    .word   RTC_IRQHandler              /*  2 / 18                    */
-    .word   FLASH_IRQHandler            /*  3 / 19                    */
-    .word   RCC_IRQHandler              /*  4 / 20                    */
-    .word   EXTI0_1_IRQHandler          /*  5 / 21                    */
-    .word   EXTI2_3_IRQHandler          /*  6 / 22                    */
-    .word   EXTI4_15_IRQHandler         /*  7 / 23                    */
-    .word   HWDIV_IRQHandler            /*  8 / 24  (MM32 specific)   */
-    .word   DMA1_Channel1_IRQHandler    /*  9 / 25                    */
-    .word   DMA1_Channel2_3_IRQHandler  /* 10 / 26                    */
-    .word   DMA1_Channel4_5_IRQHandler  /* 11 / 27                    */
-    .word   ADC1_COMP_IRQHandler        /* 12 / 28                    */
-    .word   TIM1_BRK_UP_TRG_COM_IRQHandler /* 13 / 29                 */
-    .word   TIM1_CC_IRQHandler          /* 14 / 30                    */
-    .word   TIM2_IRQHandler             /* 15 / 31                    */
-    .word   TIM3_IRQHandler             /* 16 / 32                    */
-    .word   TIM6_IRQHandler             /* 17 / 33                    */
-    .word   0                           /* 18 / 34  reserved          */
-    .word   TIM14_IRQHandler            /* 19 / 35                    */
-    .word   TIM15_IRQHandler            /* 20 / 36                    */
-    .word   TIM16_IRQHandler            /* 21 / 37                    */
-    .word   TIM17_IRQHandler            /* 22 / 38                    */
-    .word   I2C1_IRQHandler             /* 23 / 39                    */
-    .word   I2C2_IRQHandler             /* 24 / 40                    */
-    .word   SPI1_IRQHandler             /* 25 / 41                    */
-    .word   SPI2_IRQHandler             /* 26 / 42                    */
-    .word   USART1_IRQHandler           /* 27 / 43                    */
-    .word   USART2_IRQHandler           /* 28 / 44                    */
-    .word   0                           /* 29 / 45  reserved          */
-    .word   0                           /* 30 / 46  reserved (CEC)    */
-    .word   0                           /* 31 / 47  reserved (USB)    */
+    /* MM32F031 device interrupts (32 entries) */
+    .word   WWDG_IRQHandler             /*  0 / 16                        */
+    .word   PVD_IRQHandler              /*  1 / 17                        */
+    .word   RTC_IRQHandler              /*  2 / 18                        */
+    .word   FLASH_IRQHandler            /*  3 / 19                        */
+    .word   RCC_IRQHandler              /*  4 / 20                        */
+    .word   EXTI0_1_IRQHandler          /*  5 / 21                        */
+    .word   EXTI2_3_IRQHandler          /*  6 / 22                        */
+    .word   EXTI4_15_IRQHandler         /*  7 / 23                        */
+    .word   HWDIV_IRQHandler            /*  8 / 24 (MM32-specific)        */
+    .word   DMA1_Channel1_IRQHandler    /*  9 / 25                        */
+    .word   DMA1_Channel2_3_IRQHandler  /* 10 / 26                        */
+    .word   DMA1_Channel4_5_IRQHandler  /* 11 / 27                        */
+    .word   ADC1_COMP_IRQHandler        /* 12 / 28                        */
+    .word   TIM1_BRK_UP_TRG_COM_IRQHandler /* 13 / 29                     */
+    .word   TIM1_CC_IRQHandler          /* 14 / 30                        */
+    .word   TIM2_IRQHandler             /* 15 / 31                        */
+    .word   TIM3_IRQHandler             /* 16 / 32                        */
+    .word   TIM6_IRQHandler             /* 17 / 33                        */
+    .word   0                           /* 18 / 34  reserved              */
+    .word   TIM14_IRQHandler            /* 19 / 35                        */
+    .word   TIM15_IRQHandler            /* 20 / 36                        */
+    .word   TIM16_IRQHandler            /* 21 / 37                        */
+    .word   TIM17_IRQHandler            /* 22 / 38                        */
+    .word   I2C1_IRQHandler             /* 23 / 39                        */
+    .word   I2C2_IRQHandler             /* 24 / 40                        */
+    .word   SPI1_IRQHandler             /* 25 / 41                        */
+    .word   SPI2_IRQHandler             /* 26 / 42                        */
+    .word   USART1_IRQHandler           /* 27 / 43                        */
+    .word   USART2_IRQHandler           /* 28 / 44                        */
+    .word   0                           /* 29 / 45  reserved              */
+    .word   0                           /* 30 / 46  reserved              */
+    .word   0                           /* 31 / 47  reserved              */
+    .size   g_pfnVectors, .-g_pfnVectors
 
-/* ---------- Reset handler ---------------------------------------------- */
-    .section  .text.Reset_Handler
-    .weak     Reset_Handler
+/* ---------- Reset_Handler ---------------------------------------------- */
+    .section  .text.Reset_Handler, "ax", %progbits
+    .global   Reset_Handler
     .type     Reset_Handler, %function
 Reset_Handler:
-    /* Defensive MSP load (hardware already did this from vector[0]). */
+    /* Defensive MSP reload — slot 0 already did this on hardware reset,
+     * but shifterboot may have entered our image with its own SP. */
     ldr     r0, =_estack
     mov     sp, r0
 
-    /* Copy .data from FLASH (_sidata) to SRAM (_sdata.._edata). */
+    /* Copy initialised data from flash (LMA) to SRAM (VMA). */
     ldr     r0, =_sdata
     ldr     r1, =_edata
     ldr     r2, =_sidata
@@ -116,32 +145,26 @@ Reset_Handler:
     b       .Lzero_bss
 .Lzero_bss_done:
 
-    /* Low-level system init (clocks, flash latency). */
-    bl      SystemInit
-
-    /* Application entry. */
+    /* Hand off to the decomp'd OEM super-loop. */
     bl      main
 
-    /* main() returned — spin. The OEM probably issues a system reset
-     * here; replace once observed in Ghidra. */
+    /* `main()` should not return. If it does, trap. */
 .Lhang:
     b       .Lhang
-    .size Reset_Handler, .-Reset_Handler
+    .size   Reset_Handler, .-Reset_Handler
 
-/* ---------- Default handler ------------------------------------------- */
-/* Anything not yet implemented lands here. Set a breakpoint in your
- * debugger on Default_Handler to catch unexpected vectors. */
+/* ---------- Default_Handler -------------------------------------------- */
     .section  .text.Default_Handler, "ax", %progbits
     .type     Default_Handler, %function
 Default_Handler:
 .Ldefault_loop:
     b       .Ldefault_loop
-    .size Default_Handler, .-Default_Handler
+    .size   Default_Handler, .-Default_Handler
 
-/* ---------- Weak aliases ---------------------------------------------- */
-/* Each .weak  + .thumb_set pair lets a handler in another translation
- * unit override the default by simply defining a function with the same
- * name. */
+/* ---------- Weak aliases ----------------------------------------------- */
+/* Each handler is a weak alias to Default_Handler. A strong definition
+ * in another translation unit (e.g. `void USART1_IRQHandler(void) { ... }`
+ * in src/uart.c) overrides the alias. */
 
     .macro  default_handler name
     .weak   \name

@@ -48,6 +48,11 @@ LDFLAGS      := $(ARCH_FLAGS) \
                 -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map \
                 -nostartfiles -nostdlib
 
+# Compiler-runtime helpers from libgcc (__gnu_thumb1_case_uqi, __aeabi_*,
+# etc.) — pulled in explicitly because -nostdlib disables the implicit
+# library search.
+LDLIBS       := -lgcc
+
 # --- targets -----------------------------------------------------------------
 .PHONY: all clean compare size disasm flash help
 .DEFAULT_GOAL := all
@@ -64,7 +69,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJS) $(LD_SCRIPT)
-	$(LD) $(LDFLAGS) $(OBJS) -o $@
+	$(LD) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O binary $< $@

@@ -1,31 +1,42 @@
 /* linker_mm32f031.ld
  *
  * Memory map for MM32F031F6U6 (ARM Cortex-M0):
- *   FLASH : 0x08000000, 32 KB
+ *   FLASH : 0x08000000, 32 KB total
  *   SRAM  : 0x20000000,  4 KB
  *
- * The OEM shifterware *application* may be linked at a non-zero offset
- * (after the shifterboot loader). When that offset is confirmed from
- * Ghidra, change FLASH ORIGIN below — see docs/memory-map.md.
+ * The shifterware application lives in the 20 KB partition starting at
+ * **0x08003000** (shifterboot owns 0x08000000..0x08002FFF). The first
+ * 232 bytes of that partition are the VanMoof image header (40 B) +
+ * the Cortex-M0 vector table (192 B), defined in
+ * `src/startup_mm32f031.S`. The remaining 0x080030E8 onward is .text /
+ * .rodata / .data initialisers.
+ *
+ * Image size (header.imageSize) is computed at link time as
+ * `_image_end - g_vanmoof_image_header`; see startup_mm32f031.S.
  */
 
 ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 32K
+    FLASH (rx)  : ORIGIN = 0x08003000, LENGTH = 20K
     SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 4K
 }
 
-/* Stack grows down from the top of SRAM. The OEM probably uses a smaller
- * stack reservation; refine when we see it in the vector table. */
+/* Stack grows down from the top of SRAM. */
 _estack = ORIGIN(SRAM) + LENGTH(SRAM);
-_Min_Stack_Size = 0x400;       /* 1 KB — refine from OEM */
+_Min_Stack_Size = 0x400;       /* 1 KB — refine if/when OEM SP usage observed */
 _Min_Heap_Size  = 0x0;         /* no heap; firmware does not malloc */
 
 SECTIONS
 {
-    /* Vector table must be the first thing in flash */
+    /* ---- VanMoof image header (40 B) at flash 0x08003000 ----------- */
+    .vanmoof_header :
+    {
+        KEEP(*(.vanmoof_header))
+    } > FLASH
+
+    /* ---- Cortex-M0 vector table (192 B) at flash 0x08003028 -------- */
     .isr_vector :
     {
         . = ALIGN(4);
@@ -33,6 +44,7 @@ SECTIONS
         . = ALIGN(4);
     } > FLASH
 
+    /* ---- .text (code) ---------------------------------------------- */
     .text :
     {
         . = ALIGN(4);
@@ -41,10 +53,8 @@ SECTIONS
         *(.glue_7)
         *(.glue_7t)
         *(.eh_frame)
-
         KEEP (*(.init))
         KEEP (*(.fini))
-
         . = ALIGN(4);
         _etext = .;
     } > FLASH
@@ -83,8 +93,8 @@ SECTIONS
         PROVIDE_HIDDEN(__fini_array_end = .);
     } > FLASH
 
-    /* Initialised data: load from FLASH, run from SRAM. Reset handler
-     * must copy from _sidata to [_sdata,_edata). */
+    /* Initialised data: load from FLASH, run from SRAM. Reset_Handler
+     * copies from _sidata to [_sdata, _edata). */
     _sidata = LOADADDR(.data);
     .data :
     {
@@ -95,6 +105,11 @@ SECTIONS
         . = ALIGN(4);
         _edata = .;
     } > SRAM AT > FLASH
+
+    /* Marks the end of all flash-resident bytes — used by the image
+     * header's `imageSize` field to advertise the total partition
+     * footprint to shifterboot. */
+    _image_end = LOADADDR(.data) + SIZEOF(.data);
 
     .bss :
     {
@@ -123,7 +138,6 @@ SECTIONS
     {
         libc.a   ( * )
         libm.a   ( * )
-        libgcc.a ( * )
     }
 
     .ARM.attributes 0 : { *(.ARM.attributes) }
