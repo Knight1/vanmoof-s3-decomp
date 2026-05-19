@@ -18,13 +18,31 @@
 #define IMAGE_HDR_WORDS 10u
 #define IMAGE_MAX_SIZE  0x3000u /* 12 KB */
 
+/* VanMoof image-header layout (40 B, magic-first). The version word
+ * encodes MAJOR.MINOR.PATCH.TYPE_ID as four bytes (MSB-first); the
+ * low byte is a stable per-firmware type identifier (0xC1 for
+ * shifterware — confirmed by cross-firmware comparison across the
+ * S3 family in `docs/memory-map.md`). shifterware itself never
+ * reads this field; it's consumed by shifterboot's image-validate
+ * path before handing control to `main`. We carry it in the struct
+ * because `image_verify_crc` snapshots the whole header for the
+ * CRC32 compute. */
 typedef struct {
-    uint32_t magic;       /* 0x00 */
-    uint32_t _u04;        /* 0x04 — TBD (build id?) */
-    uint32_t crc32;       /* 0x08 — CRC of full record with crc32/length masked to 0xFFFFFFFF */
-    uint32_t length;      /* 0x0C — total record bytes (header + payload) */
-    uint32_t _u10[6];     /* 0x10..0x27 — build-date, reserved */
+    uint32_t magic;        /* 0x00 — 0xAA55AA55                          */
+    uint32_t version_word; /* 0x04 — packed major:minor:patch:type_id    */
+    uint32_t crc32;        /* 0x08 — masked to 0xFFFFFFFF during compute */
+    uint32_t length;       /* 0x0C — total record bytes (hdr + payload)  */
+    char     date[12];     /* 0x10 — "Mmm DD YYYY\0"                     */
+    char     time[12];     /* 0x1C — "HH:MM:SS\0" + 3 B pad              */
 } image_header_t;
+
+/* shifterware's own type-ID byte. Asserted at compile time below
+ * to catch accidental drift in `startup_mm32f031.S`'s literal. */
+#define IMAGE_TYPE_SHIFTERWARE  0xC1u
+#define IMAGE_VERSION_TYPE(v)   ((uint8_t)((v) & 0xFFu))
+#define IMAGE_VERSION_PATCH(v)  ((uint8_t)(((v) >> 8)  & 0xFFu))
+#define IMAGE_VERSION_MINOR(v)  ((uint8_t)(((v) >> 16) & 0xFFu))
+#define IMAGE_VERSION_MAJOR(v)  ((uint8_t)(((v) >> 24) & 0xFFu))
 
 /* OEM keeps both the image pointer and the expected magic as `const`
  * data in .rodata (DAT_08003DB8 and DAT_08003DBC respectively). */

@@ -40,8 +40,14 @@
     .type     g_vanmoof_image_header, %object
 g_vanmoof_image_header:
     .word   0xAA55AA55                  /* +0x00  magic                   */
-    .word   0x00ED02C1                  /* +0x04  build id (placeholder)  */
-    .word   0x00000000                  /* +0x08  CRC32 — post-build patch (algorithm TBD; see shifterboot decomp) */
+    /* +0x04  version word — packed MAJOR.MINOR.PATCH.TYPE_ID (1 byte
+     * each, MSB-first). Bytes: 0x00 0xED 0x02 0xC1 → MAJOR=0,
+     * MINOR=237 (=0xED, matches the "0.237" in the OEM filename),
+     * PATCH=2, TYPE_ID=0xC1 (shifterware). The low byte is the
+     * piece shifterboot validates as the firmware-type tag; the
+     * upper three are the printable version. */
+    .word   0x00ED02C1
+    .word   0x00000000                  /* +0x08  CRC32 — post-build patch by tools/patch_image_crc.py (MPEG-2 polynomial 0x4C11DB7) */
     .word   _image_end - g_vanmoof_image_header
                                         /* +0x0C  imageSize               */
     .ascii  "Dec 24 1985"               /* +0x10  build date (12 B w/ NUL)*/

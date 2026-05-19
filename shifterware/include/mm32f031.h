@@ -286,16 +286,52 @@ typedef struct {
 #define RCC_APB2ENR_TIM17EN_Msk    (1u << 18)
 #define RCC_APB2ENR_DBGMCUEN_Msk   (1u << 22)
 
+/* RCC_CR — per the MM32F031 user manual § 5.3.1
+ * (see `reference/mm32f031/UM_MM32F031xx_q_EN.pdf`).
+ *
+ * The HSI on MM32F031 is **48 MHz native** (or 72 MHz when
+ * `HSI_72M_EN` is set), with a `/6` divider feeding the `SW=HSI`
+ * position (= 8 MHz default) and a direct path feeding the `SW=PLL`
+ * position (= 48 MHz default). There is **no real PLL multiplier**
+ * on this part — `PLLON` / `PLLRDY` / `PLLSRC` / `PLLMUL` exist in
+ * the register layout (carried over from the STM32F0 silicon
+ * heritage) but the OEM doesn't use them; `set_sysclock_to_48m`
+ * just routes HSI direct via `SW=10`. */
 #define RCC_CR_HSION_Msk       (1u <<  0)
 #define RCC_CR_HSIRDY_Msk      (1u <<  1)
+/* bit 2 is reserved (UM § 5.3.1). The OEM's `set_sysclock_to_48m`
+ * clears it defensively but the write has no effect. */
+#define RCC_CR_HSEON_Msk       (1u << 16)
+#define RCC_CR_HSERDY_Msk      (1u << 17)
+#define RCC_CR_HSEBYP_Msk      (1u << 18)
+#define RCC_CR_CSSON_Msk       (1u << 19)
+/* bit 20: HSI_72M_EN — 0 = HSI runs at 48 MHz, 1 = at 72 MHz.
+ * Default 0 (48 MHz). MM32-specific; not present on STM32F0. */
+#define RCC_CR_HSI_72M_EN_Msk  (1u << 20)
+/* Legacy MM32 BSP-layout bits — kept for compatibility with stock
+ * MindMotion code paths but unused by `set_sysclock_to_48m`. */
 #define RCC_CR_PLLON_Msk       (1u << 24)
 #define RCC_CR_PLLRDY_Msk      (1u << 25)
+
 #define RCC_CFGR_SW_Msk        (0x3u << 0)
-#define RCC_CFGR_SW_PLL        (0x2u << 0)
+#define RCC_CFGR_SW_HSI        (0x0u << 0)   /* HSI/6  → 8 MHz (or 12 MHz in 72 MHz mode) */
+#define RCC_CFGR_SW_HSE        (0x1u << 0)   /* HSE — needs external crystal, unused on this board */
+#define RCC_CFGR_SW_PLL        (0x2u << 0)   /* Direct HSI — 48 MHz (or 72 MHz in 72 MHz mode) */
 #define RCC_CFGR_SWS_Msk       (0x3u << 2)
+#define RCC_CFGR_SWS_HSI       (0x0u << 2)
+#define RCC_CFGR_SWS_HSE       (0x1u << 2)
 #define RCC_CFGR_SWS_PLL       (0x2u << 2)
+#define RCC_CFGR_HPRE_Msk      (0xFu << 4)
+#define RCC_CFGR_PPRE_Msk      (0x7u << 8)
+#define RCC_CFGR_PPRE_DIV1     (0x0u << 8)
+#define RCC_CFGR_PPRE_DIV2     (0x4u << 8)
+#define RCC_CFGR_PPRE_DIV4     (0x5u << 8)
+#define RCC_CFGR_PPRE_DIV8     (0x6u << 8)
+#define RCC_CFGR_PPRE_DIV16    (0x7u << 8)
+/* PLLSRC / PLLMUL exist in the register but the OEM doesn't use
+ * them (see RCC_CR comment above). Kept for completeness. */
 #define RCC_CFGR_PLLSRC_HSI_DIV2 (0u << 16)
-#define RCC_CFGR_PLLMUL_12     (0xAu << 18)   /* HSI/2 * 12 = 48 MHz */
+#define RCC_CFGR_PLLMUL_12     (0xAu << 18)
 
 /* ---------- EXTI -------------------------------------------------------- */
 typedef struct {

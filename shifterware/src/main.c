@@ -70,11 +70,16 @@
 #define DATA_INIT_LEN       0xC0u
 
 /* OEM literal at flash 0x20000148 holds the **HCLK frequency in Hz**,
- * not a hash seed as the speculative pre-decomp model assumed. The
- * value is established by `boot_init_periphs_b` (still pending) and
- * read by both `main` (to derive the TIM2 prescaler) and
- * `boot_init_periphs_a` (the SysTick init wrapper — also pending,
- * which we now know divides by 1000 not "hashes for 100,000"). */
+ * not a hash seed as the speculative pre-decomp model assumed.
+ * Written once during boot (the writer is not yet localised — the
+ * candidates are `boot_init_systick` at `0x0800428E` and
+ * `boot_init_gpio` at `0x080041C6`, both of which run before the
+ * first read by `main`'s TIM2 prescaler computation; whichever
+ * stamps it does so via a literal of the actual HCLK value), then
+ * read by `main` (to derive the TIM2 prescaler at `HCLK/100000-1`)
+ * and by `boot_init_systick` (which divides by 1000 for the
+ * SysTick reload, not the "hashes for 100,000" the speculative
+ * decomp guessed). */
 #define G_HCLK_HZ           (*(volatile uint32_t *)0x20000148u)
 #define TIM2_TICK_BASE_HZ   100000u  /* OEM divisor: HCLK/100000 = 100 kHz timer base */
 #define TIM2_TICK_PERIOD    99u      /* TIM2 ARR — IRQ every 100 base ticks = 1 ms */
@@ -196,8 +201,8 @@ static void syscfg_set_mem_mode(uint32_t mode)
 /* What main.c previously called `boot_hash` (FUN_08005D40) is in fact
  * `__aeabi_uidiv` — the Cortex-M0 unsigned 32-bit softdiv (see
  * src/runtime.c). The OEM uses it here to compute the TIM2 prescaler
- * (`HCLK / 100000`) and earlier inside `boot_init_periphs_a` (SysTick
- * init) to compute `HCLK / 1000`. Both call sites are now plain `/`
+ * (`HCLK / 100000`) and earlier inside `boot_init_systick`
+ * (`0x0800428E`) to compute `HCLK / 1000`. Both call sites are now plain `/`
  * operators in C; GCC emits the runtime call automatically.
  *
  * `boot_apply_hash` (FUN_08004048) is `tim2_init_periodic` (see
@@ -658,8 +663,35 @@ static void sched_run_task(uint8_t task)
 
 int main(void)
 {
-    /* .data init (copy from flash to SRAM). */
+    /* .data init (copy from flash to SRAM). The OEM copies 192 B from
+     * flash 0x08004828 to SRAM 0x20000000. Note: a literal-pool scan
+     * of the OEM image finds zero references into SRAM 0..0xBF after
+     * this copy, so the destination region is effectively dead in the
+     * OEM build — the memcpy itself is preserved here only to match
+     * the OEM byte sequence. */
     memcpy(G_SRAM_BASE, DATA_INIT_SRC, DATA_INIT_LEN);
+
+    /* `G_HCLK_HZ` at SRAM 0x20000148 must hold the active HCLK in Hz
+     * before `boot_init_systick` runs — the OEM bounds-checks
+     * `(G_HCLK_HZ / 1000) - 1 <= 0x00FFFFFF` and falls into a
+     * `b .`-style infinite loop if the value reads as 0xFFFFFFFF.
+     *
+     * In the OEM image, neither shifterware nor shifterboot writes
+     * this location anywhere — confirmed by a Ghidra cross-binary
+     * xref sweep on 2026-05-19 (script:
+     * `~/ghidra_scripts/FindWritesToAddress.java`, 0 writes vs 2
+     * reads in shifterware, 0 refs in shifterboot). The OEM must
+     * rely on some out-of-band initialisation (production-flow
+     * programming, SRAM retention on a specific MCU variant, or a
+     * write via an indirect path the cross-binary xref scan misses).
+     *
+     * We can't reproduce that mechanism without hardware access, so
+     * for our build we set the value explicitly here. The value
+     * matches what `set_sysclock_to_48m` (in `shifterboot/src/clock.c`,
+     * derived from `unused_set_sysclock_to_48m` @ shifterware
+     * `0x080045B8`) brings the SYSCLK up to. Deviation from the OEM
+     * byte sequence: one extra `ldr`/`str` pair. */
+    G_HCLK_HZ = 48000000u;
 
     /* RCC + NVIC + IRQs */
     RCC->APB2ENR |= RCC_APB2_SYSCFGEN;

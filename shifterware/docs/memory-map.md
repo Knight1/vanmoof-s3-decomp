@@ -39,8 +39,8 @@ the header's `imageSize` field.
 | Offset | Bytes | Value (this build) | Meaning |
 | --- | --- | --- | --- |
 | `+0x00` | 4 | `0xAA55AA55` | Magic |
-| `+0x04` | 4 | `0x00ED02C1` | Version / build id (unverified — TBD) |
-| `+0x08` | 4 | `0x1E8EB125` | CRC32 or similar (unverified — TBD) |
+| `+0x04` | 4 | `0x00ED02C1` | **Version word** — packed `MAJOR.MINOR.PATCH.TYPE` (1 byte each, MSB-first). For this image: `MAJOR=0x00`, `MINOR=0xED` (=237 matches the `0.237` filename), `PATCH=0x02`, `TYPE=0xC1` (= shifterware). Confirmed by cross-firmware comparison: mainware uses `0x01MMPPF4`, batteryware `0x01MMPPB1`, powerbankware `0x01MMPPB2`, motorware `0x0000PPA1` — the low byte is a stable per-firmware type ID; the upper three bytes track the version printed in the filename. Not read by any shifterware code itself; consumed by shifterboot when it validates the application image before booting. |
+| `+0x08` | 4 | `0x1E8EB125` | CRC32 — MPEG-2 polynomial `0x4C11DB7`, init `0xFFFFFFFF`, no reflection. Computed over the full image with this field and `length` (`+0x0C`) both blanked to `0xFFFFFFFF` for the calculation. Algorithm confirmed against `chwdt/vanmoof-tools/crc32.c`; matches the STM32/MM32 hardware CRC peripheral so on-device validation can use the silicon engine. |
 | `+0x0C` | 4 | `0x00002EA8` | `imageSize` — bytes from `0x08003000` to end |
 | `+0x10` | 12 | `"Oct 23 2020\0"` | Build date (ASCII, null-terminated) |
 | `+0x1C` | 9 | `"14:09:11\0"` | Build time (ASCII, null-terminated) |

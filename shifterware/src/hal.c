@@ -108,11 +108,19 @@ void rcc_reset_usart(void *u)
  * Decode the active SYSCLK source from RCC->CFGR.SWS, then compute
  * HCLK / PCLK1 / PCLK2 via the AHB/APB prescaler shift table. The
  * literal SYSCLK values were resolved from the OEM literal pool at
- * 0x080052A8..0x080052D0:
- *   SWS == 0  (HSI) → 8 MHz / 12 MHz depending on RCC->CR bit 20
- *   SWS == 1  (HSE) → 8 MHz (the OEM ships HSE = 8 MHz)
- *   SWS == 2  (PLL) → 48 MHz / 72 MHz depending on RCC->CR bit 20
- *   SWS == 3  ("LSI"-encoded extra source) → 40 kHz
+ * 0x080052A8..0x080052D0 and **confirmed by the MM32F031 user manual
+ * § 5.2 clock-tree diagram** (`reference/mm32f031/UM_MM32F031xx_q_EN.pdf`):
+ *   SWS == 0  (HSI)  → HSI/6  =  8 MHz (or 12 MHz when RCC_CR.HSI_72M_EN = 1)
+ *   SWS == 1  (HSE)  → 8 MHz  (OEM-shipped HSE crystal frequency)
+ *   SWS == 2  (PLL)  → direct HSI = 48 MHz (or 72 MHz when HSI_72M_EN = 1)
+ *   SWS == 3  (LSI)  → 40 kHz
+ *
+ * Note: the "PLL" position is a misnomer — MM32F031's HSI path has
+ * no actual multiplier. The hardware feeds the un-divided HSI into
+ * the SW=10 slot; the `PLLON` / `PLLMUL` / `PLLSRC` bits in the
+ * register layout are STM32F0-inheritance artefacts that the OEM
+ * doesn't program. See the `set_sysclock_to_48m` decomp in
+ * `shifterboot/src/clock.c` for the actual 4-step bring-up.
  *
  * The OEM stores APBAHBPrescTable in RAM (.data) at 0x2000014C; we
  * put it in flash (.rodata) which is behaviour-equivalent. */
