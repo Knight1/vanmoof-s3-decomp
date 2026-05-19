@@ -24,7 +24,7 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | ?? | pending (VanMoof-custom, awaiting decomp) |
 | 6  | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 22 | decomp (asm or c) |
+| 26 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -36,10 +36,18 @@ The pending count will tighten as more functions are classified as
 - `startup_mm32f031.S` — `Default_Handler` (custom: 2-byte `b .` stub);
   `_cold_reset` + `thunk_main` (VanMoof's 20-byte `__main` replacement
   packed into the unused vector-table tail).
-- `systick.c` — `systick_tick` and `SysTick_Handler`. The stock
-  MindMotion template has `b .` for SysTick; VanMoof installed a
-  countdown decrementer that drives a millisecond-delay variable at
-  SRAM `0x20000010`.
+- `systick.c` — `systick_tick`, `SysTick_Handler`, and `mdelay`.
+  The stock MindMotion template has `b .` for SysTick; VanMoof
+  installed a countdown decrementer that drives a millisecond-delay
+  variable at SRAM `0x20000010`.
+  - `mdelay` (20 B @ `0x080014CA`) — single-arg millisecond delay.
+    Stores `ms` into `g_systick_countdown` and spins until
+    `SysTick_Handler` ticks it down to zero. Sole OEM caller is
+    `main` at `0x080002E2` with `ms = 250` (a 250 ms pause inside
+    the image-sync chain). The OEM compiles with a stack-spill
+    pattern (`push {r0, lr}; ldr r0, [sp]; ... pop {r3, pc}`) that
+    `-O0` emits to give every parameter a stack slot; semantics are
+    register-equivalent and `-Os` skips the spill.
 - `uart.c` — `uart1_send_byte` (28 B @ `0x080000C8`) and
   `uart1_send_buf` (28 B @ `0x080000E4`). VanMoof-custom wrappers
   around MindMotion HAL `USART_SendData` / `USART_GetFlagStatus`;
@@ -66,6 +74,31 @@ The pending count will tighten as more functions are classified as
     (at `0x08000228`, `0x08000232`, `0x0800024A`, `0x08000270`,
     `0x080002CE`, `0x080002FA`) — almost certainly one read per
     u32 field of the VanMoof image header.
+- `util.c` — `memcpy` (36 B @ `0x08001740`). Word-fast + byte tail.
+  Same shape as shifterware's `memcpy` @ `0x08005D6C`. Safe to name
+  `memcpy` because the build uses `-nostdlib` (no libc collision).
+- `crc.c` — `crc32_words` (32 B @ `0x080013CC`). Single-word feeder
+  for the MM32F031 hardware CRC peripheral at `0x40023000` (the
+  literal-pool word at `0x08001400` points there). The peripheral
+  uses the MPEG-2 polynomial `0x4C11DB7` with init `0xFFFFFFFF` —
+  same engine shifterware's image-CRC patcher already targets.
+  `CRC_ResetDR` (the matching reset helper at `0x080013AC`, 8 B) is
+  vendor-stock (MindMotion HAL) and stays `extern`.
+- `image.c` — `image_verify_crc` (100 B @ `0x08000158`) added.
+  Validates the OTA staging image at flash `0x08001800`:
+  1. magic == `0xAA55AA55` → else return `2` (header invalid).
+  2. length `< 0x3000` (12 KB) → else return `2`.
+  3. CRC the 40 B header with `crc` and `length` fields masked to
+     `0xFFFFFFFF`, then continue the CRC over the
+     `(length - 40) / 4` payload words. Compare against the stored
+     `crc` field.
+  Two callers: `main` at `0x0800027E` (cold-boot image check) and
+  `0x08000392` (cmd-0x81 "apply image" Modbus dispatch). The OEM
+  emits two dead stores after the header-CRC step (writing the
+  original `crc` and `length` back into the local buffer at +8 and
+  +0xC); they're never read back and `-Os` drops them. Same role
+  as shifterware's `image_verify_crc` @ `0x08003AC6` (same 100 B
+  size, same shape).
 - `ota.c` — `ota_program_chunk` (78 B @ `0x08001658`). Per-chunk
   flash writer used by `main`'s cmd-0x82 Modbus OTA streaming
   loop (sole caller, at `0x080004B6`). Walks `count_bytes` of an
@@ -212,6 +245,10 @@ single `Default_Handler` definition.
 | `0x080001d8` | 802 | `main` | named | bootloader's actual logic |
 | `0x080014ae` | 20 | `systick_tick` | decomp-c | decrements `g_systick_countdown` if non-zero |
 | `0x080014c2` | 8  | `SysTick_Handler` | decomp-c | trampoline to `systick_tick` |
+| `0x080014ca` | 20 | `mdelay` | decomp-c | busy-wait `ms` milliseconds — set `g_systick_countdown = ms`; spin until SysTick decrements to 0. Sole caller is `main` at `0x080002E2` with `ms = 250`. The emulator (`tools/emulate_mm32f031.py`) short-circuits this body since it doesn't simulate SysTick IRQs. |
+| `0x08000158` | 100 | `image_verify_crc` | decomp-c | image header + payload CRC validator @ slot 1. Returns 0 ok / 1 CRC mismatch / 2 header invalid. Calls `CRC_ResetDR` (vendor-stock) + `memcpy` + `crc32_words`. Same shape as shifterware's `image_verify_crc` @ `0x08003AC6`. |
+| `0x080013cc` | 32 | `crc32_words` | decomp-c | feed `count` u32 words from `src` into the MM32F031 hardware CRC engine at `0x40023000`, return accumulated CRC. |
+| `0x08001740` | 36 | `memcpy` | decomp-c | word-fast + byte tail; void return (non-POSIX). Word path triggers on `(dst \| src) & 3 == 0`. |
 | `0x08001764` | 36 | `_init_data_bss` | named | called from `_cold_reset`; CMSIS-style .data copy + .bss zero — likely VanMoof-written rather than vendor (the MindMotion BSP relies on Keil `__main` instead). To confirm by inspection. |
 | `0x0800054c` | 106 | `set_sysclock_to_48m` | decomp-c | VanMoof-tuned clock-tree bring-up: HSI on → clear two MM32-specific `RCC->CR` bits (20, 2) → `RCC->CFGR = 0x400` (PPRE=/2) → `FLASH->ACR = 0x11` (1 WS + prefetch) → switch `SW` to `10` (PLL) → wait `SWS == 10`. Skips the standard MindMotion PLLMUL/PLLSRC/PLLON sequence — relies on MM32F031's "SW=PLL with PLLMUL=0" routing 48 MHz directly. |
 | `0x080000c8` | 28 | `uart1_send_byte` | decomp-c | UART1 single-byte send-and-wait: `USART_SendData(USART1, b)` then spin on `USART_GetFlagStatus(USART1, 1)` (SR bit 0 = TX-ready). VanMoof-custom wrapper; calls vendor-stock HAL primitives. |
