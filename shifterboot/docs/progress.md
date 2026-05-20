@@ -22,9 +22,9 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | Count | Status |
 | --- | --- |
 | ?? | pending (VanMoof-custom, awaiting decomp) |
-| 6  | vendor-stock (recognised; no decomp needed) |
+| 10 | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 27 | decomp (asm or c) |
+| 28 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -129,6 +129,23 @@ The pending count will tighten as more functions are classified as
   which the OEM (and we) write to flash unchanged. The inner
   counters (`buf_idx`, `stream_pos`) are `uxtb`-clamped to 8
   bits.
+- `modbus.c` — Modbus RTU framing primitives for the OTA-server
+  dispatcher in `main`. First entry:
+  - `modbus_crc16` (56 B @ `0x08000100`) — RTU CRC16 (poly `0xA001`,
+    init `0xFFFF`). Pool words at `0x080004CC` (init) and
+    `0x080004D0` (poly). Returns the accumulated CRC in r0 — no RAM
+    side effect. The OEM uses `asrs` for the post-XOR shift, which
+    is bit-identical to `lsrs` here because bit 31 of the working
+    register never gets set (the value is logically 16-bit
+    throughout). Four callers, all in `main`'s inbound-frame
+    validators (`0x08000370`, `0x080003B8`, `0x08000440`,
+    `0x080004FA`), all called with `(buf, 6)` — i.e. the function-
+    code-plus-five-data-bytes core of a Modbus PDU, with the
+    trailing two CRC bytes compared as `uxtb(r0)` against `buf[6]`
+    and `asrs(r0, #8)` against `buf[7]`. Diverges in surface from
+    shifterware's `modbus_crc16_compute` (which writes to globals
+    at `0x200000E7`/`0xE8`); algorithm and pool constants are
+    identical.
 - `flash.c` — embedded-flash unlock / lock / status-clear primitives
   plus the page-erase wrapper. Same partitioning as shifterware's
   `flash_store.c`.
@@ -243,6 +260,17 @@ The pending count will tighten as more functions are classified as
 | `0x08001372` | 20 | `USART_GetFlagStatus` | MindMotion HAL `hal_uart.c` |
 | `0x08001388` | 20 | `USART_GetITStatus` | MindMotion HAL `hal_uart.c` |
 | `0x080013ac` | 8  | `CRC_ResetDR` | MindMotion HAL `hal_crc.c` |
+| `0x0800078e` | 70 | `FLASH_EraseAllPages` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); mass-erase via MER+STRT then clear MER with mask `0x1FFB` (= `0x1FFD - 2`) |
+| `0x080007d4` | 150 | `FLASH_ReadOutProtection` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); DISABLE-only path: erase OB page via OPTER+STRT, set OPTPG, write `0xA5` (RDP unprotect key) as halfword to `OB->RDP @ 0x1FFFF800`. Uses a unique size optimisation absent from the other HAL helpers: `asrs r0, r0, #17` materialises the `0xFFF` wait limit out of the already-loaded `0x1FFFF800` OB base. |
+| `0x0800086a` | 120 | `FLASH_EraseOptionBytes` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); MM32-variant taking `Page_Address` (FLASH->AR), OPTKEYR-unlock, OPTER+STRT, clear OPTER/OPTPG via masks `0x1FDF`/`0x1FEF` (= `0x1FFD - 30 / -14`) |
+| `0x080008e2` | 100 | `FLASH_ProgramWord` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); 32-bit-via-two-halfwords programmer with PG bit + 15-cycle waits, clears PG with mask `0x1FFE` (= `0x1FFD + 1`) |
+
+Together with the live MindMotion-HAL flash primitives translated under
+`src/flash.c` (FLASH_Unlock / FLASH_Lock / FLASH_GetStatus /
+FLASH_WaitForLastOperation / FLASH_ErasePage / FLASH_ProgramHalfWord /
+FLASH_ClearFlag), the shifterboot binary ships the **complete**
+MindMotion `hal_flash.c` translation unit — gc-sections kept the dead
+helpers because they share the unit with live callees.
 
 The 9 trap stubs at `0x08000632..0x08000644` are byte-identical copies
 of `Default_Handler` (one per CMSIS-style exception slot, including
@@ -285,6 +313,7 @@ single `Default_Handler` definition.
 | `0x080006b0` | 12 | `flash_unlock` | decomp-c | canonical KEY1 (`0x45670123`) + KEY2 (`0xCDEF89AB`) to `FLASH->KEYR`. Used by `flash_erase_page` and the pending flash-programmer wrapper `FUN_080014FE`. |
 | `0x080006bc` | 14 | `flash_lock` | decomp-c | `FLASH->CR |= 0x80` (LOCK bit). Same two callers as `flash_unlock`. |
 | `0x08000bde` |  6 | `flash_clear_status` | decomp-c | `FLASH->SR = bits` (W1C the chosen flag bits). Called 2× from `flash_erase_page` and 2× from `FUN_080014FE`. |
+| `0x08000100` | 56 | `modbus_crc16` | decomp-c | Modbus RTU CRC16 (poly `0xA001`, init `0xFFFF`). Per-byte XOR + 8-bit shift-and-XOR. Returns `uint16_t` directly (unlike shifterware's RAM-storing `modbus_crc16_compute`). Four callers, all inbound-frame validators in `main` (`0x08000370`, `0x080003b8`, `0x08000440`, `0x080004fa`), called with `(buf, 6)`. |
 | `0x08001554` | 34 | `FUN_08001554` | pending | halfword-stream copy: `memcpy_halfwords` via `FUN_080014f8` |
 | ... | | | | (~57 more pending) |
 
