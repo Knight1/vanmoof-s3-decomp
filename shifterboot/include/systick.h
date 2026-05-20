@@ -22,6 +22,12 @@ void SysTick_Handler(void);
  * inserting a 250 ms pause after the image-sync chain. */
 void mdelay(uint32_t ms);
 
+/* Configure SysTick for a 1 ms tick at HCLK = 48 MHz: reload = 47999,
+ * CLKSOURCE/TICKINT/ENABLE all set, IRQ priority raised to 0
+ * (highest CM0). Called once from `main` before the Modbus loop
+ * comes up. */
+void boot_init_systick(void);
+
 #ifdef __cplusplus
 }
 #endif

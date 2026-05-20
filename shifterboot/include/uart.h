@@ -19,6 +19,18 @@ extern "C" {
 void uart1_send_byte(uint8_t b);
 void uart1_send_buf(const uint8_t *buf, uint16_t len);
 
+/* Bring up USART1 + the matching GPIO pins for the Modbus RTU bus.
+ *
+ *   PB6 = USART1_TX (AF0, push-pull)
+ *   PB7 = USART1_RX (AF0, floating input)
+ *   USART1: 8-N-1, baud = `baud_rate`, RX+TX enabled, RXNE IRQ enabled
+ *   NVIC: USART1 (IRQ 27) at priority 3, ENABLE
+ *
+ * Sole on-target caller is `main` at `0x08000214` with
+ * `baud_rate = 9600` (materialised as `75 << 7`). After this returns,
+ * `USART1_IRQHandler` starts firing on every received byte. */
+void boot_init_usart1(uint32_t baud_rate);
+
 #ifdef __cplusplus
 }
 #endif

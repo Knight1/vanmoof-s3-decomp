@@ -18,6 +18,13 @@ extern "C" {
  * high byte). */
 uint16_t modbus_crc16(const uint8_t *data, uint16_t count);
 
+/* USART1 RX interrupt handler — the bottom edge of shifterboot's Modbus
+ * stack. Reads one byte per RXNE event and appends it to the 45-byte
+ * inbound frame buffer at SRAM `0x200000C4`, indexed by the halfword
+ * counter at SRAM `0x20000014`. Wired into the Cortex-M0 vector table
+ * at slot 43 (USART1) — see `startup_mm32f031.S`. */
+void USART1_IRQHandler(void);
+
 #ifdef __cplusplus
 }
 #endif

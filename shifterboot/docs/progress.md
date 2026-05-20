@@ -22,9 +22,9 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | Count | Status |
 | --- | --- |
 | ?? | pending (VanMoof-custom, awaiting decomp) |
-| 10 | vendor-stock (recognised; no decomp needed) |
+| 24 | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 28 | decomp (asm or c) |
+| 31 | decomp (asm or c) |
 | 4  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
@@ -36,10 +36,17 @@ The pending count will tighten as more functions are classified as
 - `startup_mm32f031.S` — `Default_Handler` (custom: 2-byte `b .` stub);
   `_cold_reset` + `thunk_main` (VanMoof's 20-byte `__main` replacement
   packed into the unused vector-table tail).
-- `systick.c` — `systick_tick`, `SysTick_Handler`, and `mdelay`.
-  The stock MindMotion template has `b .` for SysTick; VanMoof
-  installed a countdown decrementer that drives a millisecond-delay
-  variable at SRAM `0x20000010`.
+- `systick.c` — `systick_tick`, `SysTick_Handler`, `mdelay`, and
+  `boot_init_systick`. The stock MindMotion template has `b .` for
+  SysTick; VanMoof installed a countdown decrementer that drives a
+  millisecond-delay variable at SRAM `0x20000010`.
+  - `boot_init_systick` (60 B @ `0x08001472`) — `SysTick_Config(48000)`
+    inlined (1 ms tick at HCLK = 48 MHz), then `NVIC_SetPriority(SysTick, 0)`
+    to bump SysTick to highest priority. The reload-value pool word
+    `0x0000BB80 = 48000` corroborates the 48 MHz HCLK that
+    `set_sysclock_to_48m` configures and that mainware-side
+    `rcc_get_clocks_freq` reports. Sole caller is `main` at
+    `0x0800020C`.
   - `mdelay` (20 B @ `0x080014CA`) — single-arg millisecond delay.
     Stores `ms` into `g_systick_countdown` and spins until
     `SysTick_Handler` ticks it down to zero. Sole OEM caller is
@@ -48,17 +55,26 @@ The pending count will tighten as more functions are classified as
     pattern (`push {r0, lr}; ldr r0, [sp]; ... pop {r3, pc}`) that
     `-O0` emits to give every parameter a stack slot; semantics are
     register-equivalent and `-Os` skips the spill.
-- `uart.c` — `uart1_send_byte` (28 B @ `0x080000C8`) and
-  `uart1_send_buf` (28 B @ `0x080000E4`). VanMoof-custom wrappers
-  around MindMotion HAL `USART_SendData` / `USART_GetFlagStatus`;
-  the byte-send spins on USART SR bit 0 (TX-ready/complete on MM32),
-  and the buffer-send is a decrement-then-test loop with a
-  `uxth`-clamped 16-bit length. Build-incomplete state: the HAL
-  primitives are declared `extern` in `uart.c` and resolve once the
-  MindMotion BSP is vendored in. Compile-clean (-Wall -Wextra
-  -Wpedantic -Wshadow); link still produces undefined references
-  for the HAL leaves and the missing `Reset_Handler` chain, as
-  expected.
+- `uart.c` — `uart1_send_byte` (28 B @ `0x080000C8`),
+  `uart1_send_buf` (28 B @ `0x080000E4`), and `boot_init_usart1`
+  (150 B @ `0x08001578`).
+  - The two TX wrappers are VanMoof-custom around MindMotion HAL
+    `USART_SendData` / `USART_GetFlagStatus`; byte-send spins on
+    USART SR bit 0 (TX-ready/complete on MM32); buffer-send is a
+    `uxth`-clamped 16-bit decrement loop.
+  - `boot_init_usart1(uint32_t baud_rate)` is the symmetric init for
+    everything USART1: clocks (USART1 + GPIOB), NVIC (IRQ 27 priority
+    3), alt-function for PB6/PB7 → USART1_TX/RX, 8-N-1 + Rx|Tx,
+    RXNE IRQ enable, USART enable, then `GPIO_Init` for PB6
+    (`AF_PP`) and PB7 (`IN_FLOATING`). Sole caller is `main` at
+    `0x08000214` with `baud_rate = 9600` (materialised as `75 << 7`)
+    — the canonical low-speed Modbus RTU rate for the S3
+    inter-module bus.
+  Build-incomplete state: the HAL primitives are declared `extern`
+  in `uart.c` and resolve once the MindMotion BSP is vendored in.
+  Compile-clean (-Wall -Wextra -Wpedantic -Wshadow); link still
+  produces undefined references for the HAL leaves and the missing
+  `Reset_Handler` chain, as expected.
 - `image.c` — halfword-stream helpers used by `main` to parse the
   image header during OTA verification.
   - `image_read_halfword` (6 B @ `0x080014F8`) — single `*p` halfword
@@ -130,7 +146,18 @@ The pending count will tighten as more functions are classified as
   counters (`buf_idx`, `stream_pos`) are `uxtb`-clamped to 8
   bits.
 - `modbus.c` — Modbus RTU framing primitives for the OTA-server
-  dispatcher in `main`. First entry:
+  dispatcher in `main`, plus the USART1 RX bottom edge:
+  - `USART1_IRQHandler` (58 B @ `0x0800160E`) — Cortex-M0 vector slot
+    43. One-byte-per-RXNE accumulator: `USART_GetITStatus(USART1, RXNE)`
+    → `USART_ClearITPendingBit(USART1, RXNE)` → `USART_ReceiveData(USART1)`
+    → append to the 45-byte inbound buffer at SRAM `0x200000C4`,
+    indexed by the halfword counter at SRAM `0x20000014`. Bytes past
+    index 44 are silently dropped (no overflow handling — the
+    dispatcher resets the index after consuming a frame). The 45 B
+    ceiling matches the longest Modbus RTU PDU shifterboot consumes
+    (cmd-0x82 OTA stream: 11 B header + 32 B image payload + 2 B
+    CRC). Frame-completion (3.5-char idle gap) is not detected here
+    — that lives in `main`'s dispatcher.
   - `modbus_crc16` (56 B @ `0x08000100`) — RTU CRC16 (poly `0xA001`,
     init `0xFFFF`). Pool words at `0x080004CC` (init) and
     `0x080004D0` (poly). Returns the accumulated CRC in r0 — no RAM
@@ -253,13 +280,27 @@ The pending count will tighten as more functions are classified as
 | Address | Size | Name | Source |
 | --- | --- | --- | --- |
 | `0x0800052e` | 18 | `NVIC_SystemReset` | CMSIS-Core M0 `core_cm0.h` standard inline |
+| `0x08001404` | 110 | `NVIC_SetPriority` | CMSIS-Core M0 `core_cm0.h` — out-of-lined by the MindMotion BSP build. Sole on-target caller is `boot_init_systick`. |
 | `0x080005b6` | 8  | `SetSysClock` | MindMotion `system_MM32F031x4x6_q.c` trampoline |
 | `0x080005be` | 66 | `SystemInit` | MindMotion `system_MM32F031x4x6_q.c` (byte-identical) |
 | `0x0800060c` | 46 | `Reset_Handler` | MindMotion `startup_MM32F031x4x6_q.s` (byte-identical) |
 | `0x08001364` | 6  | `USART_SendData` | MindMotion HAL `hal_uart.c` |
 | `0x08001372` | 20 | `USART_GetFlagStatus` | MindMotion HAL `hal_uart.c` |
 | `0x08001388` | 20 | `USART_GetITStatus` | MindMotion HAL `hal_uart.c` |
+| `0x0800136a` | 8  | `USART_ReceiveData` | MindMotion HAL `hal_uart.c` — `return (uint8_t)(USARTx->RDR @ +4)`. The OEM uses `uxtb` (8-bit), not the F1-style `& 0x1FF` mask. |
+| `0x0800139c` | 4  | `USART_ClearITPendingBit` | MindMotion HAL `hal_uart.c` — single `USARTx->[+0x14] = mask` store. |
 | `0x080013ac` | 8  | `CRC_ResetDR` | MindMotion HAL `hal_crc.c` |
+| `0x08000c62` | 222 | `GPIO_Init` | MindMotion HAL `hal_gpio.c` — full per-pin mode/speed/OType/PuPd config. Called twice by `boot_init_usart1` (PB6, PB7). |
+| `0x08000db6` | 70 | `GPIO_PinAFConfig` | MindMotion HAL `hal_gpio.c` — writes the AFRL / AFRH halfword bitfield. Called twice by `boot_init_usart1` to point PB6/PB7 at AF0 (USART1 TX/RX). |
+| `0x08000e08` | 106 | `NVIC_Init` | MindMotion HAL `hal_misc.c` — consumes a 3-byte `NVIC_InitTypeDef` (channel, priority, ENABLE). One on-target caller: `boot_init_usart1` (sets up IRQ 27 / USART1). |
+| `0x0800113c` | 28 | `RCC_AHBPeriphClockCmd` | MindMotion HAL `hal_rcc.c` — `(mask, ENABLE/DISABLE)` toggle on `RCC->AHBENR` (offset +0x14). Used to gate GPIOB (`bit 18`) and the CRC peripheral (`bit 6`). |
+| `0x08001158` | 28 | `RCC_APB2PeriphClockCmd` | MindMotion HAL `hal_rcc.c` — same shape on `RCC->APB2ENR` (offset +0x18). Used to gate USART1 (`bit 14`). |
+| `0x08001174` | 28 | `RCC_APB1PeriphClockCmd` | MindMotion HAL `hal_rcc.c` — same shape on `RCC->APB1ENR` (offset +0x1C). Dead code in this binary. |
+| `0x08001190` | 28 | `RCC_APB2PeriphResetCmd` | MindMotion HAL `hal_rcc.c` — same shape on `RCC->APB2RSTR` (offset +0x0C). |
+| `0x080011ac` | 28 | `RCC_APB1PeriphResetCmd` | MindMotion HAL `hal_rcc.c` — same shape on `RCC->APB1RSTR` (offset +0x10). |
+| `0x08001296` | 116 | `USART_Init` | MindMotion HAL `hal_uart.c` — baud-rate divisor + CR1/CR2/CR3 from `USART_InitTypeDef`. One caller: `boot_init_usart1`. |
+| `0x08001324` | 24 | `USART_Cmd` | MindMotion HAL `hal_uart.c` — `(USARTx, ENABLE/DISABLE)` toggle of CR1.UE. |
+| `0x0800133c` | 20 | `USART_ITConfig` | MindMotion HAL `hal_uart.c` — `(USARTx, IT, ENABLE/DISABLE)` toggle of the corresponding interrupt-enable bit. |
 | `0x0800078e` | 70 | `FLASH_EraseAllPages` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); mass-erase via MER+STRT then clear MER with mask `0x1FFB` (= `0x1FFD - 2`) |
 | `0x080007d4` | 150 | `FLASH_ReadOutProtection` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); DISABLE-only path: erase OB page via OPTER+STRT, set OPTPG, write `0xA5` (RDP unprotect key) as halfword to `OB->RDP @ 0x1FFFF800`. Uses a unique size optimisation absent from the other HAL helpers: `asrs r0, r0, #17` materialises the `0xFFF` wait limit out of the already-loaded `0x1FFFF800` OB base. |
 | `0x0800086a` | 120 | `FLASH_EraseOptionBytes` | MindMotion HAL `hal_flash.c` — dead code (no callers / no data refs); MM32-variant taking `Page_Address` (FLASH->AR), OPTKEYR-unlock, OPTER+STRT, clear OPTER/OPTPG via masks `0x1FDF`/`0x1FEF` (= `0x1FFD - 30 / -14`) |
@@ -314,6 +355,9 @@ single `Default_Handler` definition.
 | `0x080006bc` | 14 | `flash_lock` | decomp-c | `FLASH->CR |= 0x80` (LOCK bit). Same two callers as `flash_unlock`. |
 | `0x08000bde` |  6 | `flash_clear_status` | decomp-c | `FLASH->SR = bits` (W1C the chosen flag bits). Called 2× from `flash_erase_page` and 2× from `FUN_080014FE`. |
 | `0x08000100` | 56 | `modbus_crc16` | decomp-c | Modbus RTU CRC16 (poly `0xA001`, init `0xFFFF`). Per-byte XOR + 8-bit shift-and-XOR. Returns `uint16_t` directly (unlike shifterware's RAM-storing `modbus_crc16_compute`). Four callers, all inbound-frame validators in `main` (`0x08000370`, `0x080003b8`, `0x08000440`, `0x080004fa`), called with `(buf, 6)`. |
+| `0x0800160e` | 58 | `USART1_IRQHandler` | decomp-c | Modbus RX bottom edge — vector slot 43. Reads one byte per RXNE via `USART_ReceiveData`, appends to the 45-byte inbound buffer at SRAM `0x200000C4`, indexed by halfword counter at SRAM `0x20000014`. Overflow bytes silently dropped. No frame-completion logic — the 3.5-char idle gap detection lives in `main`'s dispatcher. |
+| `0x08001472` | 60 | `boot_init_systick` | decomp-c | CMSIS `SysTick_Config(48000)` inlined → 1 ms tick at HCLK = 48 MHz (reload = 47999, CTRL = `CLKSOURCE \| TICKINT \| ENABLE`). Followed by a VanMoof override that raises the SysTick exception priority from CM0-lowest (3) to highest (0) — so `mdelay` cadence isn't perturbed by other IRQs (in this binary the only other handled vector is USART1). Sole caller is `main` at `0x0800020C`. Materialises the OEM's "ticks too large" failure path as a `nop; b .` trap that is dead at runtime (48000-1 ≤ 0xFFFFFF). |
+| `0x08001578` | 150 | `boot_init_usart1` | decomp-c | USART1 + GPIO bring-up. Enables USART1 and GPIOB clocks; NVIC IRQ 27 at priority 3; `GPIO_PinAFConfig(GPIOB, 6, AF0)` + `GPIO_PinAFConfig(GPIOB, 7, AF0)` to wire PB6/PB7 to USART1; `USART_Init(USART1, {baud_rate, 8b, 1-stop, no-parity, Rx\|Tx})`; enable RXNE IRQ; `USART_Cmd(USART1, ENABLE)`; finally `GPIO_Init` for PB6 (AF push-pull) and PB7 (floating input). Sole caller `main` at `0x08000214`, with `baud_rate = 9600` (materialised as `75 << 7`). |
 | `0x08001554` | 34 | `FUN_08001554` | pending | halfword-stream copy: `memcpy_halfwords` via `FUN_080014f8` |
 | ... | | | | (~57 more pending) |
 

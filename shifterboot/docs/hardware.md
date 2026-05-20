@@ -69,6 +69,48 @@ References:
 | `0x40022000` | `FLASH_BASE` (present in SystemInit's data pool at `0x08000604`, not yet observed in use by `SystemInit` itself; likely used by `SetSysClock` for ACR latency) |
 | `0x40010000` | `SYSCFG_BASE` — `+0`=CFGR1 (cleared by Reset_Handler when entered via on-chip ROM bootloader) |
 
+## GPIO pinout (USART1 — Modbus RTU)
+
+Confirmed by `boot_init_usart1` (`0x08001578`):
+
+| Pin | Function | GPIO config | Notes |
+| --- | --- | --- | --- |
+| **PB6** | USART1_TX | `AF0`, push-pull, 50 MHz | data out to the bike's internal Modbus bus |
+| **PB7** | USART1_RX | `AF0`, floating input | data in from the bus; drives `USART1_IRQHandler` |
+
+The shifter is a Modbus slave on the bus shared with the main module
+(master) and the other sub-modules. The TX/RX pin choice (PB6/PB7) is
+the canonical MM32F031 USART1 pin pair on the LQFP-20 package; a
+half-duplex driver or TX-enable line (if any) would live elsewhere on
+the PCB and isn't visible from the firmware-level decomp yet.
+
+## Inter-module bus parameters
+
+| Parameter | Value | Source |
+| --- | --- | --- |
+| Protocol | Modbus RTU (slave) | function-code dispatch + 0xA001 CRC |
+| Baud rate | **9600** | `main` calls `boot_init_usart1(75 << 7)` at `0x08000214` |
+| Word length | 8 data bits | `USART_InitTypeDef.USART_WordLength = 0x30` |
+| Stop bits | 1 | `USART_StopBits = 0` |
+| Parity | none | `USART_Parity = 0` |
+| RX buffer | SRAM `0x200000C4`, 45 bytes | overflow drops silently |
+| RX index | SRAM `0x20000014`, halfword | reset by the dispatcher after consuming a frame |
+
+The 45 B RX ceiling matches the largest PDU shifterboot expects to
+service (cmd-0x82 OTA stream: 11 B header + 32 B payload + 2 B CRC).
+
+## SysTick
+
+`boot_init_systick` (`0x08001472`) configures SysTick for a **1 ms
+tick at HCLK = 48 MHz** (reload value `47999` = `48000 - 1`,
+`CLKSOURCE | TICKINT | ENABLE`), then raises the SysTick exception
+priority from CM0-lowest (3) to highest (0). Drives the millisecond
+countdown at SRAM `0x20000010` consumed by `mdelay`.
+
+The 48 MHz figure is now corroborated by three independent pieces of
+evidence: `set_sysclock_to_48m`'s clock-tree config, the mainware-side
+`rcc_get_clocks_freq` interpretation, and SysTick's `48000` reload.
+
 ## Vector table (head, from raw bytes)
 
 | CM0 idx | Vector | Value | Note |
