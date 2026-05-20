@@ -38,6 +38,12 @@ uint32_t image_read_u32_le(const uint16_t *src,
 #define IMAGE_CRC_MISMATCH 1  /* CRC stored in header != computed CRC */
 #define IMAGE_HDR_INVALID  2  /* magic missing or length out of range */
 
+/* TYPE_ID byte (low byte of `version_word` at image-header offset +4).
+ * Cross-firmware mapping (per the shifterware decomp's reference table):
+ *   0xC1 = shifterware    0xF4 = mainware    0xB1 = batteryware
+ *   0xB2 = powerbankware  0xA1 = motorware. */
+#define IMAGE_TYPE_SHIFTERWARE  0xC1u
+
 /* Validate the image at flash `0x08001800` (slot 1):
  *   1. magic == 0xAA55AA55     → else return IMAGE_HDR_INVALID
  *   2. length  < IMAGE_MAX_SIZE → else return IMAGE_HDR_INVALID

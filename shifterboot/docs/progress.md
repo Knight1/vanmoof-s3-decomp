@@ -24,8 +24,8 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | ?? | pending (VanMoof-custom, awaiting decomp) |
 | 24 | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 31 | decomp (asm or c) |
-| 4  | named (rename in Ghidra, no source yet) |
+| 32 | decomp (asm or c) |
+| 3  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
 The pending count will tighten as more functions are classified as
@@ -33,6 +33,30 @@ The pending count will tighten as more functions are classified as
 
 ## Per-module decomp log
 
+- `main.c` — `main` (852 B @ `0x080001D8`). The bootloader's central
+  orchestrator. Two phases sharing one 120-byte stack frame:
+  - **Phase 1 (cold-boot validate-and-jump)** — reads both slot magic
+    fields; if slot 1 has a fresh image (valid magic, TYPE_ID = 0xC1,
+    CRC differs from slot 2), runs `image_verify_crc` and on success
+    erases slot 2 then `flash_copy_region(slot 1 → slot 2)`. If the
+    new image is bad-typed, CRC-failed, or already mirrored, marks
+    slot 1 for erasure. After the slot 1 housekeeping, `mdelay(250)`
+    listens for a `0x1B` byte parked in the RX buffer's first slot
+    (a "wipe slot 2" probe from mainware). Then decides:
+    `slot2_valid && !slot1_valid` → `boot_app(slot2 + 0x28)`;
+    `slot2_valid || slot1_valid` → `NVIC_SystemReset()` (re-evaluate
+    after the slot-state change); else fall into phase 2.
+  - **Phase 2 (Modbus RTU server loop)** — poll `MODBUS_RX_IDX`,
+    validate slave addr (`0x20`) and frame length, dispatch by
+    function-code + register-low byte (= sub-id at frame[3]):
+    `0x01` ping reply (template B), `0x81` apply (run
+    `image_verify_crc`, reply, latch a `NVIC_SystemReset` on loop
+    end), `0x82` over `0x10` is OTA-stream (32 B chunk), `0x95`
+    erase slot 1, default reply template A. On cmd-0x81 success,
+    the latched reset re-enters phase 1 — which now finds both
+    slots valid with matching CRCs, erases slot 1, and boots
+    slot 2. So the complete OTA cycle is:
+    `0x95 → 0x82 × N → 0x81 → reset → cold-boot → boot slot 2`.
 - `startup_mm32f031.S` — `Default_Handler` (custom: 2-byte `b .` stub);
   `_cold_reset` + `thunk_main` (VanMoof's 20-byte `__main` replacement
   packed into the unused vector-table tail).
@@ -325,7 +349,7 @@ single `Default_Handler` definition.
 | Address | Size | Name | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `0x080000b4` | 20 | `_cold_reset` + `thunk_main` | decomp-asm | replaces Keil `__main`, packed into vector-table tail |
-| `0x080001d8` | 802 | `main` | named | bootloader's actual logic |
+| `0x080001d8` | 852 | `main` | decomp-c | Two-phase orchestrator. **Phase 1** (cold boot): inspect both image slots, copy slot 1 → slot 2 if a fresh image staged + verified, listen 250 ms for a `0x1B` byte (wipe-slot-2 probe), then either boot slot 2, reset to re-evaluate, or fall through. **Phase 2** (Modbus RTU server, slave addr `0x20`): dispatch on func code + register-low byte. Sub-ids: `0x01` ping (template B), `0x81` apply (verify → reply → latched reset), `0x82` over func `0x10` is OTA stream (32 B chunks), `0x95` erase slot 1, default sends template A. The two response templates (`0x20 03 02 00 01 C5 83 00` and `0x20 03 02 02 00 05 23 00`) live in the locals area at sp+104 / sp+112, copied in from pool words. Ghidra's "size = 802" is wrong: an unconditional branch from `0x08000332` forward to `0x0800052C` makes the analyser stop accounting too early — actual extent is 852 B. |
 | `0x080014ae` | 20 | `systick_tick` | decomp-c | decrements `g_systick_countdown` if non-zero |
 | `0x080014c2` | 8  | `SysTick_Handler` | decomp-c | trampoline to `systick_tick` |
 | `0x080014ca` | 20 | `mdelay` | decomp-c | busy-wait `ms` milliseconds — set `g_systick_countdown = ms`; spin until SysTick decrements to 0. Sole caller is `main` at `0x080002E2` with `ms = 250`. The emulator (`tools/emulate_mm32f031.py`) short-circuits this body since it doesn't simulate SysTick IRQs. |
@@ -365,17 +389,37 @@ Full list in `ghidra/exports/shifterboot_program.json`.
 
 ## Open questions
 
-- Where does the bootloader jump to the application image? (vector
-  fix-up address / direct branch / `vector_offset` register?)
-- What integrity scheme guards the application image? CRC? Hash?
-- Does it support OTA updates by itself, or is the update mechanism in
-  the application?
+Resolved (kept for the audit trail):
+
+- ~~**Where does the bootloader jump to the application?**~~ Resolved
+  2026-05-20 by `boot_app` (`0x080016F0`) and the cold-boot fate logic
+  in `main`: `boot_app(slot2_base + 0x28)` is called when slot 2 is
+  valid and slot 1 is not. The trampoline stashes Reset_Handler at
+  SRAM `0x20000018`, swaps MSP to `vec[0]`, and BLX'es through the
+  stash.
+- ~~**What integrity scheme guards the application image?**~~ Resolved
+  by `image_verify_crc` (`0x08000158`): MPEG-2 CRC32 (poly `0x4C11DB7`,
+  init `0xFFFFFFFF`, no reflection) over the masked header + payload.
+  Driven through the MM32F031 hardware CRC peripheral at `0x40023000`.
+- ~~**Does it support OTA updates by itself?**~~ Resolved by `main`'s
+  phase 2 Modbus dispatcher: full OTA support — `0x95` erases slot 1,
+  `0x82` over `0x10` streams 32 B chunks, `0x81` applies (verify +
+  latched reset). The mainware sends the chunks; shifterboot writes
+  flash + replies on the same bus.
+- ~~**`FUN_0800054C` clock-tree match?**~~ Resolved 2026-05-20 as
+  `set_sysclock_to_48m` (decomp-c). Corroborated independently by
+  SysTick's reload value `48000-1` in `boot_init_systick`.
+
+Still open:
+
 - Initial SP `0x200006F8` — what state in SRAM[0x6F8..0x1000) does the
   loader expect to be preserved across the warm jump?
 - Is `_init_data_bss` (`0x08001764`) hand-written by VanMoof or borrowed
   from a CMSIS reference startup? (The MindMotion BSP itself relies on
   Keil's `__main` for runtime init; the bespoke `_cold_reset` calls
   this function so it is at least *adapted* to VanMoof's setup.)
-- `FUN_0800054c` (called from stock `SetSysClock`) — does it match
-  MindMotion's `SetSysClockTo48M` / `SetSysClockTo72M`, or did VanMoof
-  customise the clock-tree config?
+- The cmd-0x81 reply byte at offset 3 is computed as
+  `((BE16(frame[4..5]) & 0x7F) << 1)`. Looks like a derived "echo"
+  field (request register-address truncated to 7 bits then doubled),
+  but the semantic — what the host does with it — is unclear without
+  decoding the mainware-side Modbus dispatcher.
