@@ -20,7 +20,16 @@ What it answers (and what it can't):
     the loop spins. We detect that case and stop.
 
 Usage:
-    python3 tools/emulate_mm32f031.py [--max-steps N] [--trace] [--from shifterboot|shifterware]
+    python3 tools/emulate_mm32f031.py SHIFTERBOOT.bin [SHIFTERWARE.bin] \
+        [--max-steps N] [--trace] [--from shifterboot|shifterware|shifterware-main]
+
+Positional arguments select which .bin files to load. The shifterboot bin
+is required; the shifterware bin is optional (only needed for `--from
+shifterware*`). If you omit either, the script tries the historical
+defaults:
+
+  shifterboot.bin     ./shifterboot/shifterboot.bin
+  shifterware.bin     ./shifterware/shifterware_0.237.bin
 
 Default target: shifterboot (cold-reset entry).
 """
@@ -84,9 +93,14 @@ PERIPH_READ_OVERRIDES = {
     # handled below by a live hook because it depends on what main wrote
     # FLASH->SR — BSY clear, EOP set (operations always complete instantly)
     0x4002200C: 0x00000020,
-    # USART1->SR / ISR — TX-empty + TC + ORE never; just enough for tx_byte
-    0x40013800 + 0x08: 0x000000C0,  # SR offset 0x08: TXE|TC = 0xC0
-    0x40013800 + 0x0C: 0x000000C0,  # ISR offset 0x0C
+    # USART1->SR — MM32F031 has bit 0 = TX-ready/complete (different
+    # from F1's bit 0 = PE). The MindMotion HAL's `USART_GetFlagStatus`
+    # body just `ands r3, r1` against r1 (the flag mask the caller
+    # passes), and `uart1_send_byte` polls with mask = 1 → expects
+    # bit 0 set when ready. Also keep F1-compat bits 6+7 (TXE|TC) so
+    # callers that pass those masks see "ready" too.
+    0x40013800 + 0x08: 0x000000C1,  # SR offset 0x08: bit 0 set + TXE|TC
+    0x40013800 + 0x0C: 0x000000C0,  # ISR offset 0x0C — F0-style fallback
 }
 
 # Specific named addresses for logging.
@@ -104,12 +118,8 @@ NAMED_ADDRS = {
     0xE000E014: "SysTick->LOAD",
 }
 
-SHIFTERBOOT_BIN = "shifterboot/shifterboot.bin"
-SHIFTERWARE_BIN = "shifterware/shifterware_0.237.bin"
-
-# Our locally-built shifterware (post-decomp), produced by `make` in
-# `shifterware/`. Pass `--ware ours` to use this instead of the OEM bin.
-SHIFTERWARE_OURS_BIN = "vanmoof-s3-decomp/shifterware/build/shifterware.bin"
+DEFAULT_SHIFTERBOOT_BIN = "shifterboot/shifterboot.bin"
+DEFAULT_SHIFTERWARE_BIN = "shifterware/shifterware_0.237.bin"
 
 
 # ---------- state tracking ---------------------------------------------------
@@ -124,23 +134,35 @@ class TraceState:
     syscfg_mem_mode: int = 0                        # tracks SYSCFG_CFGR1 low 2 bits
     sysreset_seen: bool = False
     interesting_pc: list = field(default_factory=list)
+    # TX-capture: bytes the firmware sent out via USART1->DR. Cleared
+    # between Modbus injections so each response can be decoded separately.
+    tx_capture: bytearray = field(default_factory=bytearray)
+    tx_total: bytearray = field(default_factory=bytearray)   # not cleared
 
 
 # ---------- emulator builder -------------------------------------------------
 
-def build_emulator(verbose: bool = False, ware: str = "oem") -> tuple[Uc, TraceState, capstone.Cs]:
+def build_emulator(
+    shifterboot_path: Path,
+    shifterware_path: Optional[Path] = None,
+    verbose: bool = False,
+) -> tuple[Uc, TraceState, capstone.Cs]:
     uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
     state = TraceState()
     md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
 
     # Map flash. Permissions are R-X by default in unicorn.
     uc.mem_map(FLASH_BASE, FLASH_SIZE)
-    sb = Path(SHIFTERBOOT_BIN).read_bytes()
+    sb = shifterboot_path.read_bytes()
     uc.mem_write(FLASH_BASE, sb)
-    sw_path = SHIFTERWARE_OURS_BIN if ware == "ours" else SHIFTERWARE_BIN
-    sw = Path(sw_path).read_bytes()
-    uc.mem_write(FLASH_BASE + 0x3000, sw)
-    print(f"shifterware: {sw_path} ({len(sw)} B)")
+    print(f"shifterboot: {shifterboot_path} ({len(sb)} B)")
+
+    if shifterware_path is not None:
+        sw = shifterware_path.read_bytes()
+        uc.mem_write(FLASH_BASE + 0x3000, sw)
+        print(f"shifterware: {shifterware_path} ({len(sw)} B)")
+    else:
+        print("shifterware: (not loaded — only --from shifterboot works)")
 
     # Boot-mode alias region at 0x00000000. Per MM32F031 UM § 1.5, with
     # BOOT0=0 (default, eShifter PCB) the main flash is aliased here.
@@ -240,6 +262,18 @@ def build_emulator(verbose: bool = False, ware: str = "oem") -> tuple[Uc, TraceS
             state.interesting_pc.append((state.instr_count, pc, "SYSRESETREQ"))
             uc.emu_stop()
 
+        # USART1 TX: write to USART1->TDR at offset 0 of the 0x40013800
+        # base. MM32F031 actually has a split TDR/RDR layout (TDR @ 0,
+        # RDR @ 4) — verified by the OEM `USART_SendData` body
+        # (`str r2, [r0, #0]`) and `USART_ReceiveData` body
+        # (`ldr r0, [r1, #4]`). Don't capture reads — the peripheral
+        # read overrides in PERIPH_READ_OVERRIDES would otherwise show
+        # up as "TX" if we also captured 0x40013804.
+        if address == 0x40013800:
+            byte = value & 0xFF
+            state.tx_capture.append(byte)
+            state.tx_total.append(byte)
+
         state.write_log.append((pc, address, size, value, lbl))
 
     def mem_read_hook(uc, access, address, size, value, _user):
@@ -288,8 +322,159 @@ def read_vector(uc: Uc, base: int, slot: int) -> int:
     return struct.unpack("<I", uc.mem_read(base + slot * 4, 4))[0]
 
 
+# ---------- Modbus injection -------------------------------------------------
+#
+# Pre-built command scenarios that map to the wire-format frames in
+# `tools/modbus.py`. Two vocabularies are supported:
+#
+#   - shifter-tool's three runtime commands (target: shifterware)
+#   - shifterboot's OTA-server commands (target: shifterboot)
+#
+# `--scenario` accepts a colon-suffix arg (e.g. `shifter-write-gear:3`)
+# for the few commands that need one.
+
+def _modbus_module():
+    """Late-import tools/modbus.py without polluting the global namespace
+    (so the emulator still imports when modbus.py isn't on sys.path)."""
+    import importlib
+    import sys as _sys
+    here = Path(__file__).resolve().parent
+    if str(here) not in _sys.path:
+        _sys.path.insert(0, str(here))
+    return importlib.import_module("modbus")
+
+
+def build_injection_plan(args) -> list[tuple[str, bytes]]:
+    """Resolve --scenario and --inject-frame into a list of
+    (label, frame_bytes) tuples in injection order."""
+    out: list[tuple[str, bytes]] = []
+    mb = None
+
+    if args.scenario:
+        mb = _modbus_module()
+        for spec in args.scenario:
+            name, _, arg = spec.partition(":")
+            if name == "shifter-read-gear":
+                out.append((name, mb.shifter_read_gear()))
+            elif name == "shifter-read-shifts":
+                out.append((name, mb.shifter_read_shifts()))
+            elif name == "shifter-write-gear":
+                if not arg:
+                    raise SystemExit("shifter-write-gear needs a gear value: shifter-write-gear:N")
+                out.append((f"{name}:{arg}", mb.shifter_write_gear(int(arg))))
+            elif name == "shifterboot-ping":
+                out.append((name, mb.shifterboot_ping()))
+            elif name == "shifterboot-apply":
+                out.append((name, mb.shifterboot_apply_image()))
+            elif name == "shifterboot-erase":
+                out.append((name, mb.shifterboot_erase_slot1()))
+            elif name == "shifterboot-ota":
+                pos = int(arg or "0", 0)
+                out.append((f"{name}:pos={pos}", mb.shifterboot_ota_chunk(pos, b"\xAA" * 32)))
+            elif name == "shifterboot-full-cycle":
+                # Erase slot 1, push 3 dummy chunks, apply.
+                out.append(("shifterboot-erase", mb.shifterboot_erase_slot1()))
+                for chunk_idx in range(3):
+                    out.append((
+                        f"shifterboot-ota:pos={chunk_idx * 32}",
+                        mb.shifterboot_ota_chunk(chunk_idx * 32, bytes([chunk_idx + 1] * 32)),
+                    ))
+                out.append(("shifterboot-apply", mb.shifterboot_apply_image()))
+            elif name == "shifter-tool":
+                # Default sequence the shifter-tool runs on connect+switch:
+                # read-gear, read-shifts, write-gear:3, read-gear.
+                gear = int(arg or "3", 0)
+                out.append(("shifter-read-gear", mb.shifter_read_gear()))
+                out.append(("shifter-read-shifts", mb.shifter_read_shifts()))
+                out.append((f"shifter-write-gear:{gear}", mb.shifter_write_gear(gear)))
+                out.append(("shifter-read-gear", mb.shifter_read_gear()))
+            else:
+                raise SystemExit(f"unknown --scenario: {name}")
+
+    if args.inject_frame:
+        for spec in args.inject_frame:
+            label, _, hex_bytes = spec.partition("=") if "=" in spec else ("raw", "", spec)
+            data = bytes.fromhex(hex_bytes.replace(" ", "")) if hex_bytes else bytes.fromhex(spec.replace(" ", ""))
+            out.append((label or "raw", data))
+
+    return out
+
+
+def run_modbus_injection(uc, state, n: int, label: str, frame: bytes, args) -> None:
+    """Write `frame` into the RX buffer, bump the RX index, resume the
+    CPU for `args.steps_after_inject` steps, then dump captured TX."""
+    import sys as _sys
+    here = Path(__file__).resolve().parent
+    if str(here) not in _sys.path:
+        _sys.path.insert(0, str(here))
+    import modbus as mb
+
+    rx_buf = args.rx_buf_addr
+    rx_idx = args.rx_idx_addr
+
+    print(f"\n[phase {n + 1}] inject `{label}` ({len(frame)} B) → RX buf 0x{rx_buf:08X}")
+    print(f"  >> {mb.hex_frame(frame)}")
+
+    # Reset the per-injection TX accumulator and write the frame.
+    state.tx_capture.clear()
+    uc.mem_write(rx_buf, frame)
+    uc.mem_write(rx_idx, struct.pack("<H", len(frame)))
+
+    # Resume.
+    pc_before = uc.reg_read(UC_ARM_REG_PC)
+    try:
+        uc.emu_start(pc_before | 1, until=0, count=args.steps_after_inject)
+    except UcError as e:
+        pc_now = uc.reg_read(UC_ARM_REG_PC)
+        print(f"  emu stopped on UcError at PC=0x{pc_now:08X}: {e}")
+
+    # Inspect what came back.
+    tx = bytes(state.tx_capture)
+    if not tx:
+        print(f"  << (no TX captured in {args.steps_after_inject} steps)")
+        return
+
+    print(f"  << {mb.hex_frame(tx)}")
+    # Best-effort decode by function code.
+    func = tx[1] if len(tx) >= 2 else None
+    if func == mb.FUNC_READ_HOLDING:
+        d = mb.decode_read_holding_response(tx)
+        if "error" in d:
+            print(f"  decode: {d['error']}")
+        else:
+            print(f"  decode: slave=0x{d['slave']:02X} read-holding "
+                  f"byte_count={d['byte_count']} values={d['values']} "
+                  f"crc_ok={d['crc_ok']}")
+    elif func == mb.FUNC_WRITE_SINGLE:
+        d = mb.decode_write_single_response(tx)
+        if "error" in d:
+            print(f"  decode: {d['error']}")
+        else:
+            print(f"  decode: slave=0x{d['slave']:02X} write-single "
+                  f"addr=0x{d['addr']:04X} value=0x{d['value']:04X} "
+                  f"crc_ok={d['crc_ok']}")
+    elif func is None:
+        print(f"  decode: (only {len(tx)} byte(s) captured — likely stuck in uart1_send_byte's TX-empty spin; try a larger --steps-after-inject)")
+    else:
+        print(f"  decode: (function 0x{func:02X} — no decoder)")
+
+
 def run(args):
-    uc, state, md = build_emulator(verbose=args.trace, ware=args.ware)
+    sb_path = Path(args.shifterboot)
+    if not sb_path.exists():
+        raise SystemExit(f"shifterboot bin not found: {sb_path}")
+
+    sw_path: Optional[Path] = Path(args.shifterware) if args.shifterware else None
+    if sw_path is not None and not sw_path.exists():
+        raise SystemExit(f"shifterware bin not found: {sw_path}")
+
+    if args.frm != "shifterboot" and sw_path is None:
+        raise SystemExit(
+            f"--from {args.frm} requires a shifterware bin "
+            f"(pass it as the second positional argument or via --shifterware)"
+        )
+
+    uc, state, md = build_emulator(sb_path, sw_path, verbose=args.trace)
 
     if args.frm == "shifterboot":
         sp = read_vector(uc, FLASH_BASE, 0)
@@ -308,43 +493,66 @@ def run(args):
         print(f"  initial PC = 0x{pc:08X} (Thumb LSB → {pc & ~1:#010x})")
         print()
     elif args.frm == "shifterware-main":
-        # Jump straight to main, bypassing Reset_Handler. The OEM main
-        # lives at 0x080042D6 (Thumb LSB); for our build it's wherever
-        # the linker placed `main` — find via ELF symbol.
-        if args.ware == "ours":
-            import subprocess
-            elf = SHIFTERWARE_OURS_BIN.rsplit(".", 1)[0] + ".elf"
-            try:
-                out = subprocess.check_output(["arm-none-eabi-nm", elf], text=True)
-                main_addr = None
-                for line in out.splitlines():
-                    parts = line.split()
-                    if len(parts) >= 3 and parts[2] == "main" and parts[1] in "Tt":
-                        main_addr = int(parts[0], 16)
-                        break
-                if main_addr is None:
-                    raise SystemExit("could not find `main` in our shifterware.elf")
-                sp = 0x20000400
-                pc = main_addr | 1
-            except FileNotFoundError:
-                raise SystemExit("arm-none-eabi-nm not found; can't locate our build's main")
-        else:
+        # Jump straight to main, bypassing Reset_Handler.
+        if args.main_addr is not None:
+            main_addr = args.main_addr
             sp = 0x20000400
-            pc = 0x080042D6 | 1
-        print(f"Direct entry into main ({'ours' if args.ware == 'ours' else 'OEM'}):")
-        print(f"  SP = 0x{sp:08X}, PC = 0x{pc:08X}")
+            pc = main_addr | 1
+            print(f"Direct entry into main (--main-addr): PC=0x{pc:08X}")
+        else:
+            # Try to derive from an .elf next to the shifterware bin.
+            import subprocess
+            assert sw_path is not None
+            elf = sw_path.with_suffix(".elf")
+            if not elf.exists():
+                raise SystemExit(
+                    f"--from shifterware-main without --main-addr expects an "
+                    f"ELF next to the bin (looked for {elf}). Pass --main-addr "
+                    f"<hex> to override (OEM = 0x080042D6)."
+                )
+            try:
+                out = subprocess.check_output(["arm-none-eabi-nm", str(elf)], text=True)
+            except FileNotFoundError:
+                raise SystemExit("arm-none-eabi-nm not found")
+            main_addr = None
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[2] == "main" and parts[1] in "Tt":
+                    main_addr = int(parts[0], 16)
+                    break
+            if main_addr is None:
+                raise SystemExit(f"could not find `main` in {elf}")
+            sp = 0x20000400
+            pc = main_addr | 1
+            print(f"Direct entry into main (from {elf}): PC=0x{pc:08X}")
         print()
     else:
         raise SystemExit(f"unknown --from value: {args.frm!r}")
 
     uc.reg_write(UC_ARM_REG_SP, sp)
 
+    # Build the injection plan from --scenario / --inject-frame.
+    plan = build_injection_plan(args)
+
     try:
-        # Run for at most --max-steps instructions
-        uc.emu_start(pc, until=0, count=args.max_steps)
-    except UcError as e:
-        pc = uc.reg_read(UC_ARM_REG_PC)
-        print(f"\nemu stopped on UcError at PC=0x{pc:08X}: {e}")
+        if not plan:
+            # No injections: run flat to max_steps as before.
+            uc.emu_start(pc, until=0, count=args.max_steps)
+        else:
+            # Phase 1: cold-boot to a Modbus-idle state.
+            print(f"\n[phase 1] cold boot for {args.inject_after_steps} steps "
+                  f"(let main reach the Modbus polling loop)...")
+            try:
+                uc.emu_start(pc, until=0, count=args.inject_after_steps)
+            except UcError as e:
+                pc_now = uc.reg_read(UC_ARM_REG_PC)
+                print(f"  emu stopped on UcError at PC=0x{pc_now:08X}: {e}")
+            print(f"  cold boot complete, PC=0x{uc.reg_read(UC_ARM_REG_PC):08X}, "
+                  f"steps={state.instr_count}")
+
+            # Phase 2..: per-injection.
+            for n, (label, frame) in enumerate(plan, start=1):
+                run_modbus_injection(uc, state, n, label, frame, args)
     except KeyboardInterrupt:
         pc = uc.reg_read(UC_ARM_REG_PC)
         print(f"\ninterrupted at PC=0x{pc:08X}")
@@ -384,18 +592,149 @@ def run(args):
         for pc, addr, sz, val, lbl in sram_writes[-30:]:
             print(f"    [PC=0x{pc:08X}] *0x{addr:08X} ← 0x{val:08X} ({sz}B)")
 
+    if state.tx_total:
+        print()
+        print(f"Cumulative USART1 TX ({len(state.tx_total)} bytes):")
+        # 16 bytes per line for readability
+        for i in range(0, len(state.tx_total), 16):
+            row = state.tx_total[i:i + 16]
+            print("  " + " ".join(f"{b:02X}" for b in row))
+
+
+def _hex_int(s: str) -> int:
+    """argparse type that accepts 0x-prefixed or decimal integers."""
+    return int(s, 0)
+
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--max-steps", type=int, default=200_000,
-                   help="Stop after this many instructions (default 200,000)")
-    p.add_argument("--trace", action="store_true", help="Print every instruction (first 200)")
-    p.add_argument("--from", dest="frm", default="shifterboot",
-                   choices=("shifterboot", "shifterware", "shifterware-main"),
-                   help="Where to start emulating from")
-    p.add_argument("--dump-sram-writes", action="store_true", help="Dump tail SRAM writes")
-    p.add_argument("--ware", choices=("oem", "ours"), default="oem",
-                   help="Which shifterware bin to load: OEM (factory) or our build")
+    p = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Cortex-M0 boot-flow emulator for the MM32F031F6U6 (eShifter).\n\n"
+            "Pass the two firmware .bin files as positional arguments. The "
+            "shifterboot bin is loaded at flash 0x08000000; the shifterware "
+            "bin (optional) is loaded at flash 0x08003000 (the image-header "
+            "offset within slot 1)."
+        ),
+    )
+    p.add_argument(
+        "shifterboot",
+        nargs="?",
+        default=DEFAULT_SHIFTERBOOT_BIN,
+        help=(
+            f"Path to shifterboot.bin (loaded at flash 0x08000000). "
+            f"Default: {DEFAULT_SHIFTERBOOT_BIN}"
+        ),
+    )
+    p.add_argument(
+        "shifterware",
+        nargs="?",
+        default=None,
+        help=(
+            f"Path to a shifterware .bin (loaded at flash 0x08003000). "
+            f"Optional — only needed for --from shifterware / "
+            f"shifterware-main. Pass an explicit path, or omit to skip the "
+            f"second-image load entirely. "
+            f"Historical OEM default: {DEFAULT_SHIFTERWARE_BIN}"
+        ),
+    )
+    p.add_argument(
+        "--max-steps",
+        type=int,
+        default=200_000,
+        help="Stop after this many instructions (default 200,000)",
+    )
+    p.add_argument(
+        "--trace",
+        action="store_true",
+        help="Print every instruction (first 200)",
+    )
+    p.add_argument(
+        "--from",
+        dest="frm",
+        default="shifterboot",
+        choices=("shifterboot", "shifterware", "shifterware-main"),
+        help="Where to start emulating from (default: shifterboot)",
+    )
+    p.add_argument(
+        "--main-addr",
+        type=_hex_int,
+        default=None,
+        help=(
+            "For --from shifterware-main, the absolute address of `main` "
+            "(Thumb bit cleared). If omitted, the script looks for an "
+            "ELF named like the shifterware bin (`.elf` instead of `.bin`) "
+            "and reads `main` via arm-none-eabi-nm. OEM build: 0x080042D6."
+        ),
+    )
+    p.add_argument(
+        "--dump-sram-writes",
+        action="store_true",
+        help="Dump tail SRAM writes",
+    )
+
+    # --- Modbus injection / scenarios ---
+    p.add_argument(
+        "--scenario",
+        action="append",
+        default=[],
+        metavar="NAME[:ARG]",
+        help=(
+            "Pre-built Modbus injection scenarios. Repeatable. Options:\n"
+            "  shifter-read-gear        — shifter-tool's readRegister(32,2,1)\n"
+            "  shifter-read-shifts      — shifter-tool's readRegister(32,15,2)\n"
+            "  shifter-write-gear:N     — shifter-tool's writeRegister(32,2,N), N=1..4\n"
+            "  shifter-tool[:gear]      — full read-gear/read-shifts/write/read sequence\n"
+            "  shifterboot-ping         — sub-id 0x01 (template B reply)\n"
+            "  shifterboot-apply        — sub-id 0x81 (image_verify_crc + reset latch)\n"
+            "  shifterboot-erase        — sub-id 0x95 (erase slot 1)\n"
+            "  shifterboot-ota[:pos]    — sub-id 0x82 (OTA 32-byte chunk)\n"
+            "  shifterboot-full-cycle   — erase, 3 OTA chunks, apply (full OTA flow)"
+        ),
+    )
+    p.add_argument(
+        "--inject-frame",
+        action="append",
+        default=[],
+        metavar="HEX",
+        help=(
+            "Raw hex bytes to inject into the RX buffer as one Modbus frame. "
+            "Repeatable. Whitespace within HEX is allowed (e.g. "
+            "'20 03 00 02 00 01 23 7B')."
+        ),
+    )
+    p.add_argument(
+        "--rx-buf-addr",
+        type=_hex_int,
+        default=0x200000C4,
+        help=(
+            "RX buffer base for injection (default 0x200000C4 = shifterboot's "
+            "MODBUS_RX_BUF). For shifterware decomp, use 0x200000C8."
+        ),
+    )
+    p.add_argument(
+        "--rx-idx-addr",
+        type=_hex_int,
+        default=0x20000014,
+        help=(
+            "RX-index halfword address (default 0x20000014 = shifterboot's "
+            "MODBUS_RX_IDX). Each injection writes `len(frame)` here so the "
+            "next dispatcher poll picks it up."
+        ),
+    )
+    p.add_argument(
+        "--inject-after-steps",
+        type=int,
+        default=10_000,
+        help="Cold-boot steps before the first injection (default 10,000).",
+    )
+    p.add_argument(
+        "--steps-after-inject",
+        type=int,
+        default=5_000,
+        help="Steps to run after each injection (default 5,000).",
+    )
+
     args = p.parse_args()
     run(args)
 
