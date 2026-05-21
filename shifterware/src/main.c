@@ -397,7 +397,11 @@ static void sched_idle_reset(void)
  * The two driving branches also raise `G_FLAG_13E` so the next
  * iteration of case 1 picks `sched_task_alpha` instead of starting
  * another `sched_task_extra` cycle. */
-static void sched_task_extra(void)
+/* Non-static so `modbus_dispatch_pdu`'s cmd=0x02 (gear-write) handler
+ * can call it from a different TU. The OEM has them in one compilation
+ * unit; our split into main.c + modbus_dispatch.c requires the
+ * external linkage. */
+void sched_task_extra(void)
 {
     if (G_STATE_115 < G_FLAG_116) {
         G_DRIVE_DIR = 0x0Fu;

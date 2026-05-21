@@ -116,6 +116,16 @@ switch as a `__gnu_thumb1_case_uqi` jump table.
 
 | `cmd` | `len` | Effect |
 | ----- | ----- | ------ |
+| `0x00` | — | `emit_image_status_payload(*0x200000ED, *0x200000EE)` — 7-byte read-holding-style reply with the 16-bit value at SRAM `0x200000ED..0xEE`. |
+| `0x01` | — | Same as `0x00` (separate jump-table entry, identical case body). |
+| `0x02` | 3 | `emit_image_status_payload(0, G_MOTOR_RUNNING)` — "is the motor busy?" probe. Reads as Modbus register value `0x0001` when the motor is running, `0x0000` when idle. Used by the [VangelisBV/vanmoof-shifter-tool](https://github.com/VangelisBV/vanmoof-shifter-tool) `readRegister(32,2,1)` call. |
+| `0x02` | 6 | **Gear-write handler.** Accept the gear at `G_RX_BUF[5]` if `1 <= v <= 4`. Gate on `G_MOTOR_RUNNING`: when **idle** (`== 0`), latch into `G_FLAG_117` and `G_GEAR_TARGET` (`0x20000116`), `G_COUNTER++` (`0x200000F8`, the 32-bit cmd-0x14 counter), call `sched_task_extra` (sets `G_DRIVE_DIR` to `0x0F` / `0xF0` and raises `G_FLAG_13E`), then set `G_FLAG_13E = 1` again (defensive — the scheduler call already does this in the active branches). When **busy** (`== 1`, motor mid-shift): only update `G_FLAG_117` — don't re-arm the scheduler, so the in-flight shift completes before the next target is picked up. Used by the shifter-tool's `writeRegister(32, 2, gear)` call. Outside `[1..4]` the case body is a no-op (matches the shifter-tool's UI validation). |
+| `0x03` | — | `emit_image_status_payload(0, G_GEAR_REQUEST_LATCH)` — masters poll this after a cmd-`0x02` write to confirm the change was latched. |
+| `0x04` | 3 | `emit_image_status_payload(0, 0)` — constant-zero reply (only the short-read form). |
+| `0x05` | — | `emit_image_status_payload(0, *0x200000F2)` — single-byte register read. |
+| `0x06` | — | `emit_image_status_payload(0, *0x200000F4)` — single-byte register read. |
+| `0x07..0x0D` | — | No-op (the jump table merges them to a shared `b 0x08003EBA` → post-dispatch fall-through). |
+| `0x0E` | — | `emit_image_status_payload(*0x200000F2, *0x200000F3)` — 16-bit read at the same area used by `0x05`/`0x06`. |
 | `0x0F` | 6 | Emit a uint32_t counter report. `cmd_0f_report_u32(G_COUNTER)` stages `(RX[5] & 0x7F) << 1` as a sub-id byte and `G_COUNTER` as a big-endian 4-byte value into RAM `0x20000141..0x20000145`, then `emit_counter_status_pdu` (OEM @ 0x08003C1C) lays out a **9-byte response PDU**: `[slave, len, sub-id, val[31..24], val[23..16], val[15..8], val[7..0], crc_lo, crc_hi]`. Note: the dispatcher's `len == 6` post-hook also fires `modbus_reply_passthrough()`, so the bus sees a 9-byte data PDU immediately followed by an 8-byte echo. The sub-id byte aliases `G_VERSION_BYTE` and the value clobbers `G_PKT_BYTES` — same RAM as the image-status emit slots. |
 | `0x14` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): `G_COUNTER++`, set `G_14_FLAG_A = 1`, `G_14_FLAG_B = 1`. Otherwise: clear `G_14_FLAG_B`. The motor-running gate prevents the bike from incrementing the counter mid-shift. |
 | `0x5A` | 6 | When the motor is idle (`G_MOTOR_RUNNING == 0`): copy `G_RX_BUF[5]` into `G_5A_TARGET`. Encodes the shift direction (0 = forward, 1 = reverse) consumed by the per-iteration motor servoing step (`motor_drive_step`) in `main`. Once the motor reaches position (or the stall timeout fires), `G_5A_TARGET` self-latches to 2 ("arrived"). |

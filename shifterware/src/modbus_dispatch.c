@@ -63,6 +63,29 @@
 #define G_RX_SCRATCH    ((const volatile uint8_t *)0x200001B2u) /* IRQ-filled inbound scratch */
 #define G_TX_BUF        ((volatile uint8_t   *)0x200001A9u) /* shared TX scratch (same as MODBUS_TX_BUF in modbus.c) */
 
+/* Globals read by the small-cmd image-status responses. cmd=0x00 / 0x01
+ * report the 16-bit value at +0..+1; cmd=0x03 reads a single byte
+ * (`G_GEAR_REQUEST_LATCH`) that the motor-state machine raises when a
+ * gear change has been accepted; cmd=0x04..0x07 spread across +0x22 /
+ * +0x25 / +0x27 via two pool tables (0x080041F8 and 0x080041FC). */
+#define G_GEAR_STATUS_HI    (*(volatile uint8_t  *)0x200000EDu)
+#define G_GEAR_STATUS_LO    (*(volatile uint8_t  *)0x200000EEu)
+#define G_REG3_VALUE        (*(volatile uint8_t  *)0x200000EFu)  /* read by cmd=0x03 */
+#define G_REG5_VALUE        (*(volatile uint8_t  *)0x200000F2u)  /* read by cmd=0x05 */
+#define G_REG6_VALUE        (*(volatile uint8_t  *)0x200000F4u)  /* read by cmd=0x06 */
+
+/* The gear subsystem's persistent state, shared with main.c's motor
+ * super-loop. The names match the placeholders in main.c so the two
+ * TUs reference the same memory. */
+#define G_GEAR_TARGET           (*(volatile uint8_t  *)0x20000116u) /* = main.c's `G_FLAG_116` — desired gear (1..4) */
+#define G_GEAR_REQUEST_LATCH    (*(volatile uint8_t  *)0x20000118u) /* set by `sched_alpha_match_3538` when target reached */
+#define G_FLAG_117              (*(volatile uint8_t  *)0x20000117u) /* set by cmd=0x02 to the requested gear value — purpose unclear (NOT the boolean cmd-0x14 latch the prior G_14_FLAG_A name implied) */
+#define G_FLAG_13E_LOCAL        (*(volatile uint8_t  *)0x2000013Eu) /* = main.c's `G_FLAG_13E` — "scheduler has driving work" latch */
+
+/* Forward decls — both live in main.c (now non-static so we can call
+ * the gear-direction setter from this TU). */
+extern void sched_task_extra(void);
+
 #define G_RX_WAIT_MAX   0x00249F00u   /* end-of-frame wait threshold (~2,400,000 ticks) */
 
 /* OTA-erase target: same flash slot used by `image_apply`'s post-
@@ -274,6 +297,107 @@ void modbus_dispatch_pdu(uint8_t cmd, uint8_t len)
     }
 
     switch (cmd) {
+    /* ---- small-cmd jump table (cmd 0..0x0E) ----
+     *
+     * The OEM emits this as a GNU `__gnu_thumb1_case_uqi` lookup at
+     * 0x08003CB0; the jump-table bytes at 0x08003CB4 (16 B) encode
+     * one offset per cmd value, with 0x07..0x0D sharing a no-op
+     * landing pad. Most cases call `emit_image_status_payload(b0, b1)`
+     * with two bytes drawn from various SRAM globals, producing a
+     * 7-byte response that matches a standard Modbus read-holding
+     * reply (byte-count=2 + 16-bit register value + CRC).
+     */
+    case 0x00u:
+    case 0x01u:
+        /* Read register 0 or 1 — both report the 16-bit value at
+         * SRAM 0x200000ED..0x200000EE. The exact semantics of those
+         * bytes are not yet decoded — they're updated elsewhere in
+         * the runtime; the dispatcher just echoes them. */
+        emit_image_status_payload(G_GEAR_STATUS_HI, G_GEAR_STATUS_LO);
+        break;
+
+    case 0x02u:
+        /* The gear register. Two sub-modes by inbound length:
+         *
+         *   len == 3 (short read, func 0x03 qty 1):
+         *     reply with `(0, G_MOTOR_RUNNING)` — masters use this as
+         *     "is the motor busy?" probe between gear changes.
+         *
+         *   len == 6 (write-single, func 0x06):
+         *     accept the new gear if 1 <= G_RX_BUF[5] <= 4. While the
+         *     motor is idle, latch the new target, bump G_COUNTER, and
+         *     hand off to `sched_task_extra` (which sets G_DRIVE_DIR
+         *     and raises G_FLAG_13E so main's super-loop starts
+         *     servoing the H-bridge). While the motor is already
+         *     running a previous shift, only re-target — don't re-arm
+         *     the scheduler.
+         */
+        if (len == 3u) {
+            emit_image_status_payload(0u, G_MOTOR_RUNNING);
+        } else if (len == 6u) {
+            uint8_t requested = G_RX_BUF[5];
+            if (requested >= 1u && requested <= 4u) {
+                if (G_MOTOR_RUNNING == 0u) {
+                    G_FLAG_117      = requested;
+                    G_GEAR_TARGET   = requested;
+                    G_COUNTER       = G_COUNTER + 1u;
+                    sched_task_extra();
+                    G_FLAG_13E_LOCAL = 1u;
+                } else if (G_MOTOR_RUNNING == 1u) {
+                    /* Motor busy — only update G_FLAG_117 (the
+                     * "preempted target" slot). G_GEAR_TARGET stays
+                     * as whatever the in-flight shift is heading
+                     * toward; the FSM picks up the new value at its
+                     * next idle pass. */
+                    G_FLAG_117 = requested;
+                }
+            }
+        }
+        /* len == 0x0F also lands here (write-multiple), but the case
+         * body doesn't act on it — falls through to the common
+         * passthrough at the end of the dispatcher. */
+        break;
+
+    case 0x03u:
+        /* Read register 3 — single byte at SRAM 0x20000118
+         * (G_GEAR_REQUEST_LATCH). Set by `sched_alpha_match_3538`
+         * when the motor confirms it reached the target gear; masters
+         * poll this to know "did my last cmd-0x02 actually take?". */
+        emit_image_status_payload(0u, G_GEAR_REQUEST_LATCH);
+        break;
+
+    case 0x04u:
+        /* "Zero-zero" probe: only the `len == 3` short-read replies
+         * with `(0, 0)`. Other lengths fall through silently. */
+        if (len == 3u) {
+            emit_image_status_payload(0u, 0u);
+        }
+        break;
+
+    case 0x05u:
+        emit_image_status_payload(0u, G_REG5_VALUE);
+        break;
+
+    case 0x06u:
+        emit_image_status_payload(0u, G_REG6_VALUE);
+        break;
+
+    /* cmd 0x07..0x0D share a default branch (the OEM's jump-table
+     * tail-merged them all to a `b 0x08003EBA` → post-dispatch). No
+     * per-case side effects. */
+    case 0x07u: case 0x08u: case 0x09u:
+    case 0x0Au: case 0x0Bu: case 0x0Cu:
+    case 0x0Du:
+        break;
+
+    case 0x0Eu:
+        /* Report the 16-bit value at SRAM 0x200000F2..0x200000F3 —
+         * paired with cmd 0x05 / 0x06 which read individual bytes
+         * from the same region. */
+        emit_image_status_payload(G_REG5_VALUE,
+                                  *(volatile uint8_t *)0x200000F3u);
+        break;
+
     case 0x0Fu:
         cmd_0f_report_u32(G_COUNTER);
         break;
