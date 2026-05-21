@@ -27,7 +27,7 @@ Two image versions exist on the OEM tree:
 | SoftVer (per header) | `01.04.01` |
 | Image CRC32 | `0xB79C4373` (stored at OAD header offset +8) |
 | SHA-256 | `ee209726b535a5fcf3e6cdd2a3d1468b1e7cddeeab3dce99e76bd4edab0fde6d` |
-| SHA-512 | `118084995f7423cf8b1c5589d49b20f203c06a4116213b4264a4c30d25060fee2fe057e1906e8a3e...` |
+| SHA-512 | `118084995f7423cf8b1c5589d49b20f203c06a4116213b4264a4c30d25060fee2fe057e1906e8a3ec9ab5323a02b2f72ee454fbc2c9cc7e6ca550ab71abcfe52` |
 
 ### `bleware_2.4.01.bin`
 
@@ -39,7 +39,7 @@ Two image versions exist on the OEM tree:
 | SoftVer | `02.04.01` |
 | Image CRC32 | `0x884A9283` |
 | SHA-256 | `89ad38f4213b375f59dd002c7e1174ac1de1086680262d91c6cbf14691ff20a2` |
-| SHA-512 | `467f425f8ff329204876159697a71e04dec2b9fc7336892d233f68d7ce8ab8a4eb9b3dea506d5f88...` |
+| SHA-512 | `467f425f8ff329204876159697a71e04dec2b9fc7336892d233f68d7ce8ab8a4eb9b3dea506d5f885008a602301eb9a2ecbba66327379eb860115edd37a3057c` |
 
 The hashes are the contract — if a future blob differs by a single byte, it's a different bleware.
 
