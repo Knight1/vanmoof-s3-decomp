@@ -73,6 +73,21 @@ FLASH_SIZE   = 0x00008000   # 32 KB
 SRAM_BASE    = 0x20000000
 SRAM_SIZE    = 0x00001000   # 4 KB
 
+# Where shifterware actually lives in flash when it's running.
+#
+# The MM32F031 has two image slots: slot 1 (0x08001800, OTA staging)
+# and slot 2 (0x08004800, the boot slot). Shifterboot writes inbound
+# OTA chunks into slot 1, validates them, copies the image to slot 2,
+# then `boot_app(slot 2 + 0x28)` jumps to slot 2's vector table.
+#
+# So a shifterware.bin must be loaded at slot 2 to execute correctly —
+# its Reset vector (e.g. `0x08005E79` for shifterware 0.237) only
+# resolves to real code when the image is mapped from 0x08004800.
+SHIFTERWARE_RUN_BASE  = 0x08004800
+# The slot-1 staging address is exposed too (currently unused — it's
+# where shifterboot would write inbound OTA chunks before validating).
+SHIFTERWARE_STAGE_BASE = 0x08001800
+
 # Peripheral regions we stub out. Reads return zero by default, except the
 # specific addresses listed in PERIPH_READ_OVERRIDES below.
 PERIPH_REGIONS = [
@@ -159,8 +174,9 @@ def build_emulator(
 
     if shifterware_path is not None:
         sw = shifterware_path.read_bytes()
-        uc.mem_write(FLASH_BASE + 0x3000, sw)
-        print(f"shifterware: {shifterware_path} ({len(sw)} B)")
+        uc.mem_write(SHIFTERWARE_RUN_BASE, sw)
+        print(f"shifterware: {shifterware_path} ({len(sw)} B) loaded at "
+              f"0x{SHIFTERWARE_RUN_BASE:08X} (slot 2 = boot slot)")
     else:
         print("shifterware: (not loaded — only --from shifterboot works)")
 
@@ -212,10 +228,12 @@ def build_emulator(
                 pass
 
         # Region transition tracking
-        if FLASH_BASE <= address < FLASH_BASE + 0x3000:
+        if FLASH_BASE <= address < SHIFTERWARE_STAGE_BASE:
             region = "shifterboot"
-        elif FLASH_BASE + 0x3000 <= address < FLASH_BASE + 0x6000:
+        elif SHIFTERWARE_RUN_BASE <= address < SHIFTERWARE_RUN_BASE + 0x3800:
             region = "shifterware"
+        elif SHIFTERWARE_STAGE_BASE <= address < SHIFTERWARE_RUN_BASE:
+            region = "ota-staging"   # slot 1 — only live during OTA cycles
         elif SRAM_BASE <= address < SRAM_BASE + SRAM_SIZE:
             region = "SRAM"
         else:
@@ -401,24 +419,56 @@ def build_injection_plan(args) -> list[tuple[str, bytes]]:
 
 
 def run_modbus_injection(uc, state, n: int, label: str, frame: bytes, args) -> None:
-    """Write `frame` into the RX buffer, bump the RX index, resume the
-    CPU for `args.steps_after_inject` steps, then dump captured TX."""
+    """Write `frame` into the RX buffer, bump the RX index/head, resume the
+    CPU for `args.steps_after_inject` steps, then dump captured TX.
+
+    Two injection profiles, selected by `--target`:
+
+      target=shifterboot — write frame bytes to MODBUS_RX_BUF (default
+        0x200000C4) and set MODBUS_RX_IDX (0x20000014) = len(frame). The
+        polling loop in shifterboot's `main` reads from there directly.
+
+      target=shifterware — write frame bytes to G_RX_SCRATCH (default
+        0x200001B2), set G_RX_HEAD (0x200000E4) = len(frame), and set
+        G_RX_FRAME_MODE (0x200000D9) to 0 (short, 8 B) or 1 (long, 45 B).
+        Also zero G_RX_WAIT_CTR (0x200000DC) so the FSM enters the
+        validate-and-dispatch branch on its next poll instead of ticking
+        the EOF timeout. `modbus_rx_poll` then validates the CRC and
+        hands off to `modbus_dispatch_pdu`.
+    """
     import sys as _sys
     here = Path(__file__).resolve().parent
     if str(here) not in _sys.path:
         _sys.path.insert(0, str(here))
     import modbus as mb
 
-    rx_buf = args.rx_buf_addr
-    rx_idx = args.rx_idx_addr
+    target = args.target
 
-    print(f"\n[phase {n + 1}] inject `{label}` ({len(frame)} B) → RX buf 0x{rx_buf:08X}")
-    print(f"  >> {mb.hex_frame(frame)}")
-
-    # Reset the per-injection TX accumulator and write the frame.
-    state.tx_capture.clear()
-    uc.mem_write(rx_buf, frame)
-    uc.mem_write(rx_idx, struct.pack("<H", len(frame)))
+    if target == "shifterboot":
+        rx_addr = args.rx_buf_addr
+        print(f"\n[phase {n + 1}] inject `{label}` ({len(frame)} B) → "
+              f"shifterboot RX buf 0x{rx_addr:08X}")
+        print(f"  >> {mb.hex_frame(frame)}")
+        state.tx_capture.clear()
+        uc.mem_write(rx_addr, frame)
+        uc.mem_write(args.rx_idx_addr, struct.pack("<H", len(frame)))
+    elif target == "shifterware":
+        # shifterware RX layout (see modbus_rx_poll @ 0x08003EDA)
+        scratch  = args.sw_rx_scratch
+        head     = args.sw_rx_head
+        mode_adr = args.sw_rx_frame_mode
+        wait_ctr = args.sw_rx_wait_ctr
+        frame_mode = 1 if len(frame) >= 0x2D else 0
+        print(f"\n[phase {n + 1}] inject `{label}` ({len(frame)} B) → "
+              f"shifterware scratch 0x{scratch:08X}  mode={frame_mode}")
+        print(f"  >> {mb.hex_frame(frame)}")
+        state.tx_capture.clear()
+        uc.mem_write(scratch, frame)
+        uc.mem_write(head, struct.pack("<I", len(frame)))
+        uc.mem_write(mode_adr, struct.pack("<B", frame_mode))
+        uc.mem_write(wait_ctr, struct.pack("<I", 0))
+    else:
+        raise SystemExit(f"unknown --target: {target!r}")
 
     # Resume.
     pc_before = uc.reg_read(UC_ARM_REG_PC)
@@ -485,7 +535,7 @@ def run(args):
         print()
     elif args.frm == "shifterware":
         # Vector table sits 40 B (image header) past the image base.
-        vec_base = FLASH_BASE + 0x3000 + 0x28
+        vec_base = SHIFTERWARE_RUN_BASE + 0x28
         sp = read_vector(uc, vec_base, 0)
         pc = read_vector(uc, vec_base, 1)
         print(f"Shifterware (via vector slot 1 Reset_Handler):")
@@ -704,12 +754,24 @@ def main():
         ),
     )
     p.add_argument(
+        "--target",
+        choices=("shifterboot", "shifterware"),
+        default=None,
+        help=(
+            "Which dispatcher we're injecting into — picks the right SRAM "
+            "addresses for the RX accumulator state. shifterboot uses "
+            "RX_BUF/IDX; shifterware uses SCRATCH/HEAD/MODE/WAIT_CTR. "
+            "Auto-defaults from --from (shifterboot → shifterboot, "
+            "shifterware* → shifterware)."
+        ),
+    )
+    p.add_argument(
         "--rx-buf-addr",
         type=_hex_int,
         default=0x200000C4,
         help=(
-            "RX buffer base for injection (default 0x200000C4 = shifterboot's "
-            "MODBUS_RX_BUF). For shifterware decomp, use 0x200000C8."
+            "[target=shifterboot] RX buffer base (default 0x200000C4 = "
+            "shifterboot's MODBUS_RX_BUF)."
         ),
     )
     p.add_argument(
@@ -717,10 +779,40 @@ def main():
         type=_hex_int,
         default=0x20000014,
         help=(
-            "RX-index halfword address (default 0x20000014 = shifterboot's "
-            "MODBUS_RX_IDX). Each injection writes `len(frame)` here so the "
-            "next dispatcher poll picks it up."
+            "[target=shifterboot] RX-index halfword address (default "
+            "0x20000014 = shifterboot's MODBUS_RX_IDX). Each injection "
+            "writes `len(frame)` here so the next dispatcher poll picks "
+            "it up."
         ),
+    )
+    p.add_argument(
+        "--sw-rx-scratch",
+        type=_hex_int,
+        default=0x200001B2,
+        help=(
+            "[target=shifterware] IRQ-filled inbound scratch (default "
+            "0x200001B2 = G_RX_SCRATCH). The FSM at `modbus_rx_poll` "
+            "copies validated bytes from here into G_RX_BUF (short) or "
+            "G_LONG_BUF (long)."
+        ),
+    )
+    p.add_argument(
+        "--sw-rx-head",
+        type=_hex_int,
+        default=0x200000E4,
+        help="[target=shifterware] G_RX_HEAD (default 0x200000E4) — frame bytes received.",
+    )
+    p.add_argument(
+        "--sw-rx-frame-mode",
+        type=_hex_int,
+        default=0x200000D9,
+        help="[target=shifterware] G_RX_FRAME_MODE (default 0x200000D9) — 0=short, 1=long.",
+    )
+    p.add_argument(
+        "--sw-rx-wait-ctr",
+        type=_hex_int,
+        default=0x200000DC,
+        help="[target=shifterware] G_RX_WAIT_CTR (default 0x200000DC) — zeroed on inject.",
     )
     p.add_argument(
         "--inject-after-steps",
@@ -736,6 +828,11 @@ def main():
     )
 
     args = p.parse_args()
+
+    # Auto-default --target from --from.
+    if args.target is None:
+        args.target = "shifterware" if args.frm.startswith("shifterware") else "shifterboot"
+
     run(args)
 
 
