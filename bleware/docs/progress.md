@@ -148,6 +148,67 @@ Body shape:
 
 `FUN_0001AC6C(0x10, ...)` is clearly a **structured-log emit** — the leading `0x10` is the log severity / verbosity; many call sites pass varargs that line up with embedded format strings (e.g. `"Hardware error <d>"`). The `FUN_00006D90` calls are similar but include source-file / line-number for error logs.
 
+### Monitor (debug console) — architecture sketched
+
+The monitor console exposes ~19 user-facing commands across 8-9
+`cmd_*.c` source files. Command names live as NUL-terminated strings
+in flash:
+
+| Address | Strings |
+| --- | --- |
+| `0x0002A5C4` | `cmd_play_audio_file`, `cmd_dump_audiofiles`, `cmd_upload_audio_file`, `cmd_upload_audio_file2`, `cmd_set_all_audio_volume` |
+| `0x0002AA44` | `cmd_list_pack_file`, `cmd_upload_pack_file`, `cmd_delete_pack_file`, `cmd_process_packfile` |
+| `0x0002AB94` | `cmd_extflash_dump`, `cmd_extflash_erase`, `cmd_extflash_verify`, `cmd_extflash_upload` |
+| `0x0002B081` | `cmd_log_flush`, `cmd_log_count`, `cmd_log_inject` |
+| `0x0002B1F8` | `cmd_ble_info`, `cmd_ble_set_random_static_address` |
+| `0x0002B448` | `cmd_rtos_stats`, `cmd_rtos_nvm_compact` |
+| `0x0002B7E0` | `mon_help`, `cmd_help` |
+| `0x0002BA58` | `cmd_exit` |
+
+**`cmd_help` @ `0x00013C20`** — the help-printer dispatcher.
+Identified body:
+
+1. Logs two banner lines from `source/monitor/cmd_help.c` (`FUN_00006D90(file, 0x2D, "cmd_help", 8)` twice)
+2. Iterates a NULL-terminated table at flash `0x0002A0BC`
+   (16+ function pointers, each a per-module help printer
+   registered by the cmd_*.c modules)
+3. Calls each printer with `arg = 0` ("emit your help text")
+
+The table head at `0x0002A0BC` resolves to addresses like
+`0x0001A969`, `0x0000ABD9`, `0x0001699D`, `0x0000C2D5`, `0x00016DCD`,
+etc. — Thumb-set function pointers, one per cmd module.
+
+### Monitor dispatcher — still elusive
+
+The main monitor dispatcher (the function that reads user input,
+parses the command name, looks it up, and calls the handler) was
+not pinned down this turn. Two structural reasons:
+
+- **CGT/armcc indirect references**. Bleware is compiled with TI's
+  ARM Compiler, which uses MOVW/MOVT instruction pairs for 32-bit
+  constants rather than literal-pool loads. Ghidra's auto-analysis
+  doesn't always trace those into proper xrefs, so string-to-
+  function references go invisible.
+- **Help-table is a NULL-terminated function-pointer list** — not
+  the same structure as the runtime command-lookup table the
+  dispatcher walks. The user-facing names (`"play_audio_file"`,
+  etc., stored as `"cmd_*"` symbol names) are referenced by
+  another table or by direct argument passing into a registration
+  function.
+
+Two viable next paths:
+
+1. **Find the monitor task creation.** Just as the bluetoothtask is
+   created by `create_bluetoothtask` @ `0x000235D0`, there should be
+   a `create_monitor_task` somewhere — probably called from inside
+   `tirtos_modules_init` (`0x000215FC`) or one of its 13 sub-init
+   helpers. Walking that chain would identify the task body, and
+   the body's first action is the dispatcher loop.
+2. **Trace `cmd_exit` (`0x0002BA58`)** — it's a single-name string,
+   probably referenced by one small registration function that
+   we can xref-to-find the registry. Tracing the registry gives
+   the dispatcher.
+
 ### Audio task
 
 A second VanMoof task lives in `source/tasks/audiotask.c` (string at
