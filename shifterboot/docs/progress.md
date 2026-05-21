@@ -22,16 +22,36 @@ the decomp work itself focuses on the bespoke parts of the bootloader.
 | Count | Status |
 | --- | --- |
 | ?? | pending (VanMoof-custom, awaiting decomp) |
-| 24 | vendor-stock (recognised; no decomp needed) |
+| 26 | vendor-stock (recognised; no decomp needed) |
 | 0  | in-progress |
-| 32 | decomp (asm or c) |
-| 3  | named (rename in Ghidra, no source yet) |
+| 33 | decomp (asm or c) |
+| 2  | named (rename in Ghidra, no source yet) |
 
 `function_count = 78` per `ghidra/exports/shifterboot_program.json`.
 The pending count will tighten as more functions are classified as
 `vendor-stock` vs `custom`.
 
 ## Per-module decomp log
+
+- `startup_mm32f031.S` — vector table wired into the `.isr_vector`
+  section (48 slots, mapping vec[0]=`_estack`, vec[1]=`Reset_Handler`,
+  vec[15]=`SysTick_Handler`, vec[43]=`USART1_IRQHandler`, everything
+  else weak-aliased to `Default_Handler`). `Reset_Handler` is a
+  minimal stub (set MSP → `set_sysclock_to_48m` → `_cold_reset`) that
+  skips the OEM's vendor `SystemInit` wrapper and goes straight to
+  the clock-tree config we already have. `_init_data_bss` is
+  re-implemented as a direct linker-symbol-driven .data copy + .bss
+  zero (no ARMCC scatter-table indirection); same observable end
+  state. Build is now link-clean — `text = 2340`, `bss = 520`.
+
+- `hal_stubs.S` — temporary `.weak` fallbacks for the MindMotion HAL
+  / CMSIS leaves the C sources declare `extern` (USART_*, RCC_*,
+  GPIO_*, NVIC_*, CRC_ResetDR). Stubs default to safe values
+  ("no event pending" / "always ready" / no-op) so the build links
+  without the BSP. `NVIC_SystemReset` is implemented inline (SCB
+  AIRCR write) since a no-op fallback would be observably wrong.
+  Every stub is `__attribute__((weak))` — vendoring the real BSP
+  removes the fallbacks transparently.
 
 - `main.c` — `main` (852 B @ `0x080001D8`). The bootloader's central
   orchestrator. Two phases sharing one 120-byte stack frame:
@@ -314,6 +334,8 @@ The pending count will tighten as more functions are classified as
 | `0x0800136a` | 8  | `USART_ReceiveData` | MindMotion HAL `hal_uart.c` — `return (uint8_t)(USARTx->RDR @ +4)`. The OEM uses `uxtb` (8-bit), not the F1-style `& 0x1FF` mask. |
 | `0x0800139c` | 4  | `USART_ClearITPendingBit` | MindMotion HAL `hal_uart.c` — single `USARTx->[+0x14] = mask` store. |
 | `0x080013ac` | 8  | `CRC_ResetDR` | MindMotion HAL `hal_crc.c` |
+| `0x08001788` | 16 | `__scatterload_copy` | Keil ARMCC runtime — word-by-word `ldm/stm` copy. Called by `_init_data_bss` for the .data init table entry. |
+| `0x08001798` | 16 | `__scatterload_zeroinit` | Keil ARMCC runtime — word-by-word `stm` zero. Called by `_init_data_bss` for the .bss init table entry. |
 | `0x08000c62` | 222 | `GPIO_Init` | MindMotion HAL `hal_gpio.c` — full per-pin mode/speed/OType/PuPd config. Called twice by `boot_init_usart1` (PB6, PB7). |
 | `0x08000db6` | 70 | `GPIO_PinAFConfig` | MindMotion HAL `hal_gpio.c` — writes the AFRL / AFRH halfword bitfield. Called twice by `boot_init_usart1` to point PB6/PB7 at AF0 (USART1 TX/RX). |
 | `0x08000e08` | 106 | `NVIC_Init` | MindMotion HAL `hal_misc.c` — consumes a 3-byte `NVIC_InitTypeDef` (channel, priority, ENABLE). One on-target caller: `boot_init_usart1` (sets up IRQ 27 / USART1). |
@@ -357,7 +379,7 @@ single `Default_Handler` definition.
 | `0x080013cc` | 32 | `crc32_words` | decomp-c | feed `count` u32 words from `src` into the MM32F031 hardware CRC engine at `0x40023000`, return accumulated CRC. |
 | `0x08001740` | 36 | `memcpy` | decomp-c | word-fast + byte tail; void return (non-POSIX). Word path triggers on `(dst \| src) & 3 == 0`. |
 | `0x080016f0` | 26 | `boot_app` | decomp-c | application-boot trampoline: stash Reset_Handler @ SRAM `0x20000018`, MSR MSP from vec[0], BLX to the stash. Sole caller is `main` at `0x0800031C` with `0x08004828` (slot 2 + 40). Closes the boot-handoff question. |
-| `0x08001764` | 36 | `_init_data_bss` | named | called from `_cold_reset`; CMSIS-style .data copy + .bss zero — likely VanMoof-written rather than vendor (the MindMotion BSP relies on Keil `__main` instead). To confirm by inspection. |
+| `0x08001764` | 36 | `_init_data_bss` | decomp-asm | walks a 2-entry init table at flash `0x080017A8..0x080017C7`: each entry is `{src, dst, len, fn}`, where `fn` is `__scatterload_copy` (for .data: 28 B from `0x080017C8` → `0x20000000`) or `__scatterload_zeroinit` (for .bss: 1756 B at `0x2000001C..0x200006F7`). The table format is canonical Keil ARMCC `__rt_lib_init` scatterload. Our `startup_mm32f031.S` re-implements this directly against `_sdata/_edata/_sbss/_ebss/_sidata` linker symbols (skipping the table indirection) — behaviour identical, byte layout differs. |
 | `0x0800054c` | 106 | `set_sysclock_to_48m` | decomp-c | VanMoof-tuned clock-tree bring-up: HSI on → clear two MM32-specific `RCC->CR` bits (20, 2) → `RCC->CFGR = 0x400` (PPRE=/2) → `FLASH->ACR = 0x11` (1 WS + prefetch) → switch `SW` to `10` (PLL) → wait `SWS == 10`. Skips the standard MindMotion PLLMUL/PLLSRC/PLLON sequence — relies on MM32F031's "SW=PLL with PLLMUL=0" routing 48 MHz directly. |
 | `0x080000c8` | 28 | `uart1_send_byte` | decomp-c | UART1 single-byte send-and-wait: `USART_SendData(USART1, b)` then spin on `USART_GetFlagStatus(USART1, 1)` (SR bit 0 = TX-ready). VanMoof-custom wrapper; calls vendor-stock HAL primitives. |
 | `0x080000e4` | 28 | `uart1_send_buf`  | decomp-c | UART1 buffer transmit loop on top of `uart1_send_byte`; `len` is `uint16_t` (compiler emits `uxth` on each iteration). |
