@@ -17,6 +17,7 @@ slot is "current".
 | Size | 8192 bytes (one CC2642R1F flash sector, 8 KB) |
 | Version | `1.0.0` (Apr 23 2020 14:10:12 — `BVER` block at offset `0x1F34`) |
 | SHA-256 | `24cdebf92b263b3a1729d1cef6a87de8108217850a574d65a3e1b579fea866af` |
+| SHA-512 | `efcef2f649aca663b6343daf1efda7852bdc59497c1bf3551a0061648ea72686111e4d74bedc92d0d20470131a8d5e83f1a666d2b7daa9f410c75f184dc5d601` |
 
 This is the *first* (oldest) shipped bleboot — mirrors
 shifterware/mainware's "oldest-as-baseline" policy. A `1.0.1` exists
