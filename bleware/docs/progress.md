@@ -174,24 +174,57 @@ keeps `source/monitor/cmd_extflash.c`'s string blob alive). For
 `cmd_extflash.c` specifically, only `extflash-verify` is reachable
 from a registered monitor command — see `src/monitor/cmd_extflash.c`.
 
-**`cmd_extflash_verify` @ `0x0000ABD8`** — universal monitor
-command-handler signature `int cmd(int verb, void *p2, void *p3,
-uint32_t p4)`. Verb selector: `0` = REGISTER (calls
-`monitor_register_command(name, help, ...)`), `1` = PRINT_HELP (calls
-`monitor_print_help_line(out, name, mask)`), `2` = EXECUTE (runs the
-command). This dispatcher shape is shared by every `cmd_*` handler in
-bleware; with the signature locked in, decoding the other 18 cmd_*
-handlers reduces to pattern-matching the three verb arms and naming
-the helpers each one calls.
+**Monitor command-handler ABI** — every `cmd_*` handler exposes
+one entry point with the universal signature `int cmd(int verb,
+void *p2, void *p3, uint32_t p4)` and dispatches on `verb`:
+
+  - `0` **PRINT_HELP** — calls `monitor_print_help_line(name,
+    description)` (OEM `0x00021244`, the printf-style helper that
+    emits `"    %-33s - %s\r\n"` via `monitor_log`). Walked by
+    `cmd_help` over the static command table.
+  - `1` **FILL_NAME** — calls `memcpy(p2, name, 0x10)` to copy the
+    command name into a caller-provided 16-byte buffer. Used by the
+    monitor's tab-complete / introspection path.
+  - `2` **EXECUTE** — runs the command with user-input string at `p2`.
+  - default — return `1`.
+
+  Return value: `0` on success; non-zero values have command-
+  specific meaning (`monitor_dispatch_loop` treats a non-zero return
+  as "not my command — try the next").
+
+**The registry IS the static table at `0x0002A0BC`** — 27+ function
+pointers, NULL-terminated. No startup registration walker exists.
+The table is walked by:
+  - `cmd_help` (OEM `0x00013C20`) with verb=0
+  - `monitor_dispatch_loop` (OEM `0x00024B38`) with verb=2
+
+**ABI history note** — early in the decomp the function at OEM
+`0x00021244` was misidentified as `monitor_register_command` and
+`0x00018654` was misidentified as `monitor_print_help_line`. The
+strings at `0x00021258` (`"source/monitor/cmd_help.c"`) and
+`0x00021278` (`"    %-33s - %s\r\n"`) together with the unique
+many-callers fingerprint of `0x00018654` (it's `memcpy`) corrected
+both. The verb selector is correspondingly reordered: there is no
+"register" verb in this binary.
 
 **`cmd_help` @ `0x00013C20`** — the help-printer dispatcher.
 Identified body:
 
 1. Logs two banner lines from `source/monitor/cmd_help.c` (`FUN_00006D90(file, 0x2D, "cmd_help", 8)` twice)
 2. Iterates a NULL-terminated table at flash `0x0002A0BC`
-   (16+ function pointers, each a per-module help printer
-   registered by the cmd_*.c modules)
-3. Calls each printer with `arg = 0` ("emit your help text")
+   (27+ function pointers, each a per-module cmd_* handler)
+3. Calls each handler with `verb=0` (PRINT_HELP — emit one
+   help-table row via `monitor_print_help_line`)
+
+**`monitor_dispatch_loop` @ `0x00024B38`** — **Decoded** —
+`src/monitor/dispatcher.c`. 36 B body + 4 B literal pool. Walks
+the static command table at `0x0002A0BC`, calling each handler
+with `verb=2` and `p2 = user-input string`. Returns 1 if any
+handler returned 0 (matched & executed), or 0 if the table is
+exhausted / empty. GCC produces the same total size as the OEM
+CGT/armcc build (36 B body); only register allocation differs
+(OEM uses an explicit `r5` return-value flag, GCC uses literal
+`movs r0, #0` / `movs r0, #1` exits).
 
 The table head at `0x0002A0BC` resolves to addresses like
 `0x0001A969`, `0x0000ABD9`, `0x0001699D`, `0x0000C2D5`, `0x00016DCD`,
@@ -279,10 +312,11 @@ Helper functions now named in bleware Ghidra (all vendor-stock TI driverlib, sam
 | Address | Name | Role |
 | --- | --- | --- |
 | `0x0001878C` | `SetupTrimDevice` | silicon trim entry from Reset_Handler |
-| `0x000266C8` | `bim_chip_assert_supported` | family/HW-rev check (CC13x2 fam 4, rev ≥ 0x14) |
-| `0x00025D24` | `bim_chip_family` | reads FCFG1 family byte |
-| `0x00021BCC` | `bim_chip_hw_revision` | reads FCFG1 hw-rev byte |
-| `0x000173E8` | `bim_setup_after_cold_reset_cfg1` | cold-reset trim cfg helper (called when `BB_AON_GATE` is set) |
+| `0x000266C8` | `bim_chip_assert_supported` | **Decoded** — `src/chipinfo.c`. Spin-traps unless family == CC13x2/CC26x2 and HwRev ≥ 20 (PG2.0). |
+| `0x00025D24` | `bim_chip_family` | **Decoded** — `src/chipinfo.c`. Reads FCFG1.ICEPICK_DEVICE_ID (0x50001318); PARTNO at bits [27:12] == 0xBB41 → family 4, else -1. |
+| `0x00021BCC` | `bim_chip_hw_revision` | **Decoded** — `src/chipinfo.c`. Returns HwRevision_t enum from FCFG1.ICEPICK_DEVICE_ID PG-rev nibble + FCFG1.MINOR_HW_REV byte (0x500010A0). PG2 base 11, PG3 base 21 (preserves OEM driverlib numbering quirk vs current SDK). |
+| `0x000173E8` | `bim_setup_after_cold_reset_cfg1` | cold-reset trim cfg helper (called when `BB_AON_GATE` is set). **Decoded** — `src/setup_cold_reset.c`. Walks FCFG2/FCFG1 fuse words, pokes ADI3/DDI0/AON-shadow trim regs, drives the ROM HAPI cold-reset state machine (slots 0/1/2 of ROM_API_TABLE[28]), and sets the FLASH trim-done bit-band at 0x42600494. Byte-shape identical to bleboot's at flash 0x00056490. |
+| `0x00023AF4` | `bim_setup_adi_step` | analog-config sequencer at MMIO 0x400C6000. **Decoded** — `src/setup_cold_reset.c`. Steps the live ADI mode toward target=2 via the 8-byte LUT at flash `0x0002BA64` (`01 02 00 03 02 00 01 03` — identical content to bleboot's LUT at flash `0x000571D8`). |
 
 The architectural difference: bleboot is built with TI's GCC tooling
 and uses straightforward inline calls. bleware is built with what

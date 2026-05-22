@@ -17,24 +17,30 @@
  *
  * where `verb` selects mode:
  *
- *   verb == 0  REGISTER: tell the monitor about this command
- *              (name + 1-line description). The handler calls
- *              `monitor_register_command(name, help, ...)`.
+ *   verb == 0  PRINT_HELP: emit one help-table row. Handler calls
+ *              `monitor_print_help_line(name, description)` — the
+ *              printf-style helper at OEM 0x00021244 that formats
+ *              `"    %-33s - %s\r\n"` and writes it to the monitor log.
+ *              Walked by `cmd_help` over the static command table.
  *
- *   verb == 1  PRINT_HELP: dump the help block to the output handle
- *              `p2`. Typically a single `monitor_print_help_line(out,
- *              name, mask)` for short commands.
+ *   verb == 1  FILL_NAME: write the command name into the caller's
+ *              16-byte buffer at `p2` (via `memcpy(p2, name, 0x10)`).
+ *              Used by the monitor's tab-complete / introspection path.
  *
- *   verb == 2  EXECUTE: run the command with the parsed arguments
- *              in `p2/p3/p4`.
+ *   verb == 2  EXECUTE: run the command with the user-input string
+ *              in `p2`.
  *
  *   default    return 1 (unrecognised verb).
  *
  *   return 0 on success; non-zero error codes have command-specific
  *   semantics (2 = "could not open NVS", etc.).
  *
- * Same dispatcher shape verified against `cmd_help` (`0x00013C20`)
- * and the other monitor handlers in the cmd_*.c family.
+ * The registry IS the static table at OEM 0x0002A0BC — 27+ function
+ * pointers, NULL-terminated, walked by:
+ *   - `cmd_help` (OEM 0x00013C20)         with verb=0 (PRINT_HELP)
+ *   - `monitor_dispatch_loop` (OEM 0x00024B38) with verb=2 (EXECUTE)
+ * There is no startup registration walker — the table itself is
+ * authoritative.
  */
 
 #include "bleware.h"
@@ -50,12 +56,15 @@
 extern void monitor_log(const char *file, int line, const char *fn,
                         int level, const char *fmt, ...);
 
-extern int  monitor_register_command(const char *name,
-                                     const char *help,
-                                     int reserved,
-                                     uint32_t p4, void *p3, uint32_t p5);
-extern int  monitor_print_help_line(void *out, const char *name,
-                                    int width);
+/* OEM 0x00021244 — emit one row of the help table via monitor_log
+ * with format "    %-33s - %s\r\n". */
+extern int  monitor_print_help_line(const char *name,
+                                    const char *description);
+
+/* C standard memcpy — OEM 0x00018654, the word-aligned-fast-path
+ * implementation. Each cmd_* handler uses it on verb=1 to copy its
+ * 16-byte name into the caller's buffer. */
+extern void *memcpy(void *dst, const void *src, unsigned int n);
 
 /* ---- ext-flash device wrappers ----
  *
@@ -83,8 +92,8 @@ static const char K_FILE[] = "source/monitor/cmd_extflash.c";
 
 /* Verb selector — universal across all cmd_*.c handlers. */
 enum cmd_verb {
-    CMD_VERB_REGISTER   = 0,
-    CMD_VERB_PRINT_HELP = 1,
+    CMD_VERB_PRINT_HELP = 0,
+    CMD_VERB_FILL_NAME  = 1,
     CMD_VERB_EXECUTE    = 2,
 };
 
@@ -100,16 +109,14 @@ enum cmd_verb {
  *   2  — could not open NVS handle. */
 int cmd_extflash_verify(int verb, void *p2, void *p3, uint32_t p4)
 {
-    if (verb == CMD_VERB_PRINT_HELP) {
-        monitor_print_help_line(p2, "extflash-verify", 0x10);
+    if (verb == CMD_VERB_FILL_NAME) {
+        memcpy(p2, "extflash-verify", 0x10);
         return 0;
     }
 
-    if (verb == CMD_VERB_REGISTER) {
-        monitor_register_command(
-            "extflash-verify",
-            "verify the current flashchip",
-            0, p4, p3, p4);
+    if (verb == CMD_VERB_PRINT_HELP) {
+        monitor_print_help_line("extflash-verify",
+                                "verify the current flashchip");
         return 0;
     }
 

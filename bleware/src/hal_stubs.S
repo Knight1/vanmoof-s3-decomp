@@ -44,8 +44,8 @@ name: ; \
     .size   name, .-name
 
     WEAK_NOOP(monitor_log)
-    WEAK_NOOP(monitor_register_command)
     WEAK_NOOP(monitor_print_help_line)
+    WEAK_NOOP(memcpy)
     WEAK_NOOP(nvs_open)
     WEAK_NOOP(extflash_open)
     WEAK_NOOP(extflash_close)
