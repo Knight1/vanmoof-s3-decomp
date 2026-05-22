@@ -66,50 +66,6 @@ void SetupTrimDevice(void)
     }
 }
 
-/* ---- vendor-stock helpers SetupTrimDevice depends on ---------------
- *
- * These are stubs for now. The OEM bodies are at:
- *   bim_chip_assert_supported     @ 0x000266C8
- *   bim_chip_family               @ 0x00025D24
- *   bim_chip_hw_revision          @ 0x00021BCC
- *   bim_setup_after_cold_reset_cfg1 @ 0x000173E8
- *
- * Decoding each is a separate decomp task. For the skeleton build,
- * we provide minimal stubs that satisfy the link and (where
- * possible) the runtime behaviour. */
-
-__attribute__((weak))
-uint32_t bim_chip_family(void)
-{
-    /* CC13x2/CC26x2 = family 4. Hardcode for now — the OEM reads
-     * this out of an FCFG1 chip-info word. */
-    return 4u;
-}
-
-__attribute__((weak))
-uint32_t bim_chip_hw_revision(void)
-{
-    /* HwRev 0x14 or later is required. Hardcode to a safe value
-     * for the skeleton. */
-    return 0x14u;
-}
-
-__attribute__((weak))
-void bim_chip_assert_supported(void)
-{
-    if (bim_chip_family() != 4u) {
-        for (;;) { /* halt */ }
-    }
-    if (bim_chip_hw_revision() < 0x14u) {
-        for (;;) { /* halt */ }
-    }
-}
-
-__attribute__((weak))
-void bim_setup_after_cold_reset_cfg1(uint32_t fcfg1_rev)
-{
-    /* TI driverlib SetupAfterColdResetWakeupFromShutDownCfg1 — the
-     * full body is ~148 B of pool-word-heavy MMIO setup. Stubbed
-     * for the skeleton; decoding tracked separately. */
-    (void)fcfg1_rev;
-}
+/* bim_setup_after_cold_reset_cfg1 is decoded in setup_cold_reset.c;
+ * the chipinfo helpers (bim_chip_family / bim_chip_hw_revision /
+ * bim_chip_assert_supported) are decoded in chipinfo.c. */

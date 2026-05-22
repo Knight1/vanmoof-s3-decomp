@@ -21,9 +21,10 @@ void  cinit_walker(void);
 /* TI driverlib helpers used by Reset_Handler. */
 void     SetupTrimDevice(void);
 void     bim_chip_assert_supported(void);
-uint32_t bim_chip_family(void);
-uint32_t bim_chip_hw_revision(void);
+int32_t  bim_chip_family(void);
+int32_t  bim_chip_hw_revision(void);
 void     bim_setup_after_cold_reset_cfg1(uint32_t fcfg1_rev);
+void     bim_setup_adi_step(uint32_t target_code);
 
 /* TI BIOS-init helpers main calls. */
 void  tirtos_modules_init(void);
