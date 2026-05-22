@@ -702,7 +702,7 @@ Helpers named in Ghidra:
 | `0x000265C4` | `oad_status_notify` | publishes the status byte on char `0x5513` |
 | `0x00025060` | `oad_session_close` | tear-down (releases lock, resets conn_handle to 0xFFFF) |
 | `0x00016A50` | `extflash_erase_range` | **Decoded** — `src/extflash.c`. 4 KB-sector erase loop, semaphore-locked, 3- or 4-byte addressing per chip capacity. `secrets_sector_erase` @ `0x00026C30` is a fixed-address wrapper around this. |
-| `0x00015B9C` | `extflash_write` | generic ext-flash write |
+| `0x00015B9C` | `extflash_write` | **Decoded** — `src/extflash.c`. Page-Program (0x02) loop, splits writes at 256 B page boundaries (PP wraps within a page). Caller must pre-erase. |
 
 ### `extflash.c` — external SPI NOR-flash driver
 
@@ -712,6 +712,7 @@ Standard SPI NOR opcodes (sourced indirectly from per-chip command tables so the
 
 | opcode | mnemonic | role |
 | --- | --- | --- |
+| `0x02` | PP   | page program — 256 B page; writes that cross a page boundary are split by `extflash_write` |
 | `0x05` | RDSR | read status register, WIP = bit 0 (busy-wait loop in `extflash_wait_wip_clear`) |
 | `0x06` | WREN | write-enable latch, framed by CS assert/deassert in `extflash_write_enable` |
 | `0x20` | SE   | 4 KB sector erase — 3-byte address if `capacity ≤ 16 MiB`, 4-byte otherwise |

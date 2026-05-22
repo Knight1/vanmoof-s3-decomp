@@ -70,6 +70,8 @@ extern struct extflash_state g_extflash_state;   /* DAT_00016AFC */
 
 #define EXTFLASH_SECTOR_SIZE     0x1000u
 #define EXTFLASH_SECTOR_MASK     0xFFFFF000u      /* DAT_00016B00 */
+#define EXTFLASH_PAGE_SIZE       0x100u
+#define EXTFLASH_OP_PAGE_PROGRAM 0x02u
 #define EXTFLASH_OP_SECTOR_ERASE 0x20u
 
 /* Erase every 4 KB sector touched by [addr, addr+len). Aligns the
@@ -126,6 +128,68 @@ int extflash_erase_range(uint32_t addr, uint32_t len)
         if (tx_rc != 0) { ok = 0; break; }
 
         sector_addr += EXTFLASH_SECTOR_SIZE;
+    }
+
+    ti_semaphore_post(g_extflash_state.bus_mutex);
+    return ok;
+}
+
+/* Page-Program (PP, 0x02) one or more 256-byte pages. The destination
+ * range [addr, addr+len) must already be erased — PP can only flip
+ * bits 1→0. Splits at 256-byte page boundaries since PP wraps inside a
+ * page and does NOT advance to the next.
+ *
+ * Returns 1 on success, 0 on any sub-step failure.
+ *
+ * OEM @ 0x00015B9C.
+ */
+int extflash_write(uint32_t addr, uint32_t len, const void *src)
+{
+    if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
+        return 0;
+    }
+
+    const uint8_t *p = (const uint8_t *)src;
+    int ok = 1;
+    int use_4byte_addr = (g_extflash_state.chip_info->capacity > 0x01000000u);
+
+    while (len != 0) {
+        if (extflash_wait_wip_clear(NULL) != 0) { ok = 0; break; }
+        if (extflash_write_enable()        != 0) { ok = 0; break; }
+
+        /* Clamp the chunk to the current 256-byte page tail. */
+        uint32_t chunk = EXTFLASH_PAGE_SIZE - (addr & 0xFF);
+        if (chunk > len) {
+            chunk = len;
+        }
+
+        uint8_t  cmd[5];
+        uint32_t cmd_len;
+        cmd[0] = EXTFLASH_OP_PAGE_PROGRAM;
+        if (use_4byte_addr) {
+            cmd[1] = (uint8_t)(addr >> 24);
+            cmd[2] = (uint8_t)(addr >> 16);
+            cmd[3] = (uint8_t)(addr >>  8);
+            cmd[4] = (uint8_t) addr;
+            cmd_len = 5;
+        } else {
+            cmd[1] = (uint8_t)(addr >> 16);
+            cmd[2] = (uint8_t)(addr >>  8);
+            cmd[3] = (uint8_t) addr;
+            cmd_len = 4;
+        }
+
+        extflash_cs_assert();
+        int rc = extflash_spi_tx(cmd, cmd_len);
+        if (rc == 0) {
+            rc = extflash_spi_tx(p, chunk);
+        }
+        extflash_cs_deassert();
+        if (rc != 0) { ok = 0; break; }
+
+        addr += chunk;
+        p    += chunk;
+        len  -= chunk;
     }
 
     ti_semaphore_post(g_extflash_state.bus_mutex);
