@@ -34,7 +34,7 @@ void  create_bluetoothtask(void);
 void  bluetoothtask_main(void);
 
 /* Monitor (debug console). */
-void  cmd_help(void);
+int   cmd_help(int verb, void *p2, void *p3, uint32_t p4);
 int   monitor_dispatch_loop(const char *user_input);
 
 /* TI-RTOS BIOS_start (ROM thunk). */

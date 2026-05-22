@@ -35,9 +35,9 @@
  *   return 0 on success; non-zero error codes have command-specific
  *   semantics (2 = "could not open NVS", etc.).
  *
- * The registry IS the static table at OEM 0x0002A0BC — 27+ function
+ * The registry IS the static table at OEM 0x0002A0BC — 25 function
  * pointers, NULL-terminated, walked by:
- *   - `cmd_help` (OEM 0x00013C20)         with verb=0 (PRINT_HELP)
+ *   - `cmd_help` (OEM 0x00013BE8)         with verb=0 (PRINT_HELP)
  *   - `monitor_dispatch_loop` (OEM 0x00024B38) with verb=2 (EXECUTE)
  * There is no startup registration walker — the table itself is
  * authoritative.

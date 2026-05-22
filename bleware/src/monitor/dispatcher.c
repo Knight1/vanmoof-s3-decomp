@@ -17,13 +17,14 @@
  */
 
 #include "bleware.h"
+#include "monitor.h"
 
 #include <stdint.h>
 #include <stddef.h>
 
 /* The registry: a NULL-terminated array of command handlers. The OEM
  * layout is a packed function-pointer table at flash `0x0002A0BC`
- * with 27+ entries.
+ * with 25 entries.
  *
  * The handlers themselves are scattered across the cmd_*.c source
  * files; the table lives in whichever TU defines this symbol (likely
@@ -31,14 +32,12 @@
  * so each cmd_*.c file can list its handler when it lands. Until
  * then a weak fallback at the bottom of this file provides an empty
  * table so the build links. */
-typedef int (*cmd_handler_t)(int verb, void *p2, void *p3, uint32_t p4);
-
-extern const cmd_handler_t g_monitor_commands[];
+extern const monitor_cmd_handler_t g_monitor_commands[];
 
 int monitor_dispatch_loop(const char *user_input)
 {
-    const cmd_handler_t *cursor = g_monitor_commands;
-    cmd_handler_t        handler = *cursor;
+    const monitor_cmd_handler_t *cursor = g_monitor_commands;
+    monitor_cmd_handler_t        handler = *cursor;
 
     if (handler == NULL) {
         return 0;
@@ -62,6 +61,6 @@ int monitor_dispatch_loop(const char *user_input)
  * (no match), which keeps the rest of the monitor wiring testable
  * without any cmd_* handlers being present in the build. */
 __attribute__((weak))
-const cmd_handler_t g_monitor_commands[] = {
+const monitor_cmd_handler_t g_monitor_commands[] = {
     NULL,
 };

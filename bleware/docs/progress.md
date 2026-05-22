@@ -207,14 +207,67 @@ many-callers fingerprint of `0x00018654` (it's `memcpy`) corrected
 both. The verb selector is correspondingly reordered: there is no
 "register" verb in this binary.
 
-**`cmd_help` @ `0x00013C20`** — the help-printer dispatcher.
-Identified body:
+**`cmd_help` @ `0x00013BE8`** — full universal command handler.
+Decoded into `src/monitor/cmd_help.c`. Verb 1 fills the 16-byte command
+name buffer with `help`; verb 0 emits the help row (`help` / `show all
+monitor commands`); verb 2 matches the user input, logs the two banner
+lines from `source/monitor/cmd_help.c`, then iterates the static command
+table at flash `0x0002A0BC` and calls each handler with verb 0.
 
-1. Logs two banner lines from `source/monitor/cmd_help.c` (`FUN_00006D90(file, 0x2D, "cmd_help", 8)` twice)
-2. Iterates a NULL-terminated table at flash `0x0002A0BC`
-   (27+ function pointers, each a per-module cmd_* handler)
-3. Calls each handler with `verb=0` (PRINT_HELP — emit one
-   help-table row via `monitor_print_help_line`)
+**Command table @ `0x0002A0BC` decoded.** The table is a packed,
+Thumb-set function-pointer list with the first NULL after 25 entries:
+
+| Slot | Ptr | Handler | Status |
+| --- | --- | --- | --- |
+| 0 | `0x0001A969` | `cmd_firmware_update` | decoded |
+| 1 | `0x0000ABD9` | `cmd_extflash_verify` | decoded earlier |
+| 2 | `0x0001699D` | TBD | pending split/name |
+| 3 | `0x0000C2D5` | `cmd_log_dump` | decoded |
+| 4 | `0x00016DCD` | TBD | pending split/name |
+| 5 | `0x0000E191` | `cmd_log_inject` | decoded |
+| 6 | `0x0000F19D` | TBD | pending split/name |
+| 7 | `0x0001CE3D` | TBD | pending split/name |
+| 8 | `0x0001522D` | TBD | pending split/name |
+| 9 | `0x0000CAE1` | TBD | pending split/name |
+| 10 | `0x0000C615` | TBD | pending split/name |
+| 11 | `0x0001406D` | TBD | pending split/name |
+| 12 | `0x00011D4D` | `cmd_pack_list` | decoded |
+| 13 | `0x00010555` | `cmd_pack_delete` | decoded |
+| 14 | `0x000116AD` | TBD | pending split/name |
+| 15 | `0x00007A59` | `cmd_ble_info` | decoded |
+| 16 | `0x0001B3C5` | TBD | pending split/name |
+| 17 | `0x0001E8B9` | TBD | pending split/name |
+| 18 | `0x0001DCD1` | TBD | pending split/name |
+| 19 | `0x0000F6A1` | TBD | pending split/name |
+| 20 | `0x00010079` | TBD | pending split/name |
+| 21 | `0x0001D8E5` | TBD | pending split/name |
+| 22 | `0x0001B441` | `cmd_info_ver` | decoded |
+| 23 | `0x00014839` | TBD | pending split/name |
+| 24 | `0x00013BE9` | `cmd_help` | decoded |
+
+New monitor handlers translated in this pass:
+
+- `cmd_firmware_update` (`0x0001A968`) — command `firmware_update`; on
+  execute calls the OAD firmware-update entry (`FUN_0000D444`).
+- `cmd_log_dump` (`0x0000C2D4`) — command `log_dump <start_index> <n>`;
+  validates the requested range against the current log-block count,
+  formats each selected block into a 16-byte stack buffer, logs it, and
+  sleeps/yields 4 ticks between rows.
+- `cmd_log_inject` (`0x0000E190`) — command `log_inject <n>`; logs the
+  current count, allocates 0x18-byte fake log blocks, writes
+  `logblock <%d>`, submits each block on channel 0x1D, then frees it.
+- `cmd_pack_list` (`0x00011D4C`) — command `pack_list`; opens the PACK
+  archive at external-flash base `0x80000`, logs a scan banner, walks
+  entries, formats each entry size, and logs name/size rows.
+- `cmd_pack_delete` (`0x00010554`) — command `pack_delete`; opens
+  external flash, erases 0x180 sectors of 0x1000 bytes starting at
+  `0x80000`, logs progress percentage, then logs `Done`.
+- `cmd_ble_info` (`0x00007A58`) — command `ble_info`; reports active BLE
+  connections out of 3, per-connection rider-app flag, timeout, latency,
+  interval and peer address, then logs the local device address.
+- `cmd_info_ver` (`0x0001B440`) — command row `info/ver`; execute matches
+  either `info` or `ver` and calls the firmware-info printer at
+  `FUN_000054D8`.
 
 **`monitor_dispatch_loop` @ `0x00024B38`** — **Decoded** —
 `src/monitor/dispatcher.c`. 36 B body + 4 B literal pool. Walks

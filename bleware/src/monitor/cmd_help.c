@@ -1,50 +1,51 @@
-/* monitor/cmd_help.c — `help` command handler.
+/* monitor/cmd_help.c — monitor `help` command handler.
  *
- * OEM at 0x00013C20 (~64 B). Iterates a NULL-terminated table of
- * per-module help-printer function pointers and calls each with `0`
- * as arg ("emit your help block"). The table head is at flash
- * 0x0002A0BC (16+ entries).
- *
- * Logs two header lines before the iteration:
- *   FUN_00006D90("source/monitor/cmd_help.c", 0x2D, "cmd_help", 8);
- *   FUN_00006D90("source/monitor/cmd_help.c", 0x2E, "cmd_help", 8);
- * The format strings these refer to (`Available commands:` /
- * `─────────────────` or similar) live in flash and aren't yet
- * decoded.
- *
- * Skeleton: just iterate the registered help printers; the
- * structured-log emit is stubbed.
+ * OEM @ 0x00013BE8. Universal cmd_* ABI entry in the command table at
+ * 0x0002A0BC. Besides printing its own help row, EXECUTE logs the help
+ * banner and then walks the same command table with verb 0.
  */
 
 #include "bleware.h"
+#include "monitor.h"
 
 #include <stdint.h>
 
-/* Per-module help printer registration. The OEM keeps this as a
- * static NULL-terminated array at flash 0x0002A0BC. Skeleton:
- * weak-symbol-based registration — each cmd_*.c that has help text
- * provides a `pf_*_help` function and registers it via the linker
- * by being included in the build. */
-typedef void (*help_printer_t)(int unused);
+extern const monitor_cmd_handler_t g_monitor_commands[];
 
-extern help_printer_t g_help_printers[];
+static const char K_FILE[] = "source/monitor/cmd_help.c";
 
-void cmd_help(void)
+int cmd_help(int verb, void *p2, void *p3, uint32_t p4)
 {
-    /* TODO: emit the two banner lines (logged at file:line
-     * cmd_help.c:0x2D and :0x2E in the OEM). The structured-log
-     * function isn't yet decomp'd; leave it unstubbed so this
-     * compiles. */
+    (void)p3;
+    (void)p4;
 
-    for (help_printer_t *pf = g_help_printers; *pf != 0; pf++) {
-        (*pf)(0);
+    if (verb == MON_CMD_FILL_NAME) {
+        memcpy(p2, "help", 5);
+        return 0;
     }
-}
 
-/* Skeleton: empty help-printer table. Each cmd_*.c module will
- * append its own printer here as it's decoded. */
-__attribute__((weak))
-help_printer_t g_help_printers[] = {
-    /* (*)(int) → emit-help-block */
-    0,  /* NULL-terminator */
-};
+    if (verb == MON_CMD_PRINT_HELP) {
+        monitor_print_help_line("help", "show all monitor commands");
+        return 0;
+    }
+
+    if (verb != MON_CMD_EXECUTE) {
+        return 1;
+    }
+
+    if (monitor_command_matches((const char *)p2, "help") == 0) {
+        return 2;
+    }
+
+    monitor_log(K_FILE, 0x2d, "cmd_help", 8,
+                "The following commands are available:\r\n");
+    monitor_log(K_FILE, 0x2e, "cmd_help", 8, "\r\n");
+
+    const monitor_cmd_handler_t *cursor = g_monitor_commands;
+    while (*cursor != 0) {
+        (*cursor)(MON_CMD_PRINT_HELP, p2, 0, 0);
+        cursor++;
+    }
+
+    return 0;
+}
