@@ -166,7 +166,6 @@ g_ti_tick_period_us:
     WEAK_NOOP(extflash_spi_rx)
     WEAK_NOOP(extflash_wait_wip_clear)
     WEAK_NOOP(extflash_write_enable)
-    WEAK_NOOP(ti_semaphore_post)
 
 /* Singleton state struct (OEM `DAT_00016AFC`). 16-byte placeholder so
  * the skeleton links; the real RAM is populated by the extflash

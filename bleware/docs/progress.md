@@ -701,8 +701,33 @@ Helpers named in Ghidra:
 | `0x00020098` | `oad_state_lock` | Semaphore_pend wrapper for the OAD state |
 | `0x000265C4` | `oad_status_notify` | publishes the status byte on char `0x5513` |
 | `0x00025060` | `oad_session_close` | tear-down (releases lock, resets conn_handle to 0xFFFF) |
-| `0x00016A50` | `extflash_erase_range` | generic 4 KB-sector erase (`secrets_sector_erase` @ `0x00026C30` is a fixed-address wrapper around this) |
+| `0x00016A50` | `extflash_erase_range` | **Decoded** — `src/extflash.c`. 4 KB-sector erase loop, semaphore-locked, 3- or 4-byte addressing per chip capacity. `secrets_sector_erase` @ `0x00026C30` is a fixed-address wrapper around this. |
 | `0x00015B9C` | `extflash_write` | generic ext-flash write |
+
+### `extflash.c` — external SPI NOR-flash driver
+
+**Partially decoded** — `extflash_erase_range` (`bleware/src/extflash.c`). Hand-rolled SPI driver, not a TI-SDK driver instance. Singleton state at OEM `g_extflash_state` (DAT_00016AFC) carries a `chip_info` pointer (capacity at `+0x00`) and a TI-RTOS bus mutex at `+0x0C`.
+
+Standard SPI NOR opcodes (sourced indirectly from per-chip command tables so the driver ports across vendors):
+
+| opcode | mnemonic | role |
+| --- | --- | --- |
+| `0x05` | RDSR | read status register, WIP = bit 0 (busy-wait loop in `extflash_wait_wip_clear`) |
+| `0x06` | WREN | write-enable latch, framed by CS assert/deassert in `extflash_write_enable` |
+| `0x20` | SE   | 4 KB sector erase — 3-byte address if `capacity ≤ 16 MiB`, 4-byte otherwise |
+
+`extflash_erase_range(addr, len)` aligns `addr` down to 4 KB (`& 0xFFFFF000`), then erases `((addr+len) - aligned + 0xFFE) >> 12` sectors. Each iteration: pend bus mutex → wait WIP clear → WREN → emit SE cmd over CS-framed SPI burst → advance. Returns 1 on success, 0 on any sub-step failure.
+
+Helpers exposed as weak stubs (until each lands in its own .c):
+
+| Addr | Name | Role |
+| --- | --- | --- |
+| `0x00026F94` | `extflash_cs_assert` | CS = 0 (via `FUN_00022E08`, the IOC GPIO writer) |
+| `0x00026F84` | `extflash_cs_deassert` | CS = 1 |
+| `0x00024448` | `extflash_spi_tx` | SPI bus tx via `FUN_000274E8` (driver wrapper) |
+| `0x00024418` | `extflash_spi_rx` | SPI bus rx |
+| `0x00021764` | `extflash_wait_wip_clear` | busy-wait on RDSR until WIP clears |
+| `0x00024478` | `extflash_write_enable` | one-byte WREN framed by CS |
 
 ### `log_gatt.c` — circular log readout (`svc 0x55C0`)
 
