@@ -278,7 +278,17 @@ New monitor handlers translated in this pass:
   either `info` or `ver` and calls the firmware-info printer at
   `FUN_000054D8`.
 
-**All 25 command table entries are now identified** (this pass added 16 new handler names — see the table above). Source-file mapping inferred from `monitor_log` path strings:
+**All 25 command table entries are now identified AND translated to C** (this pass: 16 new handler names + the 16 new C bodies). Translation files:
+
+- `src/monitor/cmd_log.c` — added `cmd_log_count`, `cmd_log_flush` (4 commands total now)
+- `src/monitor/cmd_audio.c` — **new file**, all 5 commands (`play`, `stop`, `dump`, `upload`, `volume_set_all`)
+- `src/monitor/cmd_packfs.c` — added `cmd_pack_upload`, `cmd_pack_process` (4 commands total now)
+- `src/monitor/cmd_ble.c` — added `cmd_ble_disconnect`, `cmd_ble_erase_all_bonds` (3 commands total now)
+- `src/monitor/cmd_os.c` — **new file**, all 4 commands (`rtos_statistics`, `rtos_nvm_compact`, `shutdown`, `reset`)
+- `src/monitor/cmd_exit.c` — **new file**, 1 command
+- `src/monitor/table.c` — full 25-entry registry in OEM order
+
+Source-file mapping inferred from `monitor_log` path strings:
 
 | Source file | Handlers |
 | --- | --- |

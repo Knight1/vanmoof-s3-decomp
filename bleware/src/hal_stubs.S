@@ -177,6 +177,35 @@ g_ti_tick_period_us:
 g_extflash_state:
     .skip    0x10
 
+/* ===== Monitor command helpers (cmd_log/cmd_os/cmd_audio/...) ===== */
+    WEAK_NOOP(log_region_erase)
+    WEAK_NOOP(log_writer_restart)
+    WEAK_NOOP(rtos_mem_get_stats)
+    WEAK_NOOP(monitor_key_wait_with_timeout)
+    WEAK_NOOP(monitor_yield_ticks)
+    WEAK_NOOP(snv_free_space_query)
+    WEAK_NOOP(snv_compact)
+    WEAK_NOOP(system_state_save)
+    WEAK_NOOP(system_power_down)
+    WEAK_NOOP(system_software_reset)
+    WEAK_NOOP(ble_gap_terminate_link)
+    WEAK_NOOP(ymodem_receive)
+    WEAK_NOOP(pack_ingest_start)
+    WEAK_NOOP(pack_upload_finalize)
+    WEAK_NOOP(audio_clip_dump_one)
+    WEAK_NOOP(audio_player_play)
+    WEAK_NOOP(audio_player_stop_or_pause)
+    WEAK_NOOP(module_publish_command)
+
+/* YModem target-offset pointer — OEM `*DAT_0000CC70`, a u32 in RAM
+ * that cmd_audio_upload writes into before invoking ymodem_receive. */
+    .section .bss.g_ymodem_target_offset, "aw", %nobits
+    .weak    g_ymodem_target_offset
+    .type    g_ymodem_target_offset, %object
+    .size    g_ymodem_target_offset, 4
+g_ymodem_target_offset:
+    .skip    4
+
 /* ===== gatt_read.c helpers ===== */
     WEAK_NOOP(gatt_config_lookup_item)
     WEAK_NOOP(ble_connection_get_session_key)
