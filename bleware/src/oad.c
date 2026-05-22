@@ -26,10 +26,10 @@
  *
  *   0x5513 (16 B, notify-only) — STATUS channel. Outgoing
  *       OAD progress / completion / error codes. Not wired in this
- *       file (sent via `oad_status_notify` -> the service's notify
+ *       file (sent via `bleware_control_event_post` -> the service's notify
  *       dispatcher -> `gatt_service_notify_dispatch(0x5510, ...)`).
  *
- * Status codes (single-byte arg to `oad_status_notify`):
+ * Status codes (single-byte arg to `bleware_control_event_post`):
  *
  *     0x12  OAD started — metadata accepted, slot erased
  *     0x13  OAD complete — final CRC matched (unencrypted file)
@@ -80,7 +80,7 @@ extern struct oad_state g_oad_state;
 
 /* Helpers — OEM addresses kept in plate. */
 extern int      oad_state_lock(uint32_t lock_handle, int timeout_ms);    /* FUN_00020098 */
-extern void     oad_status_notify(uint32_t status);                      /* FUN_000265C4 */
+extern void     bleware_control_event_post(uint32_t status);                      /* FUN_000265C4 */
 extern void     oad_session_close(void);                                 /* FUN_00025060 */
 extern void     FUN_00024740(uint8_t *dst, const uint8_t *src, uint32_t len); /* scramble decrypt */
 extern void     extflash_erase_range(uint32_t addr, uint32_t len);       /* FUN_00016A50 */
@@ -179,7 +179,7 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
         s->running_crc = 0xFFFFFFFFu;
 
         if (s->filesize <= slot_capacity) {
-            oad_status_notify(0x12);   /* metadata accepted */
+            bleware_control_event_post(0x12);   /* metadata accepted */
             return 0;
         }
 
@@ -215,7 +215,7 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
     if (extflash_open() == 0) {
         monitor_log("source/oad/oad.c", 0x11A, 0, 1,
                     "failed performing flash actions, failed extflash_open");
-        oad_status_notify(0x17);            /* flash error */
+        bleware_control_event_post(0x17);            /* flash error */
         oad_session_close();
         return -1;
     }
@@ -272,7 +272,7 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
                             s->running_crc, s->expected_crc);
                 final_status = 0x16;        /* CRC mismatch */
             }
-            oad_status_notify(final_status);
+            bleware_control_event_post(final_status);
         } else if (s->filetype < 0x7C) {
             /* Data file: publish "next-block" pseudo-command with the
              * 0-based file index. (Mainware listens on this Modbus cmd

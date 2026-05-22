@@ -89,6 +89,9 @@ int      log_gatt_write_handler(uint32_t       conn_handle,
  * intersecting [addr, addr+len). Returns 1 on success, 0 on failure. */
 int      extflash_erase_range(uint32_t addr, uint32_t len);    /* FUN_00016A50 */
 int      extflash_write(uint32_t addr, uint32_t len, const void *src); /* FUN_00015B9C */
+int      extflash_read (uint32_t addr, uint32_t len, void       *dst); /* FUN_0001C5A4 */
+struct extflash_chip_info;
+const struct extflash_chip_info *extflash_get_chip_info(void);         /* FUN_000273D0 */
 
 /* Central GATT read dispatcher (src/gatt_read.c). Read-side analogue
  * of xs3_gatt_process_write_event. Called by the TI BLE-stack

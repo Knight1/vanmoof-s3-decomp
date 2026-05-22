@@ -55,9 +55,68 @@ extern int  extflash_write_enable(void);
 /* Per-chip state. We only access the two fields touched by
  * `extflash_erase_range` — chip-info pointer and the bus semaphore. */
 struct extflash_chip_info {
-    uint32_t capacity;        /* bytes; > 0x01000000 ⇒ 4-byte addressing */
-    /* ... other fields (page size, mfgr, …) not used here */
+    uint32_t    capacity;     /* +0x00 bytes; > 0x01000000 ⇒ 4-byte addressing */
+    uint8_t     jedec_mfgr;   /* +0x04 REMS byte 1 (e.g. 0xC2 Macronix, 0xEF Winbond) */
+    uint8_t     jedec_dev;    /* +0x05 REMS byte 2 ("capacity-3" device id) */
+    uint16_t    _pad6;        /* +0x06 always 0x0000 */
+    const char *part_name;    /* +0x08 → 12-byte slot in g_extflash_part_name_table */
+    uint32_t    sector_size;  /* +0x0C bytes (always 0x1000 in observed entries) */
 };
+
+/* Supported parts (from the embedded vendor table at flash 0x0002A46C):
+ *
+ *   capacity      mfgr/dev   part
+ *   0x04000000    C2 / 19    MX25L51245G   (Macronix 512 Mb)
+ *   0x00200000    C2 / 15    MX25R1635F    (Macronix 16 Mb ULP)
+ *   0x00100000    C2 / 14    MX25R8035F    (Macronix 8 Mb ULP)
+ *   0x00080000    EF / 12    W25X40CL      (Winbond 4 Mb)
+ *   0x00040000    EF / 11    W25X20BV      (Winbond 2 Mb)
+ *
+ * Only the MX25L51245G part requires 4-byte addressing — the other four
+ * fit inside the 16 MiB / 24-bit boundary. The S3 production bike ships
+ * with the 64 MiB MX25L51245G (consistent with the 0x80000-step OAD
+ * slot map and the 0x03FDD000 log region). The smaller parts are
+ * legacy / dev-rig fall-backs that this firmware still supports.
+ */
+
+/* Top of the chip-info table at flash 0x0002A450. Bytes 0..27 are a
+ * driver-level header; the per-vendor entries (the array we search
+ * against the REMS read) start at +0x1C and are 16 bytes each. The
+ * array is terminated by a row of zeros (`capacity == 0`).
+ *
+ *   +0x00 u8   enter_4byte_mode_cmd  (0xB7  EN4B)
+ *   +0x01 u8   rdsr_cmd              (0x05  RDSR) ← sourced by wait_wip_clear
+ *   +0x02 u8   wren_cmd              (0x06  WREN) ← sourced by write_enable
+ *   +0x03 u8   wrsr_cmd              (0x01  WRSR)
+ *   +0x04 u8   pad
+ *   +0x05..+0x08  4-byte REMS cmd burst (90 FF FF 00 — opcode + dummy
+ *                                         addr selecting which byte
+ *                                         comes out first)
+ *   +0x09..+0x0B  pad
+ *   +0x0C..+0x1B  16-byte SPI driver init params (TI-SDK SPI_Params
+ *                                                 template, copied
+ *                                                 verbatim into the
+ *                                                 stack frame by
+ *                                                 extflash_open)
+ *   +0x1C..      vendor entry array (struct extflash_chip_info[]) */
+extern const struct extflash_chip_info g_extflash_vendor_table[];     /* DAT_0001A3A8 → 0x0002A46C */
+extern const uint8_t                   g_extflash_driver_header[];    /* 0x0002A450 */
+extern const char                      g_extflash_part_name_table[][12];
+
+/* `extflash_identify_chip` — REMS-based JEDEC ID probe.
+ *
+ * Sends the 4-byte REMS burst from the driver header, reads 2 bytes
+ * back (mfgr, dev), and linearly searches `g_extflash_vendor_table`
+ * for a match. On hit, writes the entry pointer into
+ * `g_extflash_state.chip_info` and (if the part is > 16 MiB) sends
+ * the 0xB7 EN4B byte to switch the chip into 4-byte addressing mode
+ * so subsequent READ/PP/SE opcodes can use 32-bit addresses.
+ *
+ * Returns 1 on match (chip_info is now valid), 0 otherwise.
+ *
+ * OEM @ 0x0001A328.
+ */
+extern int extflash_identify_chip(void);
 
 struct extflash_state {
     uint32_t                          _pad0;
@@ -71,6 +130,7 @@ extern struct extflash_state g_extflash_state;   /* DAT_00016AFC */
 #define EXTFLASH_SECTOR_SIZE     0x1000u
 #define EXTFLASH_SECTOR_MASK     0xFFFFF000u      /* DAT_00016B00 */
 #define EXTFLASH_PAGE_SIZE       0x100u
+#define EXTFLASH_OP_READ         0x03u
 #define EXTFLASH_OP_PAGE_PROGRAM 0x02u
 #define EXTFLASH_OP_SECTOR_ERASE 0x20u
 
@@ -132,6 +192,59 @@ int extflash_erase_range(uint32_t addr, uint32_t len)
 
     ti_semaphore_post(g_extflash_state.bus_mutex);
     return ok;
+}
+
+/* Standard READ (0x03) — single SPI burst, no dummy cycle, no per-page
+ * splitting (READ keeps incrementing the internal address as long as
+ * CS stays asserted).
+ *
+ * Returns 1 on success, 0 on any sub-step failure.
+ *
+ * OEM @ 0x0001C5A4.
+ */
+int extflash_read(uint32_t addr, uint32_t len, void *dst)
+{
+    if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
+        return 0;
+    }
+    if (extflash_wait_wip_clear(NULL) != 0) {
+        ti_semaphore_post(g_extflash_state.bus_mutex);
+        return 0;
+    }
+
+    uint8_t  cmd[5];
+    uint32_t cmd_len;
+    int use_4byte_addr = (g_extflash_state.chip_info->capacity > 0x01000000u);
+    cmd[0] = EXTFLASH_OP_READ;
+    if (use_4byte_addr) {
+        cmd[1] = (uint8_t)(addr >> 24);
+        cmd[2] = (uint8_t)(addr >> 16);
+        cmd[3] = (uint8_t)(addr >>  8);
+        cmd[4] = (uint8_t) addr;
+        cmd_len = 5;
+    } else {
+        cmd[1] = (uint8_t)(addr >> 16);
+        cmd[2] = (uint8_t)(addr >>  8);
+        cmd[3] = (uint8_t) addr;
+        cmd_len = 4;
+    }
+
+    extflash_cs_assert();
+    int rc = extflash_spi_tx(cmd, cmd_len);
+    if (rc == 0) {
+        rc = extflash_spi_rx(dst, len);
+    }
+    extflash_cs_deassert();
+    ti_semaphore_post(g_extflash_state.bus_mutex);
+    return (rc == 0);
+}
+
+/* Returns the chip-info pointer stored on the singleton state struct
+ * (populated at driver init from the JEDEC ID read). OEM @ 0x000273D0
+ * — just `return g_extflash_state.chip_info`. */
+const struct extflash_chip_info *extflash_get_chip_info(void)
+{
+    return g_extflash_state.chip_info;
 }
 
 /* Page-Program (PP, 0x02) one or more 256-byte pages. The destination

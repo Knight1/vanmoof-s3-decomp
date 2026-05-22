@@ -226,33 +226,33 @@ entry. The Ghidra function has been recreated at the right address.
 **Command table @ `0x0002A0BC` decoded.** The table is a packed,
 Thumb-set function-pointer list with the first NULL after 25 entries:
 
-| Slot | Ptr | Handler | Status |
-| --- | --- | --- | --- |
-| 0 | `0x0001A969` | `cmd_firmware_update` | decoded |
-| 1 | `0x0000ABD9` | `cmd_extflash_verify` | decoded earlier |
-| 2 | `0x0001699D` | TBD | pending split/name |
-| 3 | `0x0000C2D5` | `cmd_log_dump` | decoded |
-| 4 | `0x00016DCD` | TBD | pending split/name |
-| 5 | `0x0000E191` | `cmd_log_inject` | decoded |
-| 6 | `0x0000F19D` | TBD | pending split/name |
-| 7 | `0x0001CE3D` | TBD | pending split/name |
-| 8 | `0x0001522D` | TBD | pending split/name |
-| 9 | `0x0000CAE1` | TBD | pending split/name |
-| 10 | `0x0000C615` | TBD | pending split/name |
-| 11 | `0x0001406D` | TBD | pending split/name |
-| 12 | `0x00011D4D` | `cmd_pack_list` | decoded |
-| 13 | `0x00010555` | `cmd_pack_delete` | decoded |
-| 14 | `0x000116AD` | TBD | pending split/name |
-| 15 | `0x00007A59` | `cmd_ble_info` | decoded |
-| 16 | `0x0001B3C5` | TBD | pending split/name |
-| 17 | `0x0001E8B9` | TBD | pending split/name |
-| 18 | `0x0001DCD1` | TBD | pending split/name |
-| 19 | `0x0000F6A1` | TBD | pending split/name |
-| 20 | `0x00010079` | TBD | pending split/name |
-| 21 | `0x0001D8E5` | TBD | pending split/name |
-| 22 | `0x0001B441` | `cmd_info_ver` | decoded |
-| 23 | `0x00014839` | TBD | pending split/name |
-| 24 | `0x00013BE9` | `cmd_help` | decoded |
+| Slot | Ptr | Handler | Name | Effect (verb=2) |
+| --- | --- | --- | --- | --- |
+| 0  | `0x0001A969` | `cmd_firmware_update` | `firmware_update` | calls OAD entry `FUN_0000D444` |
+| 1  | `0x0000ABD9` | `cmd_extflash_verify` | `extflash_verify` | scans ext-flash CRC |
+| 2  | `0x0001699D` | `cmd_log_count` | `log_count` | logs `log_block_count_get()` value |
+| 3  | `0x0000C2D5` | `cmd_log_dump` | `log_dump <start_idx> <n>` | dumps N 16 B log blocks |
+| 4  | `0x00016DCD` | `cmd_log_flush` | `log_flush` | erases the 128 KB log region (`FUN_000230D8`) and restarts the log writer (`FUN_00017B24`) |
+| 5  | `0x0000E191` | `cmd_log_inject` | `log_inject <n>` | submits N fake `logblock <%d>` entries |
+| 6  | `0x0000F19D` | `cmd_audio_play` | `audio_play <index>` | calls `FUN_000275B8(index & 0xFF)`; rejects index ≥ 0x7B |
+| 7  | `0x0001CE3D` | `cmd_audio_stop` | `audio_stop` | calls `FUN_00027630(1)` |
+| 8  | `0x0001522D` | `cmd_audio_dump` | `audio_dump` | opens ext-flash, loops 0..0x7A calling `FUN_0000D5CC` to dump each clip |
+| 9  | `0x0000CAE1` | `cmd_audio_upload` | `audio_upload <index>` | writes `0x200000 + index*0x80000` into a global, YModem-receives via `FUN_000101B0(target, 0x300000)`, then `module_forward_async(0x5571, index)` |
+| 10 | `0x0000C615` | `cmd_audio_volume_set_all` | `audio_volume_set_all <level>` | `module_publish_command(0x5572, payload[12], 0xC)` where payload[+level*4..+level*4+4] = 0xFFFFFFFF, others 0 (per-channel mask) |
+| 11 | `0x0001406D` | `cmd_pack_upload` | `pack_upload` | `module_forward_async(0x10E, 0)`, YModem-receives `FUN_000101B0(0x80000, 0x180000)`, processes PACK on success / forwards `(0x10E, 4)` on fail |
+| 12 | `0x00011D4D` | `cmd_pack_list` | `pack_list` | walks PACK archive at ext-flash `0x80000`, logs name/size rows |
+| 13 | `0x00010555` | `cmd_pack_delete` | `pack_delete` | erases 0x180 sectors × 0x1000 from `0x80000` |
+| 14 | `0x000116AD` | `cmd_pack_process` | `pack_process` | calls `FUN_00016F2C` (PACK ingest) and logs `Processing pakfs, expect a small …` |
+| 15 | `0x00007A59` | `cmd_ble_info` | `ble_info` | reports BLE connections (rider-app flag, timeout, latency, interval, peer addr) |
+| 16 | `0x0001B3C5` | `cmd_ble_disconnect` | `ble_disconnect` | `FUN_00021030(0xFFFD, 4)` — force-disconnect all (`0xFFFD` is the TI-stack "all connections" sentinel; reason code 4 = peer-terminated) |
+| 17 | `0x0001E8B9` | `cmd_ble_erase_all_bonds` | `ble_erase_all_bonds` | calls `FUN_000265C4(0x20)` — same helper as `oad_status_notify` but with command code 0x20 ("erase bonds"), so that helper is really a general "post control event" dispatcher; OAD's use is just one client |
+| 18 | `0x0001DCD1` | `cmd_shutdown` | `shutdown` | `FUN_00026FF4()` (state save) then `FUN_0001D404(0, 0)` (power-down path) |
+| 19 | `0x0000F6A1` | `cmd_rtos_statistics` | `rtos_statistics` | every 500 ms loops `FUN_00025208` and logs `total size / total free size / total largest free size` (TI-RTOS heap stats); exits on key-press via 50 ms timer probe |
+| 20 | `0x00010079` | `cmd_rtos_nvm_compact` | `rtos_nvm_compact` | logs `Free space before compaction`, calls `FUN_00025904(0)` (SNV compact), logs result |
+| 21 | `0x0001D8E5` | `cmd_reset` | `reset` | software reset via `FUN_0001F7F8` (NVIC SYSRESETREQ path) |
+| 22 | `0x0001B441` | `cmd_info_ver` | `info`/`ver` | calls `FUN_000054D8` (firmware-info printer) |
+| 23 | `0x00014839` | `cmd_exit` | `exit` | logs 5 magic ANSI bytes (0x1B, 0x5B, 0x31, 0x34, 0x7E — Esc [ 1 4 ~ = the F4 keycode) to signal the host terminal to detach |
+| 24 | `0x00013BE9` | `cmd_help` | `help` | universal verb-0 walker |
 
 New monitor handlers translated in this pass:
 
@@ -277,6 +277,30 @@ New monitor handlers translated in this pass:
 - `cmd_info_ver` (`0x0001B440`) — command row `info/ver`; execute matches
   either `info` or `ver` and calls the firmware-info printer at
   `FUN_000054D8`.
+
+**All 25 command table entries are now identified** (this pass added 16 new handler names — see the table above). Source-file mapping inferred from `monitor_log` path strings:
+
+| Source file | Handlers |
+| --- | --- |
+| `source/monitor/cmd_help.c` | `cmd_help` |
+| `source/monitor/cmd_log.c` | `cmd_log_count`, `cmd_log_dump`, `cmd_log_inject`, `cmd_log_flush` |
+| `source/monitor/cmd_audio.c` | `cmd_audio_play`, `cmd_audio_stop`, `cmd_audio_dump`, `cmd_audio_upload`, `cmd_audio_volume_set_all` |
+| `source/monitor/cmd_packfs.c` | `cmd_pack_list`, `cmd_pack_delete`, `cmd_pack_upload`, `cmd_pack_process` |
+| `source/monitor/cmd_ble.c` | `cmd_ble_info`, `cmd_ble_disconnect`, `cmd_ble_erase_all_bonds` |
+| `source/monitor/cmd_os.c` | `cmd_rtos_statistics`, `cmd_rtos_nvm_compact`, `cmd_shutdown`, `cmd_reset` |
+| `source/monitor/cmd_exit.c` | `cmd_exit` |
+| `source/monitor/cmd_extflash.c` | `cmd_extflash_verify` |
+| `source/monitor/cmd_firmware.c` | `cmd_firmware_update` |
+| `source/monitor/cmd_version.c` | `cmd_info_ver` |
+
+Operational notes from the new handlers:
+- **`audio_upload`** writes its target offset (`0x200000 + index*0x80000`) into the YModem global, so the audio-clip region starts at ext-flash `0x200000` with **0x80000 (512 KiB) per slot**, mirroring the OAD slot stride. Max index 0x7A = 122, so up to 123 clips. Forwards `module_forward_async(0x5571, index)` to motorware after the YModem completes — that's the cue for the motor MCU to commit/play the new clip.
+- **`pack_upload`** YModem-receives 1.5 MiB (`0x180000` bytes) into the PACK region at `0x80000..0x200000`. Sends `module_forward_async(0x10E, 0)` to all modules at the start ("PACK upload begin") and `(0x10E, 4)` on failure ("PACK upload abort"). Modbus cmd id `0x10E` is the bike-wide pack-coordination channel.
+- **`cmd_ble_erase_all_bonds` calls `FUN_000265C4(0x20)`.** This is the helper I earlier named `oad_status_notify` — wrong. It's actually a **general "post control event"** dispatcher that takes a 1-byte control code; OAD just happens to be one client (its codes were 0x12/0x13/0x14/0x16/0x17). 0x20 is the "erase bonds" code, handled elsewhere in the BLE-stack thread. Need to rename it to something like `bleware_control_event_post`.
+- **`cmd_ble_disconnect`** calls `FUN_00021030(0xFFFD, 4)`. `0xFFFD` is the TI BLE-stack "all connections" sentinel (`LINKDB_CONNHANDLE_ALL`); reason code 4 = HCI "remote user terminated".
+- **`cmd_exit`** emits the ANSI keycode for F4 (`Esc [ 1 4 ~`) — this is what the OEM terminal driver listens for to detach the debug console. Not a real shell exit.
+
+Two more function pointers (`0x0001E311`, `0x00019A81`) follow the table's null terminator — these are **not** monitor commands. Their signatures (7-arg with `svc=0x5560`, conn_handle, char_idx, op-byte; 5-arg with CCCD UUID 0x2902 check) make them GATT callbacks bound to service `0x5560`. They should be folded into `gatt_read.c` / `gatt_write.c` analysis, not the monitor inventory.
 
 **`monitor_dispatch_loop` @ `0x00024B38`** — **Decoded** —
 `src/monitor/dispatcher.c`. 36 B body + 4 B literal pool. Walks
@@ -584,7 +608,13 @@ The dispatcher's flow:
 | `0x55A0` | 0..3 | `module_publish_command(0x55A0 + idx + 1, payload, len)` (chars `0x55A1..0x55A4`) |
 | `0x55C0` | 0 / 2 | `log_gatt_write_handler(conn, idx, payload, len)` — log-dispatch handler (see `log_gatt.c` section); idx 0 = control, 2 = readout. idx 1 has no write path. |
 
-The clean pattern: GATT characteristic `svc + idx + 1` corresponds directly to **inter-module Modbus command id `svc + idx + 1`**. The dispatcher is effectively a BLE-to-Modbus bridge for most services. Only the two "opaque" services (`0x5510`, `0x55C0`) have dedicated handlers in their own TUs — likely OAD/firmware update and log dispatch given the size and call patterns.
+The clean pattern: GATT characteristic `svc + idx + 1` corresponds directly to **inter-module Modbus command id `svc + idx + 1`**. The dispatcher is effectively a BLE-to-Modbus bridge for most services. Three services break the pattern with bespoke logic worth its own decode pass:
+
+- **`0x5500` backoffice** — auth handshake on `0x5502` (4-byte seed → 16-byte session key) and AES-decrypt + reassembly + CRC + 9-cmd dispatcher on `0x5505`. Decoded in `src/provisioning.c`. The dispatcher routes this via a special-case `char_idx == 4` branch (not a function pointer in the registry), which is why earlier passes framed it as "part of the dispatcher" rather than as its own service.
+- **`0x5510` OAD** — dedicated handler `oad_gatt_write_handler` (`src/oad.c`).
+- **`0x55C0` log** — dedicated handler `log_gatt_write_handler` (`src/log_gatt.c`).
+
+The eight remaining services (`0x5520`, `0x5530`, `0x5540`, `0x5550`, `0x5560`, `0x5570`, `0x5580`, `0x55B0`) are pure Modbus bridges on writes. A handful have small bespoke **read** producers (≤10 lines) inlined into `gatt_read.c`'s switch (0x5520/1 conn-state, 0x5540/10,16,17 ECC+TRNG, 0x5560/6 RTC) — not enough to warrant separate TUs.
 
 #### Helpers in `xs3_gatt_write.c`
 
@@ -699,7 +729,7 @@ Helpers named in Ghidra:
 | --- | --- | --- |
 | `0x000267A4` | `oad_gatt_write_handler` | service `0x5510` write callback |
 | `0x00020098` | `oad_state_lock` | Semaphore_pend wrapper for the OAD state |
-| `0x000265C4` | `oad_status_notify` | publishes the status byte on char `0x5513` |
+| `0x000265C4` | `bleware_control_event_post` | general 1-byte "post control event" dispatcher; OAD uses it for its status codes (0x12–0x17), `cmd_ble_erase_all_bonds` uses it with code 0x20. Earlier named `oad_status_notify` — superseded once the bonds-erase site was decoded. |
 | `0x00025060` | `oad_session_close` | tear-down (releases lock, resets conn_handle to 0xFFFF) |
 | `0x00016A50` | `extflash_erase_range` | **Decoded** — `src/extflash.c`. 4 KB-sector erase loop, semaphore-locked, 3- or 4-byte addressing per chip capacity. `secrets_sector_erase` @ `0x00026C30` is a fixed-address wrapper around this. |
 | `0x00015B9C` | `extflash_write` | **Decoded** — `src/extflash.c`. Page-Program (0x02) loop, splits writes at 256 B page boundaries (PP wraps within a page). Caller must pre-erase. |
@@ -713,9 +743,60 @@ Standard SPI NOR opcodes (sourced indirectly from per-chip command tables so the
 | opcode | mnemonic | role |
 | --- | --- | --- |
 | `0x02` | PP   | page program — 256 B page; writes that cross a page boundary are split by `extflash_write` |
+| `0x03` | READ | standard read (no dummy byte); one CS-framed burst, address auto-increments |
 | `0x05` | RDSR | read status register, WIP = bit 0 (busy-wait loop in `extflash_wait_wip_clear`) |
 | `0x06` | WREN | write-enable latch, framed by CS assert/deassert in `extflash_write_enable` |
 | `0x20` | SE   | 4 KB sector erase — 3-byte address if `capacity ≤ 16 MiB`, 4-byte otherwise |
+
+`extflash_read` (OEM `0x0001C5A4`) and `extflash_get_chip_info` (OEM `0x000273D0`) are also decoded — both in `src/extflash.c`. `extflash_get_chip_info` is a one-liner: returns `g_extflash_state.chip_info`.
+
+#### Chip identification (REMS-based)
+
+`extflash_open` runs early in the Bluetooth task: opens the SPI bus at a slow bitrate, sends `0xAB` (Release Power-Down / RDP), waits WIP clear, then calls `extflash_identify_chip` (OEM `0x0001A328`). The probe sends a 4-byte REMS burst (`0x90 FF FF 00` — opcode + 24-bit dummy address that selects which device byte comes out first), reads 2 bytes (mfgr, dev), and linearly scans an embedded vendor table for a match. On hit, the entry pointer is stored in `g_extflash_state.chip_info`. If the matched chip's capacity > 16 MiB, the driver follows up with a single-byte `0xB7` EN4B (Enter 4-Byte Addressing Mode) over CS so later READ/PP/SE opcodes can use 32-bit addresses.
+
+If identification succeeds, `extflash_open` closes the slow-bitrate handle and reopens at the production bitrate.
+
+#### `struct extflash_chip_info` (16 bytes)
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| +0x00 | `u32 capacity` | bytes; > 0x01000000 ⇒ 4-byte addressing |
+| +0x04 | `u8 jedec_mfgr` | REMS byte 1 |
+| +0x05 | `u8 jedec_dev`  | REMS byte 2 (the "capacity-3" device id) |
+| +0x06 | `u16 _pad`      | always 0x0000 |
+| +0x08 | `const char *part_name` | 12-byte slot in the part-name table at flash `0x0002B038` |
+| +0x0C | `u32 sector_size` | bytes; always 0x1000 in observed entries |
+
+#### Driver-header layout (top 28 bytes of the table at flash `0x0002A450`)
+
+| Offset | Field | Value |
+| --- | --- | --- |
+| +0x00 | `enter_4byte_mode_cmd` | `0xB7` (EN4B) |
+| +0x01 | `rdsr_cmd` | `0x05` (RDSR) — sourced by `extflash_wait_wip_clear` |
+| +0x02 | `wren_cmd` | `0x06` (WREN) — sourced by `extflash_write_enable` |
+| +0x03 | `wrsr_cmd` | `0x01` (WRSR) |
+| +0x05..+0x08 | REMS cmd burst | `90 FF FF 00` |
+| +0x0C..+0x1B | SPI_Params template | TI-SDK SPI driver init values (16 B) |
+
+#### Supported parts (5 entries + zero-terminator at flash `0x0002A46C`)
+
+| Capacity | Mfgr/Dev | Part name | Notes |
+| --- | --- | --- | --- |
+| 64 MiB | `C2 / 19` | MX25L51245G | Macronix 512 Mb — the production S3 part; needs EN4B |
+| 2 MiB  | `C2 / 15` | MX25R1635F  | Macronix 16 Mb ULP |
+| 1 MiB  | `C2 / 14` | MX25R8035F  | Macronix 8 Mb ULP |
+| 512 KiB | `EF / 12` | W25X40CL   | Winbond 4 Mb |
+| 256 KiB | `EF / 11` | W25X20BV   | Winbond 2 Mb |
+
+Only the MX25L51245G needs 4-byte addressing — the other four fit within 24-bit (16 MiB) addresses. The 64 MiB part is consistent with the OAD slot map (`0x80000 + ft*0x80000`, max ft ~5 in observed traffic) and the `0x03FDD000` log region offset.
+
+`g_extflash_state` (RAM `0x20001B20`) layout, fields actually touched by decoded primitives:
+- `+0x00` u8  open flag (1 = initialised)
+- `+0x04` `chip_info *` (populated by `extflash_identify_chip`)
+- `+0x08` SPI bus handle (TI-SDK)
+- `+0x0C` TI-RTOS bus mutex (taken at the head of every read/write/erase)
+- `+0x14` per-handle SPI transaction struct (init'd by `FUN_0001733C`)
+- `+0x21..+0x22` REMS rx buffer (mfgr/dev bytes; used as match keys)
 
 `extflash_erase_range(addr, len)` aligns `addr` down to 4 KB (`& 0xFFFFF000`), then erases `((addr+len) - aligned + 0xFFE) >> 12` sectors. Each iteration: pend bus mutex → wait WIP clear → WREN → emit SE cmd over CS-framed SPI burst → advance. Returns 1 on success, 0 on any sub-step failure.
 

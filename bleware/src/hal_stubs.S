@@ -135,7 +135,7 @@ g_mkey_owning_struct_field3C:
 
 /* ===== OAD helpers (src/oad.c) ===== */
     WEAK_NOOP(oad_state_lock)
-    WEAK_NOOP(oad_status_notify)
+    WEAK_NOOP(bleware_control_event_post)
     WEAK_NOOP(oad_session_close)
     WEAK_NOOP(extflash_erase_range)
     WEAK_NOOP(extflash_write)
