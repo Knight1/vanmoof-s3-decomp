@@ -158,12 +158,31 @@ in flash:
 | --- | --- |
 | `0x0002A5C4` | `cmd_play_audio_file`, `cmd_dump_audiofiles`, `cmd_upload_audio_file`, `cmd_upload_audio_file2`, `cmd_set_all_audio_volume` |
 | `0x0002AA44` | `cmd_list_pack_file`, `cmd_upload_pack_file`, `cmd_delete_pack_file`, `cmd_process_packfile` |
-| `0x0002AB94` | `cmd_extflash_dump`, `cmd_extflash_erase`, `cmd_extflash_verify`, `cmd_extflash_upload` |
+| `0x0002AB94` | `cmd_extflash_dump`*, `cmd_extflash_erase`*, `cmd_extflash_verify`, `cmd_extflash_upload`* |
 | `0x0002B081` | `cmd_log_flush`, `cmd_log_count`, `cmd_log_inject` |
 | `0x0002B1F8` | `cmd_ble_info`, `cmd_ble_set_random_static_address` |
 | `0x0002B448` | `cmd_rtos_stats`, `cmd_rtos_nvm_compact` |
 | `0x0002B7E0` | `mon_help`, `cmd_help` |
 | `0x0002BA58` | `cmd_exit` |
+
+Strings marked `*` are dead `.rodata` — the OEM source defined those
+helpers, but the linker dropped the bodies. Both a 32-bit literal-pool
+scan and a MOVW-immediate scan over the entire image confirm zero
+references. Per-TU `.rodata.str` survives whole when at least one
+sibling function in the same TU is kept (e.g. `cmd_extflash_verify`
+keeps `source/monitor/cmd_extflash.c`'s string blob alive). For
+`cmd_extflash.c` specifically, only `extflash-verify` is reachable
+from a registered monitor command — see `src/monitor/cmd_extflash.c`.
+
+**`cmd_extflash_verify` @ `0x0000ABD8`** — universal monitor
+command-handler signature `int cmd(int verb, void *p2, void *p3,
+uint32_t p4)`. Verb selector: `0` = REGISTER (calls
+`monitor_register_command(name, help, ...)`), `1` = PRINT_HELP (calls
+`monitor_print_help_line(out, name, mask)`), `2` = EXECUTE (runs the
+command). This dispatcher shape is shared by every `cmd_*` handler in
+bleware; with the signature locked in, decoding the other 18 cmd_*
+handlers reduces to pattern-matching the three verb arms and naming
+the helpers each one calls.
 
 **`cmd_help` @ `0x00013C20`** — the help-printer dispatcher.
 Identified body:

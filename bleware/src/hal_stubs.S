@@ -26,3 +26,30 @@
 BIOS_start:
 1:  b       1b
     .size   BIOS_start, .-BIOS_start
+
+/* ===== Helpers cmd_extflash_verify depends on =====
+ *
+ * Weak no-ops so the skeleton links. Each gets replaced as the OEM
+ * body lands in its own .c file.
+ */
+
+#define WEAK_NOOP(name) \
+    .section .text.##name, "ax", %progbits ; \
+    .weak    name ; \
+    .type    name, %function ; \
+    .thumb_func ; \
+name: ; \
+    movs    r0, #0 ; \
+    bx      lr ; \
+    .size   name, .-name
+
+    WEAK_NOOP(monitor_log)
+    WEAK_NOOP(monitor_register_command)
+    WEAK_NOOP(monitor_print_help_line)
+    WEAK_NOOP(nvs_open)
+    WEAK_NOOP(extflash_open)
+    WEAK_NOOP(extflash_close)
+    WEAK_NOOP(extflash_retry_backoff)
+    WEAK_NOOP(extflash_get_chip_info)
+    WEAK_NOOP(extflash_sw_wp_enabled)
+    WEAK_NOOP(extflash_block_wp_enabled)
