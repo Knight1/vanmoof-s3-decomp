@@ -431,7 +431,7 @@ address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
 | `0x0001F0BE` | `secrets_upsert_keyed_batch` | with prototype `int(void*, unsigned int)` |
 | `0x00021328` | `secrets_ensure_mid_record` | with prototype `unsigned int(void)` |
 | `0x00019570` | `manufacturing_key_get_or_init_default` | reads slot 126 (M-Key); falls back to in-RAM key derived from BLE MAC + "MOOF"/"MKEY" tags. **Authoritative reference to `secrets_record_read(0x7E, ...)`** — earlier "no slot 126 reader" finding was wrong; the function was undefined at search time. |
-| `0x00003E78` | `secrets_provisioning_blob_apply` | GATT-backoffice handler — decrypts a 16-byte-multiple ciphertext blob with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), upserts the resulting records via `secrets_upsert_keyed_batch`, ensures M-ID, rebuilds the 6-byte BLE address. Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
+| `0x00003E78` | `gatt_handle_backoffice_message_data` | GATT-backoffice handler — decrypts a 16-byte-multiple ciphertext blob with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), upserts the resulting records via `secrets_upsert_keyed_batch`, ensures M-ID, rebuilds the 6-byte BLE address. **OEM name confirmed via embedded symbol string at `0x0002B4B4`.** Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
 | `0x00020848` | `block_dispatch_queue_post` | TI-RTOS-style queue post: packages `(key_buf, block_len, src, src_alias)` into a message and hands it to `FUN_000275E8` → `FUN_000125C4` → ROM jump table |
 | `0x00026504` | `byte_to_hex_chars` | writes 2 ASCII hex chars from a byte; hex table at flash `0x0002B46C` = `"0123456789ABCDEF"` |
 
