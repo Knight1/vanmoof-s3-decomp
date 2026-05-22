@@ -37,6 +37,16 @@ void  bluetoothtask_main(void);
 int   cmd_help(int verb, void *p2, void *p3, uint32_t p4);
 int   monitor_dispatch_loop(const char *user_input);
 
+/* External-SPI-flash secrets store @ flash 0x005A000 (4 KB sector,
+ * 128 records × 32 B, payload + CRC-32). See src/secrets.c. */
+int      secrets_record_read(int index, void *out_record);
+int      secrets_record_write_verify(int index, const void *record);
+int      secrets_find_by_key(uint32_t key, void *out_record);
+int      secrets_count_free_slots(void);
+int      secrets_upsert_keyed_record(const void *record_24);
+int      secrets_upsert_keyed_batch(const void *records, unsigned int count);
+uint32_t secrets_ensure_mid_record(void);
+
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
 

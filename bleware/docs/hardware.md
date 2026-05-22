@@ -91,6 +91,71 @@ Slot 1 = Reset_Handler at flash `0x0001F590` (file offset 0x1F620 once
 the OAD header is stripped). Remaining vector slots TBD — to be
 populated as decomp progresses.
 
+## External SPI flash — secrets store
+
+The external SPI flash chip (accessed via TI NVS + chip-driver wrappers)
+hosts a 4 KB **secrets sector** at flash offset `0x0005A000`. The sector
+is laid out as **128 records × 32 B**; each record is a payload + CRC-32:
+
+```
+record[0..27]   payload (28 B)
+record[28..31]  CRC-32/zlib of payload  (little-endian, no final XOR)
+```
+
+`secrets_record_read(index, out)` (OEM `0x00020BB8`) reads slot
+`index` (bounds-checked to `[0, 127]`), verifies the stored CRC against
+a fresh CRC over the payload, and on success copies all 32 B to `out`.
+
+`secrets_record_write_verify(index, record)` (OEM `0x00020C06`)
+writes the 32 B record via the sector read-modify-write helper, reads
+back, and `memcmp`-verifies. Up to 4 retries on mismatch. **Does NOT
+bounds-check `index`** — preserved verbatim because callers may rely
+on the elided check; treat as an OEM quirk and audit before any
+"fix".
+
+### Known slot assignments
+
+Cross-checked against VanMoof's `VanMooof-Module` Go tool
+(`ReadSecrets()`):
+
+| Slot | Sector offset | Flash address | Length | Field |
+| --- | --- | --- | --- | --- |
+| 0      | `0x000` | `0x005A000` | 16 B | BLE Authentication Key (first 16 B of payload) |
+| 0..123 | varies | varies | 32 B | User-keyed records: 32-bit key at `payload[+16]`, 4-byte ASCII tag at `payload[+24]` (e.g. `"UKEY"`). Lookups linear-scan by key; free slots = CRC-invalid slots. |
+| 124    | `0xF80` | `0x005AF80` | 32 B | M-ID directory record — CRC-protected, tag `"M-ID"` at `payload[+24]`. Initialised by `secrets_ensure_mid_record` if missing. `payload[+16]` is a uint32 of unknown meaning (counter / cursor). |
+| 125    | `0xFA0` | `0x005AFA0` | 32 B | likely M-ID/M-KEY continuation — TBD; no decoded firmware path touches it yet. |
+| 126    | `0xFC0` | `0x005AFC0` | 16 B | Manufacturing Key (first 16 B of payload) |
+
+The `VanMooof-Module` Go tool's `ReadSecrets()` slams a 60-byte raw
+read at `0x005AF80` spanning slots 124+125 and calls the result
+"M-ID/M-KEY". The firmware's own view is different: slot 124 is a
+CRC-protected directory record with the `"M-ID"` tag, and slot 125's
+framing is still TBD (likely also CRC-protected per record). The Go
+tool reads the raw flash bytes and doesn't enforce the per-record CRC
+that the firmware writes.
+
+### Keyed-record API (slots 0..123)
+
+A second API layer in the firmware treats slots 0..123 as a content-
+addressed table:
+
+| OEM address | Function | Role |
+| --- | --- | --- |
+| `0x00022BAA` | `secrets_find_by_key(key, out)` | scan for a record with `payload[+16] == key` |
+| `0x00026034` | `secrets_count_free_slots()` | count slots with invalid CRC (= free) |
+| `0x0001CA68` | `secrets_upsert_keyed_record(rec24)` | upsert (overwrite on key match, else first free slot); stamps tag `"UKEY"` |
+| `0x0001F0BE` | `secrets_upsert_keyed_batch(arr, n)` | upsert N records; pre-checks total room |
+| `0x00021328` | `secrets_ensure_mid_record()` | initialise slot 124 if its CRC fails; returns `payload[+16]` on existing record, else 0 |
+
+### Implementation note — searching for the base address
+
+The base address `0x0005A000` is encoded in the firmware as a Thumb-2
+*modified-immediate* `add.w` instruction (e.g. `add.w r0, r0, #0x5a000`
+at `0x00020BD2`), not as a 32-bit literal pool entry. A naive
+little-endian byte search for `00 A0 05 00` will not find this constant
+anywhere in flash — searches for SPI-flash region addresses need to
+walk MOVW/MOVT pairs and `add.w` immediates.
+
 ## Initial state (TBD)
 
 Several pieces still to figure out:

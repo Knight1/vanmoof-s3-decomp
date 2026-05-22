@@ -195,7 +195,7 @@ void *p2, void *p3, uint32_t p4)` and dispatches on `verb`:
 **The registry IS the static table at `0x0002A0BC`** — 27+ function
 pointers, NULL-terminated. No startup registration walker exists.
 The table is walked by:
-  - `cmd_help` (OEM `0x00013C20`) with verb=0
+  - `cmd_help` (OEM `0x00013BE8`) with verb=0
   - `monitor_dispatch_loop` (OEM `0x00024B38`) with verb=2
 
 **ABI history note** — early in the decomp the function at OEM
@@ -208,11 +208,20 @@ both. The verb selector is correspondingly reordered: there is no
 "register" verb in this binary.
 
 **`cmd_help` @ `0x00013BE8`** — full universal command handler.
-Decoded into `src/monitor/cmd_help.c`. Verb 1 fills the 16-byte command
-name buffer with `help`; verb 0 emits the help row (`help` / `show all
-monitor commands`); verb 2 matches the user input, logs the two banner
-lines from `source/monitor/cmd_help.c`, then iterates the static command
-table at flash `0x0002A0BC` and calls each handler with verb 0.
+Decoded into `src/monitor/cmd_help.c`. Verb 1 writes the name
+literal `"help\0"` into the caller's buffer (the OEM compiler inlines
+this as a word + byte store — 5 bytes total, not the 16-byte memcpy
+seen in longer-named handlers like `extflash-verify`); verb 0 emits
+the help row (`help` / `show all monitor commands`); verb 2 self-matches
+the user input via `monitor_command_matches`, logs the two banner lines
+from `source/monitor/cmd_help.c`, then iterates the static command table
+at flash `0x0002A0BC` and calls each handler with verb 0.
+
+Note: Ghidra initially placed the `cmd_help` function entry at
+`0x00013C20`, but the real prologue (`push {r2,r3,r4,r5,r6,lr}`) lives
+at `0x00013BE8`. The 24-byte gap is the verb=1/0/!2 dispatch
+preamble. Table entry 24 (`0x00013BE9`, thumb) confirms the corrected
+entry. The Ghidra function has been recreated at the right address.
 
 **Command table @ `0x0002A0BC` decoded.** The table is a packed,
 Thumb-set function-pointer list with the first NULL after 25 entries:
@@ -322,6 +331,82 @@ it's created from somewhere inside the module-init chain. To
 identify in a follow-up pass; the audiotask is the BLE-audio-streaming
 companion to the bluetoothtask.
 
+### `secrets.c` — external-SPI-flash secrets store @ flash `0x005A000`
+
+**Decoded** — `src/secrets.c`. Two functions cover the entire
+CRC-protected 128-record table at external-flash offset `0x005A000`:
+
+- **`secrets_record_read` @ `0x00020BB8`** — bounds-checks `index` to
+  `[0, 127]`, reads 32 B at `0x5A000 + index*0x20` via `extflash_read`,
+  CRC-32s the first 28 B and compares against the stored CRC at offset
+  `0x1C`. On success and a non-NULL `out_record`, copies all 32 B to
+  the caller's buffer. Returns 1 on valid, 0 otherwise. GCC builds to
+  78 B vs OEM 90 B (the OEM's compiler emits an explicit 8×word copy
+  for the success-path memcpy; GCC inlines the same 32 B copy more
+  tightly).
+
+- **`secrets_record_write_verify` @ `0x00020C06`** — writes a 32 B
+  record via `extflash_sector_write` (read-modify-write at the 4 KB
+  sector boundary), reads back, `memcmp`-verifies. Up to 4 retries
+  on mismatch. **Notably does NOT bounds-check `index`** — preserved
+  as an OEM quirk; treat any "fix" as a potential ABI break. GCC
+  builds to 70 B, ~matching OEM.
+
+Helpers identified along the way (renamed in Ghidra this turn):
+
+| Address | Name | Role |
+| --- | --- | --- |
+| `0x0001C5A4` | `extflash_read` | semaphore-serialised external-flash read (uses TI-RTOS `Semaphore_pend/post` thunks at `0x1002BFB0` / `0x1002CD20`) |
+| `0x000193C0` | `extflash_sector_write` | 4 KB-sector read-modify-write (mask `0xFFFFF000` from `DAT_0001944C`); handles cross-sector spans via a loop |
+| `0x00025198` | `crc32_le` | CRC-32 reflected, polynomial `0xEDB88320` (zlib/Ethernet/PNG), no final XOR. Seed-as-arg lets the caller compute the standard ZLIB CRC by passing `0xFFFFFFFF` and XORing the result with `0xFFFFFFFF` afterwards — but the secrets store stores and compares the *raw* (non-final-XORed) value, so callers don't bother with that XOR. |
+| `0x00026534` | `crc32_step_byte` | inner shift-XOR helper (no table; computed on the fly via 8 iterations against `DAT_00026548 = 0xEDB88320`) |
+| `0x00025490` | `memcmp` | standard byte-by-byte memcmp |
+| `0x000251BE` | `monitor_command_matches` | (also renamed this turn; previously `monitor_streq`, originally mis-labeled `nvs_open` by Ghidra's auto-analysis — see ABI-history note above) |
+
+Known slot assignments (cross-checked with `VanMooof-Module` Go tool):
+
+| Slot | Sector offset | Flash address | Length | Field |
+| --- | --- | --- | --- | --- |
+| 0     | `0x000` | `0x005A000` | 16 B | BLE Authentication Key (first 16 B of payload) |
+| 0..123 | varies | varies     | 32 B | User-keyed records: `payload[+16]` = uint32 key, `payload[+24]` = ASCII tag (e.g. `"UKEY"`); written via `secrets_upsert_keyed_record` |
+| 124   | `0xF80` | `0x005AF80` | 32 B | **M-ID directory record** — CRC-protected, tag `"M-ID"` at `payload[+24]`, `payload[+16]` = unknown uint32 (counter / cursor?) |
+| 125   | `0xFA0` | `0x005AFA0` | 32 B | likely M-ID/M-KEY continuation (Go tool reads 60 B at `0x5AF80` spanning slots 124+125 as raw bytes — the firmware's CRC-API view may differ from the Go tool's view) |
+| 126   | `0xFC0` | `0x005AFC0` | 16 B | Manufacturing Key (first 16 B of payload) |
+
+The 60-byte "M-ID/M-KEY" view used by `VanMooof-Module`'s `ReadSecrets`
+slams slots 124+125 as raw bytes. The firmware itself treats slot 124
+as a normal CRC-protected record (see `secrets_ensure_mid_record`).
+Slot 125's framing is still TBD — likely also CRC-protected per
+record, but no decoded code path touches it yet.
+
+Keyed-record API (decoded this turn — same `src/secrets.c`):
+
+| Address | Name | Role |
+| --- | --- | --- |
+| `0x00022BAA` | `secrets_find_by_key` | linear scan of slots 0..123 for `payload[+16] == key`; copies the matching 32 B record on hit, returns slot index or `-1` |
+| `0x00026034` | `secrets_count_free_slots` | counts slots 0..123 whose CRC fails — the slots an upsert can claim |
+| `0x0001CA68` | `secrets_upsert_keyed_record` | given a 24 B caller payload, looks up by key (`payload[+16]`); on match overwrites that slot, else fills the first free slot. Stamps the `"UKEY"` tag at `payload[+24]`, recomputes CRC, writes via `secrets_record_write_verify`. Returns 0 on "no room" |
+| `0x0001F0BE` | `secrets_upsert_keyed_batch` | upserts an array of N 32 B records: counts (matches + free) up front; refuses with `-1` if it would over-fill the keyed range; returns `-2` on any per-record failure, `0` on full success |
+| `0x00021328` | `secrets_ensure_mid_record` | reads slot 124; if CRC valid returns `*(uint32*)(payload+16)`; if invalid initialises the slot as `{0…0, tag="M-ID", CRC}` and returns 0. Effectively a "boot-time initialise the M-ID directory if it's missing" call. Caller at `0x0000419E` is not yet inside a recognised function — likely from an inline raw-call site near `_c_int00` |
+
+**Tag values** observed at payload offset `+24`:
+
+| Tag (LE uint32) | ASCII | Where written |
+| --- | --- | --- |
+| `0x44492D4D` | `"M-ID"` | `secrets_ensure_mid_record` → slot 124 |
+| `0x59454B55` | `"UKEY"` | `secrets_upsert_keyed_record` → any free slot in 0..123 |
+
+The keyed-record table is **content-addressed** — there is no separate
+index/directory; lookups linear-scan the 124 slots. Free slots are
+identified by *CRC failure*, not by a marker byte — so an erased
+sector (`0xFF`-fill) naturally appears as 124 free slots.
+
+**Search note**: the base address `0x0005A000` is encoded in Thumb-2
+as `add.w r0, r0, #0x5a000` modified-immediates (e.g. at `0x00020BD2`,
+`0x00020C0E`), *not* as a 32-bit literal pool entry. Byte-pattern
+searches for `00 A0 05 00` will return zero hits. Future SPI-flash
+address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
+
 ### Functions renamed in Ghidra this turn
 
 | Address | Name | Notes |
@@ -331,6 +416,20 @@ companion to the bluetoothtask.
 | `0x000215FC` | `tirtos_modules_init` | calls 13 sub-init functions |
 | `0x000235D0` | `create_bluetoothtask` | TI-RTOS Task_construct for the BLE task |
 | `0x000067C8` | `bluetoothtask_main` | the BLE event-loop body |
+| `0x00013BE8` | `cmd_help` | re-created at the correct entry (Ghidra had it at `0x00013C20`, missing the 24 B verb-dispatch preamble) |
+| `0x000251BE` | `monitor_command_matches` | was `nvs_open` (wrong) → `monitor_streq` (this session, transient) → `monitor_command_matches` (canonical, matches the project source) |
+| `0x00020BB8` | `secrets_record_read` | with prototype `int(int, void*)` |
+| `0x00020C06` | `secrets_record_write_verify` | with prototype `int(int, void*)` |
+| `0x0001C5A4` | `extflash_read` | external-flash read with internal TI-RTOS semaphore lock |
+| `0x000193C0` | `extflash_sector_write` | 4 KB-sector RMW writer; loops across cross-sector spans |
+| `0x00025198` | `crc32_le` | reflected CRC-32 with seed arg; no final XOR |
+| `0x00026534` | `crc32_step_byte` | shift-XOR helper for one byte (8 iterations against `0xEDB88320`) |
+| `0x00025490` | `memcmp` | byte-by-byte memcmp |
+| `0x00022BAA` | `secrets_find_by_key` | with prototype `int(uint32_t, void*)` |
+| `0x00026034` | `secrets_count_free_slots` | with prototype `int(void)` |
+| `0x0001CA68` | `secrets_upsert_keyed_record` | with prototype `int(void*)` |
+| `0x0001F0BE` | `secrets_upsert_keyed_batch` | with prototype `int(void*, unsigned int)` |
+| `0x00021328` | `secrets_ensure_mid_record` | with prototype `unsigned int(void)` |
 
 ### Boot-flow correspondence with bleboot
 
