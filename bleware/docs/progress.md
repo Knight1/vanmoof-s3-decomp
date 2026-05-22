@@ -431,21 +431,306 @@ address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
 | `0x0001F0BE` | `secrets_upsert_keyed_batch` | with prototype `int(void*, unsigned int)` |
 | `0x00021328` | `secrets_ensure_mid_record` | with prototype `unsigned int(void)` |
 | `0x00019570` | `manufacturing_key_get_or_init_default` | reads slot 126 (M-Key); falls back to in-RAM key derived from BLE MAC + "MOOF"/"MKEY" tags. **Authoritative reference to `secrets_record_read(0x7E, ...)`** — earlier "no slot 126 reader" finding was wrong; the function was undefined at search time. |
-| `0x00003E78` | `gatt_handle_backoffice_message_data` | GATT-backoffice handler — decrypts a 16-byte-multiple ciphertext blob with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), upserts the resulting records via `secrets_upsert_keyed_batch`, ensures M-ID, rebuilds the 6-byte BLE address. **OEM name confirmed via embedded symbol string at `0x0002B4B4`.** Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
+| `0x00003E78` | `gatt_handle_backoffice_message_data` | GATT-backoffice fragment handler — decrypts each 16-byte AES block with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), reassembles into a 0x90-byte plaintext, CRC-16/Modbus-validates, then dispatches one of 9 sub-commands (record upsert / M-Key write / delete-by-key / no-op / module-forward async + sync / secrets sector erase / bulk record import / reserved). Reply notified on GATT channel 4 (0xF0 bytes). **OEM name confirmed via embedded symbol string at `0x0002B4B4`.** Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
 | `0x00020848` | `block_dispatch_queue_post` | TI-RTOS-style queue post: packages `(key_buf, block_len, src, src_alias)` into a message and hands it to `FUN_000275E8` → `FUN_000125C4` → ROM jump table |
 | `0x00026504` | `byte_to_hex_chars` | writes 2 ASCII hex chars from a byte; hex table at flash `0x0002B46C` = `"0123456789ABCDEF"` |
 
-### `provisioning.c` — backoffice key-import handler (`xs3_gatt_backoffice.c`)
+### `provisioning.c` — backoffice GATT message handler (`xs3_gatt_backoffice.c`)
 
-**Decoded** — `src/provisioning.c`. Two functions land here, both touching the Manufacturing Key:
+**Decoded** — `src/provisioning.c`. Two functions land here.
 
 - **`manufacturing_key_get_or_init_default` @ `0x00019570`** — fetches slot 126. On read-failure (factory-fresh device) it materialises a deterministic per-device fallback **in RAM only**: 12 ASCII hex chars of the chip's BLE MAC (read from FCFG1 at `0x500012E8`), `"MOOF"` tag at payload offset +12, `"MKEY"` tag at offset +24, CRC at +28. The fallback is *not* written back to flash — only cached for the current boot, so a factory tool can still detect the unprogrammed state and run the full provisioning flow.
 
-- **`secrets_provisioning_blob_apply` @ `0x00003E78`** — sub-command dispatcher for the GATT backoffice characteristic. Decoded path: the **"bulk encrypted record import"** sub-command. Each 16-byte ciphertext block of the input blob is paired with the M-Key and posted to the CryptoCC26X2 ROM AES task via `block_dispatch_queue_post` → `FUN_000275E8` → `FUN_000125C4` → indirect call through `_DAT_100001FC + 0x20`. Decrypted records bulk-upsert into the secrets store; slot 124 (M-ID) is reaffirmed; a 6-byte BLE address is composed from M-ID + a stack-supplied counter. Other tbh-dispatched sub-commands (status reply, single-record write, etc.) are still TBD.
+- **`gatt_handle_backoffice_message_data` @ `0x00003E78`** — the GATT-backoffice characteristic's write callback. Each call carries one fragment of a longer message; framing is `{flag[0], cursor[1], ciphertext[2..]}` where the ciphertext length is a non-zero multiple of 16. Every 16-byte block is queued for in-place AES decryption (key = M-Key, via `block_dispatch_queue_post` → CryptoCC26X2 ROM jump table at `_DAT_100001FC + 0x20`). The decrypted bytes are accumulated at `g_backoffice_reassembly + 0x10` starting at the fragment's cursor; total reassembly limited to 0x90 bytes. Only the fragment with `flag == 0x01` triggers dispatch.
+
+  On the final fragment the function checks the BLE connection is still active (`ble_connection_is_active`), validates the assembled payload's trailing CRC-16/Modbus (poly `0xA001`, seed `0xFFFF`), and dispatches on the 16-bit BE sub-command at `reasm[0x14..0x15]`:
+
+  | Sub-cmd | Action |
+  | --- | --- |
+  | 1 | `secrets_upsert_keyed_record(rec24)` — payload@+0x17 (16 B), key@+0x27 (4 B), tag@+0x2B (4 B) |
+  | 2 | `mkey_record_write_slot126(rec24)` (FUN_000222AC) — writes slot 126 with tag forced to `"MKEY"` (stored at flash `0x000222E8`) and a fresh CRC |
+  | 3 | `secrets_delete_by_key(key_be32)` (FUN_00024D14) — looks up by key and overwrites the matching slot with 0xFF |
+  | 4 | `backoffice_ack_noop()` (FUN_0002774A) — always returns 1; heartbeat / capability probe |
+  | 5 | `module_forward_async(0x5562, byte)` (FUN_00024508) — forwards one byte to inter-module bus target 0x5562 |
+  | 6 | `secrets_sector_erase()` (FUN_00026C30) — erases the 4 KB secrets sector at ext-flash `0x005A000` (factory reset) |
+  | 7 | Bulk import — N = `(payload_len-9)/0x18` source records of 24 B each, re-laid into 0x20-byte slots and bulk-upserted via `secrets_upsert_keyed_batch` |
+  | 8 | `module_forward_sync(u16_cmd, ptr, len)` (FUN_000177E8) — synchronous request/reply over the inter-module bus with ~2.5 s timeout; reply status mapped into the backoffice enum |
+  | 9, 10 | reserved — always return status 5 |
+  | other | unknown sub-cmd — status 3 |
+
+  Reply is 0xF0 bytes notified on GATT channel 4 (`gatt_notify_channel`): the first 9 bytes carry `{context_be[0..3], M-ID[4..7], status[8]}`; the remaining 0xE7 bytes are whatever was last in the reassembly buffer (intentional debug echo for the service tool). Quirk preserved verbatim: the BE serialisation of the context word and the M-ID uses `>> 18` for the second byte rather than `>> 16` — a 2-bit bleed that the receiver is built to match.
 
 **Why no AES S-box in bleware:** AES lives in CC2642R1F ROM. App-side calls are pure function-pointer indirect-calls through ROM jump tables (e.g., `_DAT_100001FC[+0x20]` in the bleware base pointer table). This explains the earlier dead-end byte-pattern search. Any future crypto investigation on CC26X2 SimpleLink images should chase ROM jump tables, not S-box bytes.
 
-**No direct xref to `secrets_provisioning_blob_apply` in the binary.** The address `0x00003E78` (or `0x3E79` Thumb-mode) does not appear as a 32-bit literal anywhere — neither in a service-attribute table nor in code. The function is most likely registered with the GATT stack at runtime via a vtable-population helper that takes the address as an immediate (`adr` / `add pc, …`) rather than a literal pool entry. Identifying the registration site is a follow-up — it needs the GATT-service decode.
+**No direct xref to `gatt_handle_backoffice_message_data` in the binary.** The address `0x00003E78` (or `0x3E79` Thumb-mode) does not appear as a 32-bit literal anywhere. The wiring comes via the GATT-config item table (see next section) and a numeric callback index, not a literal function-pointer pool.
+
+### `xs3_gatt_config.c` — service & characteristic registry
+
+GATT services and characteristics are described by two static tables in flash. The **service table** at `0x0002A2F8` holds 11 × 8-byte entries (one per BLE service):
+
+```
+struct gatt_service_entry {
+    uint16_t service_short_id;   // low half of UUID base (e.g. 0x5500)
+    uint16_t item_count;         // # of characteristics under this service
+    struct gatt_item_entry *items; // -> 28-byte item array
+};
+```
+
+| Idx | svc id | items | items_ptr |
+| --- | --- | --- | --- |
+|  0 | `0x5500` |  5 | `0x0002A1C0` **← backoffice** |
+|  1 | `0x5510` |  3 | `0x0002AAEC` |
+|  2 | `0x5520` |  4 | `0x0002A634` |
+|  3 | `0x5530` | 11 | `0x000298CC` |
+|  4 | `0x5540` | 18 | `0x000296D4` |
+|  5 | `0x5560` |  9 | `0x00029D30` |
+|  6 | `0x5570` |  4 | `0x0002A784` |
+|  7 | `0x5580` |  4 | `0x0002A714` |
+|  8 | `0x5590` |  2 | `0x0002B18C` |
+|  9 | `0x55A0` |  4 | `0x0002A6A4` |
+| 10 | `0x55C0` |  3 | `0x0002AA98` |
+
+These are the *short forms* of the 128-bit UUIDs against the VanMoof base `6ACC0000-E631-4069-944D-B8CA7598AD50` — each populates bytes [2..3] of the UUID. So service `0x5500` is `6ACC5500-E631-4069-944D-B8CA7598AD50`.
+
+Per-item entries are 28 bytes:
+
+```
+struct gatt_item_entry {
+    uint16_t char_short_id;  // e.g. 0x5505
+    uint16_t flags_a;
+    uint32_t value_size;     // bytes
+    uint32_t value_ram_ptr;  // 0 = no static storage (callback-only)
+    uint32_t props_perms;    // composite property/permission word
+    uint32_t reserved[2];
+    uint32_t callback_pair;  // 0xFF = no callback; else (write_id, read_id)
+};
+```
+
+#### Backoffice service `0x5500` — characteristics
+
+| Char id | UUID | size | RAM buf | role |
+| --- | --- | --- | --- | --- |
+| `0x5501` | `6ACC5501-E631-4069-944D-B8CA7598AD50` | 16 | `0x2000ACE0` | notify-only — channel 0 |
+| `0x5502` | `6ACC5502-E631-4069-944D-B8CA7598AD50` | 20 | *(none)* | **AUTH handshake** — derives 16-byte session key from 4-byte seed at payload[+0x18..+0x1B] and stores it on the connection; then runs `backoffice_auth_session_init` (`0x0001A218`) |
+| `0x5503` | `6ACC5503-E631-4069-944D-B8CA7598AD50` | 16 | `0x2000ACC0` | notify channel 2; writes forwarded as `FUN_00021884(0x5503, u24)` |
+| `0x5504` | `6ACC5504-E631-4069-944D-B8CA7598AD50` | 16 | `0x2000ACD0` | notify channel 3 (no write path in dispatcher) |
+| `0x5505` | `6ACC5505-E631-4069-944D-B8CA7598AD50` | 240 | `0x20009F24` | **BACKOFFICE REQUEST + RESPONSE — `gatt_handle_backoffice_message_data` fires on write; replies notify on the same characteristic via `gatt_notify_channel` channel 4** |
+
+Cross-check: the channel-4 buffer pointer baked into `gatt_notify_channel` (`DAT_0001B59C = 0x20009F24`) matches `0x5505`'s `value_ram_ptr`, and the notify size `0xF0` matches its `value_size`. Channels 0/2/3 line up with `0x5501/0x5503/0x5504` the same way.
+
+The dispatcher routes writes by characteristic *index within the service* (`event[+6]`), not by short UUID. For svc `0x5500` indices 0..4 map to chars `0x5501..0x5505`; the dispatcher only handles indices 1 (auth), 2 (forward), and 4 (backoffice). Indices 0 and 3 are notify-only.
+
+#### Helpers in `xs3_gatt_config.c`
+
+| Addr | Name | Role |
+| --- | --- | --- |
+| `0x00011228` | `gatt_config_lookup_item` | `(svc_id, item_idx) -> *gatt_item_entry` — linear scan over the service table. Source path: `source/xs3_gatt_config.c`. |
+| `0x0001508A` | `gatt_service_notify_dispatch` | `(svc_id, channel, buf, len, flag)` — internal app-side notify-publish dispatcher. For svc `0x5500` routes to `gatt_notify_channel` (4-way sub-channel by `channel`); each other svc id has a dedicated per-service notify helper. |
+
+#### Bench-test target
+
+For backoffice provisioning the same characteristic carries both directions:
+
+- **Write (request) and Notify (response):** `6ACC5505-E631-4069-944D-B8CA7598AD50` (subscribe to notifications first, then write fragments)
+- **Auth handshake required first:** write a 20-byte challenge to `6ACC5502-E631-4069-944D-B8CA7598AD50` — derives a session key on the connection that gates the other 0x55XX characteristics' write paths (each one calls `ble_connection_get_session_key` and rejects with `-1` if no key is set when the auth-required flag at `FUN_00025A84()` is set).
+
+### `xs3_gatt_write.c` — central GATT write dispatcher
+
+**Decoded** — `xs3_gatt_process_write_event` @ `0x00004DB0` (868 B body; previously undefined in Ghidra's auto-analysis). Event struct layout from the dispatcher:
+
+```
+event[+2 : u16]   connection handle
+event[+4 : u16]   service short id (0x5500..0x55C0)
+event[+6 : u8]    characteristic index within the service (0-based)
+event[+8 : u16]   payload length
+event[+10..]      payload bytes
+```
+
+The dispatcher's flow:
+
+1. `gatt_config_lookup_item(svc, idx)` — fetches the 28-byte item entry from `xs3_gatt_config.c`'s tables.
+2. **Special path for char `0x5502` with len 0x14:** `auth_derive_session_key(seed_u32)` (`0x00018B1C`) produces a 16-byte key; if the connection already has a session key (`ble_connection_get_session_key`) and `FUN_00025A84() > 0` (auth-required flag), a mismatch returns `-1`. Otherwise the derived key is stored via `ble_connection_set_session_key`.
+3. Length range check against item's value-size band (`psVar4[1]` low, `psVar4[2]` high).
+4. **Property byte `psVar4[13]` decoded as a 4-bit composite**:
+   - bit 2 set → input is N × 16-byte AES blocks; submit each via `block_dispatch_queue_post(session_key, 16, src, dst)` (decrypt-in-place) and `memcpy(payload, decrypted, len & ~0xF)` — the same crypto path used by the backoffice handler. Requires a session key, fails `-1` if absent.
+   - bit 1 set → `FUN_00024740(scratch, payload, len)` — alternative scrambling/decrypt helper.
+   - bit 3 set → expects a 2-byte sequence-number prefix; compares against per-connection counter (`FUN_00022970`), bumps via `FUN_00023114`, strips the prefix and shifts `psVar11` by 2.
+   - bit 0 set → mandatory session-key check; fails `5` if absent.
+5. If `item->value_ram_ptr != 0` → memcpy the payload there.
+6. CRC check (`FUN_00026050`) against `item->cb_lo` mask — mismatch → status 2, reply via `FUN_00021030(conn, status)`.
+7. Optional trailing zero-padding check using `item->cb_hi`.
+8. **Per-service write dispatch** — switch on `svc_id`, then on `char_idx`.
+
+#### Per-service write callback map
+
+| Svc | Idx (char id) | Action |
+| --- | --- | --- |
+| `0x5500` | 1 (`0x5502`) | `backoffice_auth_session_init(conn, derived_key)` — completes the auth handshake on the connection |
+| `0x5500` | 2 (`0x5503`) | `FUN_00021884(0x5503, u24_from_payload[0..2])` — publish a 24-bit value on svc-id `0x5503` |
+| `0x5500` | 4 (`0x5505`) | **`gatt_handle_backoffice_message_data(conn, payload, len)`** |
+| `0x5510` | 0 / 1 / 2 | `oad_gatt_write_handler(conn, idx, payload, len)` — OAD update handler (see `oad.c` section); idx 0 = metadata, 1 = payload chunk, 2 = no-op |
+| `0x5520` | 0, 2, 3 | `module_forward_async(svc + idx + 1, payload[0])` — forward 1-byte command on the internal Modbus bus |
+| `0x5530` | 2, 4, 5, 7 | `module_forward_async(0x5530 + idx + 1, payload[0])` — chars `0x5533/5535/5536/5538` map 1:1 to Modbus cmd ids |
+| `0x5530` | 3 | `module_publish_command(0x5534, payload, 2)` (`0x000244D8`) — typed publish |
+| `0x5530` | 6 | `module_publish_command(0x5537, payload, 6)` |
+| `0x5560` | 1, 3, 4, 5 | `module_forward_async(0x5560 + idx + 1, payload[0])` |
+| `0x5560` | 6 | `FUN_00026CC0(u32_be from payload)`; then `FUN_00021884(0x5567, FUN_00027448())` — looks like a setter + read-back publish |
+| `0x5570` | 0, 3 | `module_forward_async(0x5571, payload[0])` (both indices route to `0x5571`) |
+| `0x5570` | 1 | `module_publish_command(0x5572, payload, 12)` |
+| `0x5580` | 0 | `module_forward_async(0x5581, payload[0])` |
+| `0x5580` | 1 | `module_publish_command(0x5582, payload, 3)` |
+| `0x5580` | 3 | `FUN_00023204(0x5584, u16_at_payload+3)` — same publisher family, 2-byte arg |
+| `0x5590` | 0, 1 | `module_publish_command(0x5590 + idx + 1, payload, len)` (chars `0x5591/0x5592`) |
+| `0x55A0` | 0..3 | `module_publish_command(0x55A0 + idx + 1, payload, len)` (chars `0x55A1..0x55A4`) |
+| `0x55C0` | 0 / 2 | `log_gatt_write_handler(conn, idx, payload, len)` — log-dispatch handler (see `log_gatt.c` section); idx 0 = control, 2 = readout. idx 1 has no write path. |
+
+The clean pattern: GATT characteristic `svc + idx + 1` corresponds directly to **inter-module Modbus command id `svc + idx + 1`**. The dispatcher is effectively a BLE-to-Modbus bridge for most services. Only the two "opaque" services (`0x5510`, `0x55C0`) have dedicated handlers in their own TUs — likely OAD/firmware update and log dispatch given the size and call patterns.
+
+#### Helpers in `xs3_gatt_write.c`
+
+| Addr | Name | Role |
+| --- | --- | --- |
+| `0x00004DB0` | `xs3_gatt_process_write_event` | central WriteAttrCB dispatcher |
+| `0x000244D8` | `module_publish_command` | publish typed multi-byte command on the Modbus bus |
+| `0x00018B1C` | `auth_derive_session_key` | 4-byte seed → 16-byte session key |
+| `0x00023DCC` | `ble_connection_get_session_key` | per-connection session key fetch |
+| `0x000231C8` | `ble_connection_set_session_key` | store derived key for a connection |
+| `0x0001A218` | `backoffice_auth_session_init` | post-auth init hook for svc `0x5500` |
+| `0x000267A4` | `oad_gatt_write_handler` | **Decoded** — `src/oad.c`. Per-service handler for svc `0x5510`. |
+| `0x00014910` | `log_gatt_write_handler` | **Decoded** — `src/log_gatt.c`. Per-service handler for svc `0x55C0`. |
+
+### `xs3_gatt_read.c` — central GATT read dispatcher
+
+**Decoded** — `xs3_gatt_process_read_event` @ `0x000061C0` (680 B body; previously undefined in Ghidra's auto-analysis — same literal-pool-walk trick used to recover the write dispatcher). Lives in `bleware/src/gatt_read.c`. Read-side analogue of `xs3_gatt_process_write_event`; called by the TI BLE-stack ReadAttrCB for every characteristic in the 11-service registry.
+
+**Auth / encryption gating.** Per-char `flags` byte at registry-entry `+0xC`:
+
+| bit | meaning |
+| --- | --- |
+| 0 | outgoing payload AES-encrypted with the **manufacturing key** (`manufacturing_key_get_or_init_default`) |
+| 1 | mfg key must be available; if not → return `2` |
+| 2 | session key must be set (cleared by the `0x5502` handshake) AND outgoing payload AES-encrypted with the session key |
+| 7 | always-deny |
+
+A runtime "permission mask" (32-bit, source `runtime_permission_mask` @ `0x00026050` — reads `secrets-cache+0x14` after a semaphore-pend) is intersected against the entry's required mask at `+0x10`; any missing bit returns `2`.
+
+**Modbus pre-fetch.** When `att_opcode == 0x0A` (ATT Read Request) AND the entry's `+0x1A` byte is non-zero AND the inter-module bus is idle (`module_bus_is_idle()` @ `0x00026594`), the dispatcher fires `module_publish_sync_with_timeout(conn, svc+idx+1, 150 ms)` (OEM `0x0001EEF4`) — same `svc + idx + 1` command-id convention as the write side. Timeout returns `0xE` (matches OEM `monitor_log("Failed in ssp synchronization u%d", cmd_id)`).
+
+**Per-(svc, char_idx) producers** (anything not listed falls through to the Modbus-shadow copy already populated by the pre-fetch above):
+
+| svc | idx | producer |
+| --- | --- | --- |
+| `0x5500` | 0 | `backoffice_status_u16(conn, &out16)` — 2 B backoffice status word (OEM `0x00022970`) |
+| `0x5520` | 1 | `ble_conn_state_byte(conn, &out_buf[1])` — 1 B connection state at offset 1 (OEM `0x000228B0`) |
+| `0x5540` | 10 | `memset(out, 0, 16); ecc_sign_with_factory_key(out, 16, &g_ecc_curve_params, …)` — ECC sign over zeroed challenge with curve params at `0x000064C0` (OEM `0x0002617E` → ROM thunk `0x1002F8B8`) |
+| `0x5540` | 16 | same ECC sign at `out + 16`; uses `size_max` (entry `+4`) as length |
+| `0x5540` | 17 | `memset(out, 0, 16); trng_fill_16(out)` — TRNG via ROM thunk `0x1002FDDA`, capped to `size_max` |
+| `0x5560` | 6 | `timekeeper_read_be()` (OEM `0x00027448` → `0x0001EAF8`) — packs 4 BE bytes from the upper word of an 8-byte timestamp |
+| `0x55C0` | 1 | `log_block_count_get()` (OEM `0x00020338`) — 4 BE bytes: number of 16 B log blocks ready to read |
+| `0x55C0` | 2 | `((log_total_size_byte() & 0xFFF) << 4)` (OEM `0x000273DC`) — effective total log byte-size |
+
+**Length finalisation.** Clamped to the ATT MTU, and for encrypted chars (`flags & 0x06`) rounded up to a 16 B boundary then trimmed back if it overshoots MTU or `size_max`. Out-of-range `[size_min, size_max]` returns `4`. Zero-length returns `1`.
+
+**Encryption pass.** If `flags & 0x02` (mfg) or `flags & 0x04` (session), allocates a 255 B scratch via `gatt_scratch_alloc` (OEM `thunk_FUN_00013470(0xFF)`), AES-128-ECB encrypts each 16 B block with the relevant key (`aes128_block_encrypt` @ `0x00020898`), then `memcpy`s back. Alloc failure → `0x11`.
+
+**Return-code map:** `0` ok, `1` empty, `2` denied, `4` length out of range, `0xE` Modbus fetch failed, `0x11` scratch alloc failed.
+
+The clean takeaway: this confirms the dispatcher pair `(xs3_gatt_process_write_event, xs3_gatt_process_read_event)` is the complete BLE-side abstraction. Most chars are mechanical BLE↔Modbus bridges in both directions; only seven (svc, idx) pairs have bespoke read producers, and only two services (`0x5510`, `0x55C0`) have full custom write handlers.
+
+### `oad.c` — over-the-air firmware update (`source/oad/oad.c`)
+
+**Decoded** — `src/oad.c`. Three characteristics under svc `0x5510`:
+
+| Char | UUID | size | role |
+| --- | --- | --- | --- |
+| `0x5511` | `6ACC5511-...AD50` | 16  | METADATA (one AES block, dispatcher-decrypted with the session key) |
+| `0x5512` | `6ACC5512-...AD50` | 255 | PAYLOAD chunks (cleartext for data files; scrambled for the bootloader file via the same `FUN_00024740` the central write dispatcher uses for property-bit-1 chars) |
+| `0x5513` | `6ACC5513-...AD50` | 16  | STATUS notify (notify-only — outgoing OAD progress / completion / error codes via `oad_status_notify`) |
+
+Metadata frame (9 bytes, BE):
+
+```
+[0]     filetype  — 0 = bootloader app at 0x80000;
+                    1..0x20 = data file at 0x180000 + filetype*0x80000
+[1..4]  filesize  (u32)
+[5..8]  expected CRC-32 of the full file
+```
+
+Slot allocation:
+
+| filetype | ext-flash base | slot capacity |
+| --- | --- | --- |
+| 0  | `0x080000` | `0x180000` (the full lower window) |
+| 1..0x20 | `0x180000 + ft*0x80000` | `0x80000` (512 KB each) |
+
+Status enum (single-byte arg to `oad_status_notify`):
+
+| Code | Meaning |
+| --- | --- |
+| 0x12 | OAD started — metadata accepted, slot erased |
+| 0x13 | OAD complete — final CRC matched (bootloader file only) |
+| 0x14 | block accepted — sent after every data-file block via `module_publish_command(0x14, &block_idx, 4)` (Modbus to mainware) |
+| 0x16 | CRC mismatch on final block |
+| 0x17 | flash open failed |
+| 0xF8 | invalid filetype (> 0x20) |
+| 0xFF | filesize > slot capacity |
+
+CRC handling quirk: for data files (filetype != 0), the **first 12 bytes** of the payload are excluded from the running CRC — they're treated as a VanMoof PACK container header that lives outside the file's own checksum.
+
+OAD session state (RAM struct at literal-pool entries `DAT_0000BA4C` = `DAT_0000BDC0`, same target):
+
+```
++0x00 u16  conn_handle      (0xFFFF == idle)
++0x04 u32  lock_handle      (TI-RTOS Semaphore_t)
++0x4C u8   filetype
++0x50 u32  filesize
++0x54 u32  expected_crc
++0x58 u32  flash_base       (ext-flash destination start)
++0x5C u32  flash_cursor     (current write offset)
++0x60 u32  bytes_received
++0x64 u32  running_crc      (init 0xFFFFFFFF, final ~CRC)
+```
+
+Concurrency: single connection at a time. Metadata-write captures `conn_handle`; every subsequent payload chunk rejects with `-1` if `param_1 != state.conn_handle`. A TI-RTOS semaphore (`oad_state_lock` @ `0x00020098`) gates state mutations.
+
+Helpers named in Ghidra:
+
+| Addr | Name | Role |
+| --- | --- | --- |
+| `0x000267A4` | `oad_gatt_write_handler` | service `0x5510` write callback |
+| `0x00020098` | `oad_state_lock` | Semaphore_pend wrapper for the OAD state |
+| `0x000265C4` | `oad_status_notify` | publishes the status byte on char `0x5513` |
+| `0x00025060` | `oad_session_close` | tear-down (releases lock, resets conn_handle to 0xFFFF) |
+| `0x00016A50` | `extflash_erase_range` | generic 4 KB-sector erase (`secrets_sector_erase` @ `0x00026C30` is a fixed-address wrapper around this) |
+| `0x00015B9C` | `extflash_write` | generic ext-flash write |
+
+### `log_gatt.c` — circular log readout (`svc 0x55C0`)
+
+**Decoded** — `src/log_gatt.c`. Three characteristics:
+
+| Char | UUID | size | role |
+| --- | --- | --- | --- |
+| `0x55C1` | `6ACC55C1-...AD50` | 16 | CONTROL — sub-command channel. `payload[0]==2` runs `log_seek_to_timestamp(BE u32 at payload[1..4])`; anything else forwards to Modbus as `module_forward_async(0x55C1, payload[0])`. Response notified on channel 0. |
+| `0x55C2` | `6ACC55C2-...AD50` | 16 | (no write path; notify channel 1) |
+| `0x55C3` | `6ACC55C3-...AD50` | up to 240 | READOUT — paginated log dump. `payload[0..3]` = starting log index (BE u32, 16-byte units), `payload[4]` = entry count (capped to MTU window). Reads N × 16 bytes via `log_read_entry` and notifies on channel 2. |
+
+**Log storage:** 128 KB circular region on ext-SPI flash at `0x03FDD000..0x03FFCFFF` (wrap-mask `0x1FFFF`). 4 KB sector at `0x03FDC000` immediately preceding the log holds the persisted read-cursor (8-byte head/tail pair, written by `log_seek_to_timestamp`).
+
+The log appears to contain ASCII text lines terminated by `'\n'`. `log_seek_to_timestamp` scans 256-byte windows from the persisted cursor looking for newlines and parses the leading ASCII integer of each line (Unix timestamp) — advancing the cursor until the next line's timestamp exceeds the requested target. The 16-byte fixed reads on `0x55C3` are pagination units; the client reassembles them to recover full ASCII lines.
+
+Helpers named in Ghidra:
+
+| Addr | Name | Role |
+| --- | --- | --- |
+| `0x00014910` | `log_gatt_write_handler` | svc `0x55C0` write callback |
+| `0x0001E9D8` | `log_read_entry` | reads one 16 B entry; wraps via `(head + idx*16) & 0x1FFFF` |
+| `0x00014C68` | `log_seek_to_timestamp` | scans for `\n` lines, parses leading ASCII timestamp, persists new cursor to 4 KB sector at `0x03FDC000` |
+| `0x0001B9F4` | `log_gatt_notify_channel` | per-channel notify dispatch (channels 0/1/2 → chars `0x55C1/0x55C2/0x55C3`); channel 2 supports up to 0xF0 bytes (aligned down to 16) |
+| `0x000061C0` | `xs3_gatt_process_read_event` | central ReadAttrCB dispatcher (`src/gatt_read.c`) |
+| `0x0001EEF4` | `module_publish_sync_with_timeout` | synchronous Modbus fetch with semaphore-pend timeout |
+| `0x00026594` | `module_bus_is_idle` | inter-module bus idle predicate (`*DAT_000265A8 != -1`) |
+| `0x00026050` | `runtime_permission_mask` | 32-bit cap-set drawn from secrets cache `+0x14` |
+| `0x00020338` | `log_block_count_get` | head/tail delta on the 128 KB circular log, in 16 B blocks |
 
 **Tags / literals stashed in the binary:**
 - `"MOOF\0"` at `0x000195E8`

@@ -115,3 +115,136 @@ g_mkey_owning_struct_field3C:
     WEAK_NOOP(ble_connection_addr)
     WEAK_NOOP(ble_connection_params)
     WEAK_NOOP(ble_device_address)
+
+/* ===== Backoffice GATT message handler — sub-command helpers =====
+ *
+ * Decoded plate-comments live in src/provisioning.c. Each gets its own
+ * real .c body as it lands. The current weak no-ops let the skeleton
+ * link with provisioning.o present. */
+    WEAK_NOOP(mkey_record_write_slot126)
+    WEAK_NOOP(secrets_delete_by_key)
+    WEAK_NOOP(backoffice_ack_noop)
+    WEAK_NOOP(module_forward_async)
+    WEAK_NOOP(secrets_sector_erase)
+    WEAK_NOOP(module_forward_sync)
+    WEAK_NOOP(ble_connection_is_active)
+    WEAK_NOOP(ble_connection_touch)
+    WEAK_NOOP(backoffice_on_success_hook)
+    WEAK_NOOP(gatt_notify_channel)
+    WEAK_NOOP(crc16_modbus)
+
+/* ===== OAD helpers (src/oad.c) ===== */
+    WEAK_NOOP(oad_state_lock)
+    WEAK_NOOP(oad_status_notify)
+    WEAK_NOOP(oad_session_close)
+    WEAK_NOOP(extflash_erase_range)
+    WEAK_NOOP(extflash_write)
+    WEAK_NOOP(ti_semaphore_post)
+    WEAK_NOOP(FUN_00024740)
+
+/* OAD state struct (single instance, RAM-resident). Weak BSS so the
+ * skeleton links; real RAM address baked by the OEM C runtime. */
+    .section .bss.g_oad_state, "aw", %nobits
+    .weak    g_oad_state
+    .type    g_oad_state, %object
+    .size    g_oad_state, 0x68
+g_oad_state:
+    .skip    0x68
+
+/* TI-RTOS tick-period word — OEM `PTR_DAT_0000BA50`. */
+    .section .bss.g_ti_tick_period_us, "aw", %nobits
+    .weak    g_ti_tick_period_us
+    .type    g_ti_tick_period_us, %object
+    .size    g_ti_tick_period_us, 4
+g_ti_tick_period_us:
+    .skip    4
+
+/* ===== extflash.c helpers ===== */
+    WEAK_NOOP(extflash_cs_assert)
+    WEAK_NOOP(extflash_cs_deassert)
+    WEAK_NOOP(extflash_spi_tx)
+    WEAK_NOOP(extflash_spi_rx)
+    WEAK_NOOP(extflash_wait_wip_clear)
+    WEAK_NOOP(extflash_write_enable)
+    WEAK_NOOP(ti_semaphore_post)
+
+/* Singleton state struct (OEM `DAT_00016AFC`). 16-byte placeholder so
+ * the skeleton links; the real RAM is populated by the extflash
+ * driver init that runs early in the Bluetooth task. */
+    .section .bss.g_extflash_state, "aw", %nobits
+    .weak    g_extflash_state
+    .type    g_extflash_state, %object
+    .size    g_extflash_state, 0x10
+g_extflash_state:
+    .skip    0x10
+
+/* ===== gatt_read.c helpers ===== */
+    WEAK_NOOP(gatt_config_lookup_item)
+    WEAK_NOOP(ble_connection_get_session_key)
+    WEAK_NOOP(runtime_permission_mask)
+    WEAK_NOOP(module_publish_sync_with_timeout)
+    WEAK_NOOP(module_bus_is_idle)
+    WEAK_NOOP(aes128_block_encrypt)
+    WEAK_NOOP(gatt_scratch_alloc)
+    WEAK_NOOP(gatt_scratch_free)
+    WEAK_NOOP(log_block_count_get)
+    WEAK_NOOP(log_total_size_byte)
+    WEAK_NOOP(timekeeper_read_be)
+    WEAK_NOOP(ble_conn_state_byte)
+    WEAK_NOOP(backoffice_status_u16)
+    WEAK_NOOP(ecc_sign_with_factory_key)
+    WEAK_NOOP(trng_fill_16)
+
+    .section .rodata.g_ecc_curve_params, "a", %progbits
+    .weak    g_ecc_curve_params
+    .type    g_ecc_curve_params, %object
+    .size    g_ecc_curve_params, 20
+g_ecc_curve_params:
+    .skip    20
+
+/* ===== log_gatt.c helpers ===== */
+    WEAK_NOOP(log_gatt_notify_channel)
+    WEAK_NOOP(att_mtu_clamp)
+    WEAK_NOOP(log_read_entry)
+    WEAK_NOOP(log_seek_to_timestamp)
+    WEAK_NOOP(log_parse_ascii_uint)
+    WEAK_NOOP(ti_semaphore_pend)
+    WEAK_NOOP(extflash_read)
+
+    .section .bss.g_log_state, "aw", %nobits
+    .weak    g_log_state
+    .type    g_log_state, %object
+    .size    g_log_state, 0x10
+g_log_state:
+    .skip    0x10
+
+    .section .bss.g_log_control_scratch, "aw", %nobits
+    .weak    g_log_control_scratch
+    .type    g_log_control_scratch, %object
+    .size    g_log_control_scratch, 0x10
+g_log_control_scratch:
+    .skip    0x10
+
+    .section .bss.g_log_readout_buffer, "aw", %nobits
+    .weak    g_log_readout_buffer
+    .type    g_log_readout_buffer, %object
+    .size    g_log_readout_buffer, 0xF0
+g_log_readout_buffer:
+    .skip    0xF0
+
+    .section .bss.g_log_last_count, "aw", %nobits
+    .weak    g_log_last_count
+    .type    g_log_last_count, %object
+    .size    g_log_last_count, 1
+g_log_last_count:
+    .skip    1
+
+/* Backoffice GATT reassembly buffer pointer — OEM `DAT_000041F8`,
+ * stored value `0x2000A248`. Weak BSS placeholder so the skeleton
+ * links; the real pointer is populated by the GATT-service init. */
+    .section .bss.g_backoffice_reassembly, "aw", %nobits
+    .weak    g_backoffice_reassembly
+    .type    g_backoffice_reassembly, %object
+    .size    g_backoffice_reassembly, 4
+g_backoffice_reassembly:
+    .skip    4

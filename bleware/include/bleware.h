@@ -47,12 +47,58 @@ int      secrets_upsert_keyed_record(const void *record_24);
 int      secrets_upsert_keyed_batch(const void *records, unsigned int count);
 uint32_t secrets_ensure_mid_record(void);
 
-/* Backoffice provisioning (src/provisioning.c). See xs3_gatt_backoffice.c
- * (OEM source path embedded at flash 0x00004140). */
+/* Backoffice GATT message handler (src/provisioning.c). See
+ * xs3_gatt_backoffice.c (OEM source path embedded at flash 0x00004140). */
 uint8_t *manufacturing_key_get_or_init_default(void);
-int      secrets_provisioning_apply_bulk(const uint8_t *pkt,
-                                         uint8_t       *ble_addr_out,
-                                         uint32_t       payload_len);
+int      gatt_handle_backoffice_message_data(uint32_t       conn_idx,
+                                             const uint8_t *frag,
+                                             unsigned int   frag_len);
+
+/* Sub-command helpers — implementations TBD, currently linked via
+ * weak no-op stubs in hal_stubs.S. Each has an OEM address tag in the
+ * comment for the eventual real implementation. */
+int      mkey_record_write_slot126(const void *rec_24);          /* FUN_000222AC */
+int      secrets_delete_by_key(uint32_t key);                    /* FUN_00024D14 */
+int      backoffice_ack_noop(void);                              /* FUN_0002774A */
+int      module_forward_async(uint32_t cmd_id, uint8_t arg);     /* FUN_00024508 */
+int      secrets_sector_erase(void);                             /* FUN_00026C30 */
+int      module_forward_sync(uint16_t cmd, const uint8_t *payload,
+                             unsigned int len);                  /* FUN_000177E8 */
+int      ble_connection_is_active(uint32_t conn_idx);            /* FUN_00023D30 */
+void     ble_connection_touch(uint32_t conn_idx);                /* FUN_00023608 */
+void     backoffice_on_success_hook(void);                       /* FUN_00022BE8 */
+int      gatt_notify_channel(int channel, const void *buf);      /* FUN_0001B538 */
+uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed); /* FUN_0002651C */
+
+/* OAD over-the-air firmware update (src/oad.c). Service 0x5510 write
+ * handler; called by xs3_gatt_process_write_event for indices 0..2. */
+int      oad_gatt_write_handler(uint32_t       conn_handle,
+                                int            char_idx,
+                                const uint8_t *payload,
+                                uint32_t       payload_len);     /* FUN_000267A4 */
+
+/* Log-dispatch GATT handler (src/log_gatt.c). Service 0x55C0 write
+ * handler; reads the circular log buffer at ext-flash 0x03FDD000. */
+int      log_gatt_write_handler(uint32_t       conn_handle,
+                                int            char_idx,
+                                const uint8_t *payload,
+                                uint32_t       payload_len);     /* FUN_00014910 */
+
+/* External SPI NOR-flash driver (src/extflash.c). Sector size 4 KB.
+ * `extflash_erase_range` aligns down and erases every 4 KB sector
+ * intersecting [addr, addr+len). Returns 1 on success, 0 on failure. */
+int      extflash_erase_range(uint32_t addr, uint32_t len);    /* FUN_00016A50 */
+
+/* Central GATT read dispatcher (src/gatt_read.c). Read-side analogue
+ * of xs3_gatt_process_write_event. Called by the TI BLE-stack
+ * ReadAttrCB for every char in the 11-service registry. */
+int      xs3_gatt_process_read_event(uint32_t  module_idx,
+                                     uint32_t  conn_handle,
+                                     uint16_t  svc_uuid,
+                                     uint16_t  char_idx,
+                                     uint8_t  *out_buf,
+                                     uint16_t *out_len,
+                                     uint8_t   att_opcode);     /* FUN_000061c0 */
 
 /* Allocation helpers — TI-RTOS heap (OEM `monitor_alloc/free`). */
 void  *monitor_alloc(unsigned int size);
