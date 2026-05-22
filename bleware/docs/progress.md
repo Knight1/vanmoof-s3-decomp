@@ -430,6 +430,31 @@ address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
 | `0x0001CA68` | `secrets_upsert_keyed_record` | with prototype `int(void*)` |
 | `0x0001F0BE` | `secrets_upsert_keyed_batch` | with prototype `int(void*, unsigned int)` |
 | `0x00021328` | `secrets_ensure_mid_record` | with prototype `unsigned int(void)` |
+| `0x00019570` | `manufacturing_key_get_or_init_default` | reads slot 126 (M-Key); falls back to in-RAM key derived from BLE MAC + "MOOF"/"MKEY" tags. **Authoritative reference to `secrets_record_read(0x7E, ...)`** — earlier "no slot 126 reader" finding was wrong; the function was undefined at search time. |
+| `0x00003E78` | `secrets_provisioning_blob_apply` | GATT-backoffice handler — decrypts a 16-byte-multiple ciphertext blob with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), upserts the resulting records via `secrets_upsert_keyed_batch`, ensures M-ID, rebuilds the 6-byte BLE address. Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
+| `0x00020848` | `block_dispatch_queue_post` | TI-RTOS-style queue post: packages `(key_buf, block_len, src, src_alias)` into a message and hands it to `FUN_000275E8` → `FUN_000125C4` → ROM jump table |
+| `0x00026504` | `byte_to_hex_chars` | writes 2 ASCII hex chars from a byte; hex table at flash `0x0002B46C` = `"0123456789ABCDEF"` |
+
+### `provisioning.c` — backoffice key-import handler (`xs3_gatt_backoffice.c`)
+
+**Decoded** — `src/provisioning.c`. Two functions land here, both touching the Manufacturing Key:
+
+- **`manufacturing_key_get_or_init_default` @ `0x00019570`** — fetches slot 126. On read-failure (factory-fresh device) it materialises a deterministic per-device fallback **in RAM only**: 12 ASCII hex chars of the chip's BLE MAC (read from FCFG1 at `0x500012E8`), `"MOOF"` tag at payload offset +12, `"MKEY"` tag at offset +24, CRC at +28. The fallback is *not* written back to flash — only cached for the current boot, so a factory tool can still detect the unprogrammed state and run the full provisioning flow.
+
+- **`secrets_provisioning_blob_apply` @ `0x00003E78`** — sub-command dispatcher for the GATT backoffice characteristic. Decoded path: the **"bulk encrypted record import"** sub-command. Each 16-byte ciphertext block of the input blob is paired with the M-Key and posted to the CryptoCC26X2 ROM AES task via `block_dispatch_queue_post` → `FUN_000275E8` → `FUN_000125C4` → indirect call through `_DAT_100001FC + 0x20`. Decrypted records bulk-upsert into the secrets store; slot 124 (M-ID) is reaffirmed; a 6-byte BLE address is composed from M-ID + a stack-supplied counter. Other tbh-dispatched sub-commands (status reply, single-record write, etc.) are still TBD.
+
+**Why no AES S-box in bleware:** AES lives in CC2642R1F ROM. App-side calls are pure function-pointer indirect-calls through ROM jump tables (e.g., `_DAT_100001FC[+0x20]` in the bleware base pointer table). This explains the earlier dead-end byte-pattern search. Any future crypto investigation on CC26X2 SimpleLink images should chase ROM jump tables, not S-box bytes.
+
+**No direct xref to `secrets_provisioning_blob_apply` in the binary.** The address `0x00003E78` (or `0x3E79` Thumb-mode) does not appear as a 32-bit literal anywhere — neither in a service-attribute table nor in code. The function is most likely registered with the GATT stack at runtime via a vtable-population helper that takes the address as an immediate (`adr` / `add pc, …`) rather than a literal pool entry. Identifying the registration site is a follow-up — it needs the GATT-service decode.
+
+**Tags / literals stashed in the binary:**
+- `"MOOF\0"` at `0x000195E8`
+- `"MKEY\0"` at `0x000195F0`
+- pointer-to-FCFG1.MAC_BLE (`0x500012E8`) at `0x000195F8`
+- pointer-to-RAM-working-buffer (`0x2000A3DC`) at `0x000195FC`
+- `"0123456789ABCDEF"` at `0x0002B46C`
+- Error message `"Invalid message length <%d>, should be a multiply of 16"` at `0x00004160`
+- Source-file path `"source/xs3_gatt_backoffice.c"` at `0x00004140`
 
 ### Boot-flow correspondence with bleboot
 

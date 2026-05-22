@@ -47,6 +47,17 @@ int      secrets_upsert_keyed_record(const void *record_24);
 int      secrets_upsert_keyed_batch(const void *records, unsigned int count);
 uint32_t secrets_ensure_mid_record(void);
 
+/* Backoffice provisioning (src/provisioning.c). See xs3_gatt_backoffice.c
+ * (OEM source path embedded at flash 0x00004140). */
+uint8_t *manufacturing_key_get_or_init_default(void);
+int      secrets_provisioning_apply_bulk(const uint8_t *pkt,
+                                         uint8_t       *ble_addr_out,
+                                         uint32_t       payload_len);
+
+/* Allocation helpers — TI-RTOS heap (OEM `monitor_alloc/free`). */
+void  *monitor_alloc(unsigned int size);
+void   monitor_free(void *p);
+
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
 

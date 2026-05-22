@@ -77,6 +77,38 @@ name: ; \
     WEAK_NOOP(extflash_sector_write)
     WEAK_NOOP(crc32_le)
     WEAK_NOOP(memcmp)
+    WEAK_NOOP(block_dispatch_queue_post)
+
+/* RAM globals owned by the M-Key cache (OEM struct around
+ * `DAT_000195FC = 0x2000A3DC`). Defined here as weak BSS bytes so the
+ * skeleton links; the real RAM lives in xs3_gatt_backoffice.c. */
+    .section .bss.g_mkey_working_buffer, "aw", %nobits
+    .weak    g_mkey_working_buffer
+    .type    g_mkey_working_buffer, %object
+    .size    g_mkey_working_buffer, 4
+g_mkey_working_buffer:
+    .skip    4
+
+    .section .bss.g_mkey_owning_struct_field30, "aw", %nobits
+    .weak    g_mkey_owning_struct_field30
+    .type    g_mkey_owning_struct_field30, %object
+    .size    g_mkey_owning_struct_field30, 4
+g_mkey_owning_struct_field30:
+    .skip    4
+
+    .section .bss.g_mkey_owning_struct_field34, "aw", %nobits
+    .weak    g_mkey_owning_struct_field34
+    .type    g_mkey_owning_struct_field34, %object
+    .size    g_mkey_owning_struct_field34, 4
+g_mkey_owning_struct_field34:
+    .skip    4
+
+    .section .bss.g_mkey_owning_struct_field3C, "aw", %nobits
+    .weak    g_mkey_owning_struct_field3C
+    .type    g_mkey_owning_struct_field3C, %object
+    .size    g_mkey_owning_struct_field3C, 4
+g_mkey_owning_struct_field3C:
+    .skip    4
     WEAK_NOOP(ble_connection_count)
     WEAK_NOOP(ble_connection_present)
     WEAK_NOOP(ble_connection_is_rider_app)
