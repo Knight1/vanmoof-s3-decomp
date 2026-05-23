@@ -47,6 +47,8 @@ name: ; \
     WEAK_NOOP(monitor_print_help_line)
     WEAK_NOOP(memcpy)
     WEAK_NOOP(memset)
+/* `monitor_alloc` and `monitor_free` are now real strong symbols in
+ * src/ti_rtos_heap.c. Earlier WEAK_NOOP entries removed. */
     WEAK_NOOP(nvs_open)
     WEAK_NOOP(extflash_open)
     WEAK_NOOP(extflash_close)
@@ -63,10 +65,8 @@ name: ; \
     WEAK_NOOP(print_firmware_info)
     WEAK_NOOP(log_block_count)
     WEAK_NOOP(log_format_block)
-    WEAK_NOOP(monitor_alloc)
     WEAK_NOOP(monitor_strlen)
     WEAK_NOOP(log_submit)
-    WEAK_NOOP(monitor_free)
     WEAK_NOOP(monitor_snprintf)
     WEAK_NOOP(packfs_open)
     WEAK_NOOP(packfs_next)
@@ -315,12 +315,35 @@ g_gatt_dispatch:
     WEAK_NOOP(FUN_00022970)
     WEAK_NOOP(FUN_00023114)
 
-/* ===== bluetoothtask_post.c helpers =====
+/* ===== bluetoothtask_post.c + ti_rtos_msgq.c helpers =====
  *
  * `ble_post_disconnect` is now a real strong symbol in
- * src/bluetoothtask_post.c. The remaining bluetoothtask-queue helpers
- * stay weak until their own decomp passes land. */
-    WEAK_NOOP(task_queue_enqueue_and_signal)
+ * src/bluetoothtask_post.c; `task_queue_enqueue_and_signal` is now
+ * a real strong symbol in src/ti_rtos_msgq.c. ROM-thunk pass-throughs
+ * remain weak until they get wired to the actual SDK. */
+    WEAK_NOOP(ti_queue_put)
+    WEAK_NOOP(ti_event_post)
+
+/* ===== ti_rtos_heap.c =====
+ *
+ * The OEM `g_heap_state` pointer lives at flash 0x0001355C and at
+ * 0x00021BC8 (both literal slots hold the same value 0x20004E0C —
+ * the heap-state struct base in RAM). Weak BSS placeholder so the
+ * skeleton links; real placement comes from a future cinit-walker /
+ * heap-init decomp. */
+    .section .bss.g_heap_state_storage, "aw", %nobits
+    .weak    g_heap_state_storage
+    .type    g_heap_state_storage, %object
+    .size    g_heap_state_storage, 0x40
+g_heap_state_storage:
+    .skip    0x40
+
+    .section .data.g_heap_state, "aw", %progbits
+    .weak    g_heap_state
+    .type    g_heap_state, %object
+    .size    g_heap_state, 4
+g_heap_state:
+    .word    g_heap_state_storage
 
 /* Bluetoothtask user-message queue control struct — pointer global
  * at flash 0x00021078 in the OEM, holding 0x200057C8. Weak BSS
