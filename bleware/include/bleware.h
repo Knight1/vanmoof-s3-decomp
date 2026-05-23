@@ -102,6 +102,27 @@ uint8_t svc_5560_read_attr_cb (uint32_t conn, void *attr, uint8_t *out_buf,
 uint8_t svc_5560_write_attr_cb(uint32_t conn, void *attr, uint8_t *value,
                                uint16_t len, uint16_t offset);      /* FUN_00019A80 */
 
+/* The 8 remaining per-service shim pairs (one for each non-backoffice
+ * service except 0x5560, which lives in its own TU). All defined in
+ * src/gatt_service_shims.c via a shared core + DEFINE_GATT_SHIM_PAIR
+ * macro. Signatures match svc_5560_*_attr_cb. */
+#define DECL_SHIM_PAIR(svc)                                                    \
+    uint8_t svc_##svc##_read_attr_cb (uint32_t, void *, uint8_t *, uint16_t *, \
+                                      uint16_t, uint16_t, uint8_t);            \
+    uint8_t svc_##svc##_write_attr_cb(uint32_t, void *, uint8_t *, uint16_t,   \
+                                      uint16_t)
+
+DECL_SHIM_PAIR(5510);
+DECL_SHIM_PAIR(5520);
+DECL_SHIM_PAIR(5530);
+DECL_SHIM_PAIR(5540);
+DECL_SHIM_PAIR(5570);
+DECL_SHIM_PAIR(5590);
+DECL_SHIM_PAIR(55a0);
+DECL_SHIM_PAIR(55c0);
+
+#undef DECL_SHIM_PAIR
+
 /* Central GATT read dispatcher (src/gatt_read.c). Read-side analogue
  * of xs3_gatt_process_write_event. Called by the TI BLE-stack
  * ReadAttrCB for every char in the 11-service registry. */

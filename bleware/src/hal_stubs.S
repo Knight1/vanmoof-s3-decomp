@@ -247,9 +247,36 @@ g_bleware_gpio_ctx:
 g_ymodem_target_offset:
     .skip    4
 
-/* ===== gatt_svc_5560.c helpers ===== */
+/* ===== gatt_svc_5560.c + gatt_service_shims.c helpers ===== */
     WEAK_NOOP(svc_5560_char_uuid_to_index)
+    WEAK_NOOP(svc_5510_char_uuid_to_index)
+    WEAK_NOOP(svc_5520_char_uuid_to_index)
+    WEAK_NOOP(svc_5530_char_uuid_to_index)
+    WEAK_NOOP(svc_5570_char_uuid_to_index)
+    WEAK_NOOP(svc_5590_char_uuid_to_index)
+    WEAK_NOOP(svc_55a0_char_uuid_to_index)
+    WEAK_NOOP(svc_55c0_char_uuid_to_index)
+    WEAK_NOOP(vanmoof_ssp_uuid_to_index)
     WEAK_NOOP(cccd_write_validate)
+
+/* Per-service mailbox callback-slot pointers (one global per service;
+ * three are shared at the same RAM address: 0x5510/0x5520/0x55A0). */
+#define WEAK_PTR(name) \
+    .section .bss.##name, "aw", %nobits ; \
+    .weak    name ; \
+    .type    name, %object ; \
+    .size    name, 4 ; \
+name: ; \
+    .skip    4
+
+    WEAK_PTR(g_svc_5510_mailbox_callback)
+    WEAK_PTR(g_svc_5520_mailbox_callback)
+    WEAK_PTR(g_svc_5530_mailbox_callback)
+    WEAK_PTR(g_svc_5540_mailbox_callback)
+    WEAK_PTR(g_svc_5570_mailbox_callback)
+    WEAK_PTR(g_svc_5590_mailbox_callback)
+    WEAK_PTR(g_svc_55a0_mailbox_callback)
+    WEAK_PTR(g_svc_55c0_mailbox_callback)
 
 /* Central-dispatch vtable pointer — OEM `*DAT_0001E370`. The actual
  * struct lives at RAM 0x20003F84 and is populated by GATT-init code
