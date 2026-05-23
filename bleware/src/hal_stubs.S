@@ -140,7 +140,10 @@ g_mkey_owning_struct_field3C:
     WEAK_NOOP(extflash_erase_range)
     WEAK_NOOP(extflash_write)
     WEAK_NOOP(ti_semaphore_post)
-    WEAK_NOOP(FUN_00024740)
+/* `FUN_00024740` is now strong as `mfg_key_ecb_decrypt_chunks` in
+ * src/auth.c. */
+    WEAK_NOOP(state_machine_post)
+    WEAK_NOOP(secrets_count_valid_in_keys_range)
 
 /* OAD state struct (single instance, RAM-resident). Weak BSS so the
  * skeleton links; real RAM address baked by the OEM C runtime. */
@@ -204,7 +207,8 @@ g_extflash_state:
     WEAK_NOOP(ti_mailbox_post)
     WEAK_NOOP(ssp_frame_alloc)
     WEAK_NOOP(gpio_write)
-    WEAK_NOOP(ble_connection_get_session_key)
+/* `ble_connection_get_session_key` is now a real strong symbol in
+ * src/ble_connection.c (was a weak stub here and again at line 399). */
 
 /* SSP master state struct (singleton, RAM 0x20003104). */
     .section .bss.g_ssp_master, "aw", %nobits
@@ -309,14 +313,60 @@ g_gatt_dispatch:
     WEAK_NOOP(abort_continuation)
 
 /* ===== gatt_write.c helpers ===== */
-    WEAK_NOOP(ble_connection_set_session_key)
-    WEAK_NOOP(auth_derive_session_key)
-    WEAK_NOOP(backoffice_auth_session_init)
     WEAK_NOOP(FUN_00021884)
     WEAK_NOOP(FUN_00026cc0)
     WEAK_NOOP(FUN_00023204)
-    WEAK_NOOP(FUN_00022970)
-    WEAK_NOOP(FUN_00023114)
+/* `auth_derive_session_key` is now strong in src/auth.c;
+ * `backoffice_auth_session_init` in src/ble_connection.c. */
+/* `ble_connection_set_session_key`, `indicate_seq_peek`,
+ * `indicate_seq_advance`, and `ble_connection_get_session_key` are
+ * now real strong symbols in src/ble_connection.c (earlier WEAK_NOOP
+ * for `ble_connection_get_session_key` was at line 293 — see below).
+ */
+
+/* ===== ble_connection.c + lcg_random.c helpers =====
+ * `ti_semaphore_pend` / `ti_semaphore_post` already declared as
+ * WEAK_NOOPs earlier (lines 142, 472). No need to re-declare. */
+
+/* Per-connection state table pointer — flash literal 0x000229AC /
+ * 0x0002314C / 0x00023200 / 0x00023DFC, all holding RAM 0x20004158.
+ * Each entry is 0x7C bytes; N entries depends on the BLE-stack
+ * configuration (typically 1..8). Reserve room for 8 here. */
+    .section .bss.g_ble_connection_table_storage, "aw", %nobits
+    .weak    g_ble_connection_table_storage
+    .type    g_ble_connection_table_storage, %object
+    .size    g_ble_connection_table_storage, 0x3E0
+g_ble_connection_table_storage:
+    .skip    0x3E0
+
+    .section .data.g_ble_connection_table, "aw", %progbits
+    .weak    g_ble_connection_table
+    .type    g_ble_connection_table, %object
+    .size    g_ble_connection_table, 4
+g_ble_connection_table:
+    .word    g_ble_connection_table_storage
+
+/* LCG state + lock pair (slots populated by stack init at runtime). */
+    .section .bss.g_lcg_state, "aw", %nobits
+    .weak    g_lcg_state
+    .type    g_lcg_state, %object
+    .size    g_lcg_state, 4
+g_lcg_state:
+    .skip    4
+
+    .section .data.g_lcg_lock_enter, "aw", %progbits
+    .weak    g_lcg_lock_enter
+    .type    g_lcg_lock_enter, %object
+    .size    g_lcg_lock_enter, 4
+g_lcg_lock_enter:
+    .word    0
+
+    .section .data.g_lcg_lock_exit, "aw", %progbits
+    .weak    g_lcg_lock_exit
+    .type    g_lcg_lock_exit, %object
+    .size    g_lcg_lock_exit, 4
+g_lcg_lock_exit:
+    .word    0
 
 /* ===== bluetoothtask_post.c + ti_rtos_msgq.c helpers =====
  *
@@ -392,9 +442,9 @@ g_icall_entities_storage:
 g_icall_entities:
     .word    g_icall_entities_storage
 
-/* ===== gatt_read.c helpers ===== */
+/* ===== gatt_read.c helpers =====
+ * `ble_connection_get_session_key` now strong in src/ble_connection.c. */
     WEAK_NOOP(gatt_config_lookup_item)
-    WEAK_NOOP(ble_connection_get_session_key)
     WEAK_NOOP(runtime_permission_mask)
     WEAK_NOOP(module_publish_sync_with_timeout)
     WEAK_NOOP(module_bus_is_idle)

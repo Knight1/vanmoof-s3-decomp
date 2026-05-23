@@ -25,7 +25,7 @@
  *       bit 2  session-key-stream decrypt (16-byte blocks via
  *              `block_dispatch_queue_post`)
  *       bit 3  indicate-confirm: first u16 of payload must match the
- *              pending indicate sequence number from `FUN_00022970`
+ *              pending indicate sequence number from `indicate_seq_peek`
  *   - per-char **permission gate** (entry +0x14): `runtime_permission_mask()`
  *     must be a superset of the entry's mask
  *   - per-char **padding-byte check** (entry +0x18 signed sentinel /
@@ -56,36 +56,35 @@
 extern void *gatt_config_lookup_item(uint16_t svc_uuid, uint8_t char_idx);  /* differs slightly: write path passes a byte char_idx */
 
 /* ---- Per-connection session key / counter ----------------------- */
-extern int      ble_connection_get_session_key(uint32_t conn_handle);
-extern void     ble_connection_set_session_key(uint32_t       conn_handle,
-                                               const void    *key_16);     /* FUN_00023608 used elsewhere, separate setter here */
+/* `ble_connection_get_session_key`, `ble_connection_set_session_key`
+ * declared in bleware.h (see src/ble_connection.c). */
 extern int      ble_authenticated_connection_count(void);
 
-/* ---- Auth-handshake helper -------------------------------------- *
- * Derives the 16-byte AES session key from the 4-byte client nonce.
- * Returns a pointer to a static/heap buffer holding the key, or NULL
- * on failure. */
-extern void *auth_derive_session_key(uint32_t client_nonce_be);
+/* `auth_derive_session_key` declared in bleware.h (src/auth.c).
+ * Derives or synthesises a 32-byte session-key record for a given
+ * client key id. Returns a pointer to the global working buffer or
+ * NULL on failure. */
 
 extern uint32_t runtime_permission_mask(void);
 
 /* ---- Crypto / framing helpers ----------------------------------- */
 extern void     block_dispatch_queue_post(const void *key, uint32_t kind,
                                           const void *src, void *dst);
-extern void     FUN_00024740(void *dst_plain, const void *src_ct,
-                             uint16_t len);                                 /* ECB-decrypt with manufacturing key */
+/* `mfg_key_ecb_decrypt_chunks` declared in bleware.h (src/auth.c). */
 
-/* ---- Indicate-confirm tracking ---------------------------------- */
-extern int      FUN_00022970(uint16_t conn, uint16_t *out_seq);             /* read pending-indicate seq */
-extern void     FUN_00023114(uint16_t conn);                                /* ack pending-indicate */
+/* ---- Indicate-confirm tracking ---------------------------------- *
+ * `indicate_seq_peek` / `indicate_seq_advance` declared in bleware.h
+ * (see src/ble_connection.c). Returns 0 on a valid conn handle, -1
+ * if the per-connection state has gone stale. */
 
 /* ---- Disconnect-on-error path ----------------------------------- *
  * Schedules a force-disconnect of the offending connection via the
  * bluetoothtask user-msg queue. Declared in bleware.h; see
  * src/bluetoothtask_post.c. */
 
-/* ---- Per-service relays ----------------------------------------- */
-extern void     backoffice_auth_session_init(uint16_t conn, const void *session_key);
+/* ---- Per-service relays -----------------------------------------
+ * `backoffice_auth_session_init` declared in bleware.h
+ * (src/ble_connection.c). */
 extern void     FUN_00021884(uint16_t cmd_id, uint32_t value_24bit);        /* svc 0x5500 op 0x02 + svc 0x5560 op 0x06 relay */
 extern void     FUN_00026cc0(uint32_t epoch_be);                            /* svc 0x5560 op 0x06 timekeeper-set */
 extern uint32_t FUN_00027448(void);                                         /* timekeeper-read returning current epoch */
@@ -235,7 +234,7 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
      * back over the value buffer. */
     if (crypto_flags & 0x02) {
         uint8_t *local_storage = *(uint8_t * const *)(entry + 8);
-        FUN_00024740(local_storage, value_data, value_len);
+        mfg_key_ecb_decrypt_chunks(local_storage, value_data, value_len);
         memcpy(value_data, local_storage, value_len & 0xfff0);
     }
 
@@ -245,12 +244,12 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
     if (crypto_flags & 0x08) {
         uint16_t got_seq;
         memcpy(&got_seq, value_data, 2);
-        FUN_00022970(conn, &expected_seq);
+        indicate_seq_peek(conn, &expected_seq);
         if (expected_seq != got_seq) {
             att_err = 1;
             goto send_att_error;
         }
-        FUN_00023114(conn);
+        indicate_seq_advance(conn);
         value_data = &evt->value[2];
         evt->value_len = (uint16_t)(value_len - 2);
         value_len      = evt->value_len;

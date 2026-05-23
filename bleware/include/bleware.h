@@ -150,6 +150,29 @@ void   monitor_free(void *p);
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
 
+/* Session-key derivation + manufacturing-ECB helpers (src/auth.c). */
+void *auth_derive_session_key(uint32_t client_key_id);            /* 0x00018B1C */
+void  mfg_key_ecb_decrypt_chunks(uint8_t       *dst,
+                                 const uint8_t *src,
+                                 uint32_t       total_len);       /* 0x00024740 */
+
+/* Pin a session key for a backoffice-authenticated connection
+ * (src/ble_connection.c). OEM @ 0x0001A218. */
+int   backoffice_auth_session_init(uint16_t conn, const void *session_key);
+
+/* Per-connection state accessors (src/ble_connection.c). The BLE
+ * stack tracks each active connection in a 0x7C-byte record at
+ * `g_ble_connection_table[conn]`. Each accessor takes the per-record
+ * semaphore, sanity-checks the conn handle, performs the read/write,
+ * and posts the semaphore. */
+int      indicate_seq_peek(uint16_t conn, uint16_t *out_seq);     /* 0x00022970 */
+int      indicate_seq_advance(uint16_t conn);                     /* 0x00023114 */
+int      ble_connection_get_session_key(uint32_t conn);           /* 0x00023DCC */
+int      ble_connection_set_session_key(uint32_t conn, const void *key_16); /* 0x000231C8 */
+
+/* 15-bit LCG pseudo-random (src/lcg_random.c). OEM at 0x00023E34. */
+uint32_t lcg_random_u15(void);
+
 /* Post a kind-0x04 "disconnect" message to the bluetoothtask's user-
  * message queue (src/bluetoothtask_post.c). The bluetoothtask consumes
  * it on its next event-flag-bit-30 wakeup and either force-disconnects

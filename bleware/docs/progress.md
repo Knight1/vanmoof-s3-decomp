@@ -28,8 +28,31 @@ peripheral wiring, anything that's specific to VanMoof.
 | ?? | pending (TBD as functions are categorised) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 0 | decomp (asm or c) |
+| 18 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
+
+### Decoded functions
+
+| OEM address | OEM symbol                        | Source file              | Notes |
+| ----------- | --------------------------------- | ------------------------ | ----- |
+| 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
+| 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |
+| 0x00004DB0  | `xs3_gatt_process_write_event`    | `src/gatt_write.c`       | Central GATT write dispatcher (write-side analogue of `xs3_gatt_process_read_event`). Auth handshake on (0x5502, opcode 0x14, 20-byte payload), length/perm/pad gates, three crypto-flag paths (session-stream decrypt / manufacturing-ECB / indicate-confirm), then dispatch by service UUID to per-svc handlers (`oad_gatt_write_handler`, `log_gatt_write_handler`, `gatt_handle_backoffice_message_data`, `module_publish_command`, `module_forward_async`). Reached from `svc_XXXX_write_attr_cb` shims via `*0x20003F84 → 0x20005A30+0` — the populator of slot +0 is still not statically traceable. |
+| 0x00021030  | `ble_post_disconnect`             | `src/bluetoothtask_post.c` | Posts a kind-0x04 "disconnect" message to the bluetoothtask's user-message queue (RAM 0x200057C8). Payload is 4 B `{u8 reason, pad, u16 conn}`; envelope is 8 B `{u8 kind, pad x3, void *payload}`. Callers: `xs3_gatt_process_write_event` (auth/perm/pad failures) and `cmd_ble_disconnect` (monitor command; passes conn=0xFFFD for "all"). |
+| 0x00013470  | `monitor_alloc`                   | `src/ti_rtos_heap.c`     | First-fit dual-pool allocator (small ≤ 16 B from `small_walk_start`, large > 16 B from `large_walk_start`). Walks the implicit free list, coalescing adjacent free blocks, splitting if leftover ≥ 4 B. Heap state at RAM 0x20004E0C tracks block/byte counts and peak high-water marks. Bracketed by `icall_cs_enter` / `icall_cs_exit`. Returns block+4 (caller sees pointer past the in-band size header). |
+| 0x00021B88  | `monitor_free`                    | `src/ti_rtos_heap.c`     | Pair to `monitor_alloc`. Clears the IN_USE bit at p-4, updates free-block count + byte stats, then drags the small-list walk start down to this block if it's lower than the current start (next alloc walks from the lowest free block). |
+| 0x00023982  | `task_queue_enqueue_and_signal`   | `src/ti_rtos_msgq.c`     | Allocates a 12-B Queue_Elem node, stores the payload pointer at node+8, runs `ti_queue_put`, then `ti_event_post(bit 30)` if `event != NULL`. On node-alloc failure, frees the payload and returns 0. Used by `ble_post_disconnect` and (in future decomps) the rest of the bluetoothtask post helpers + the ICall reply path. |
+| 0x00024DB8  | `icall_cs_enter`                  | `src/ti_rtos_kernel.c`   | Disables Hwi + Task, packs both restore keys into one 32-bit word: `(hwi_key & 0xFFFF) \| ((task_key & 0xFFFF) << 16)`. Underlying ROM thunks (`bios_hwi_disable` @ ROM 0x1002EA24, `bios_task_disable` @ ROM 0x1002EB54) still weak-stubbed pending SDK vendoring. |
+| 0x000266B2  | `icall_cs_exit`                   | `src/ti_rtos_kernel.c`   | Pair to `icall_cs_enter`. Unpacks the key and calls `bios_task_restore(key >> 16)` then `bios_hwi_restore(key & 0xFFFF)` — reverse order, LIFO. |
+| 0x0002669C  | `bios_abort`                      | `src/ti_rtos_kernel.c`   | Tight `while (volatile flag) {}` halt loop, then tail-call into `abort_continuation` @ 0x0002773E (dead code per Ghidra — kept for completeness). Reached from `log_emit_v` and `icall_caller_entity` when called from a non-runnable thread context. |
+| 0x00022970  | `indicate_seq_peek`               | `src/ble_connection.c`   | Per-connection state accessor — Semaphore_pend, sanity check (`e->conn_handle == conn`), read `e->indicate_seq` into `*out_seq`, Semaphore_post. Returns 0 / -1. |
+| 0x00023114  | `indicate_seq_advance`            | `src/ble_connection.c`   | Pair to `_peek`: writes a fresh `lcg_random_u15()` value into `e->indicate_seq`. Same lock/check/release shape. |
+| 0x00023DCC  | `ble_connection_get_session_key`  | `src/ble_connection.c`   | Same template, reads `e->session_key` (returns 0 on mismatch). |
+| 0x000231C8  | `ble_connection_set_session_key`  | `src/ble_connection.c`   | Same template, writes `e->session_key`. Per-connection table entry layout is 0x7C bytes at RAM 0x20004158 — `+0x00 indicate_seq, +0x24 sem, +0x48 conn_handle, +0x50 session_key`. |
+| 0x00023E34  | `lcg_random_u15`                  | `src/lcg_random.c`       | glibc-style LCG (a = 0x41C64E6D, c = 0x3039) operating on a u32 state at RAM 0x20005B2C, bracketed by an installed function-pointer lock pair (at 0x20005A58 / 0x20005A5C). Returns the upper 15 bits of `(s & 0x7FFFFFFF) >> 16`. Callers: `indicate_seq_advance` (this batch) and `FUN_00015AD8` (not yet decoded). |
+| 0x00018B1C  | `auth_derive_session_key`         | `src/auth.c`             | Look up a 32-byte session-key record by client key id (`secrets_find_by_key`). On a fully un-provisioned device (no mfg key, no key records in slots 0..0x7B), synthesise the default OWNER_PERMS record: `"_____OWNER_PERMS" / 00000000 / FFFFFFFF / "UKEY" / CRC32(28B)`. Stores the result in `g_mkey_working_buffer` and returns a pointer to it (NULL on failure). |
+| 0x00024740  | `mfg_key_ecb_decrypt_chunks`      | `src/auth.c`             | Bulk ECB-decrypt helper: pulls the manufacturing key, then loops `len/16` times calling `block_dispatch_queue_post(key, kind=0x10, src, dst)` per 16-byte block. Caller (`xs3_gatt_process_write_event`) has already rounded length to a multiple of 16. |
+| 0x0001A218  | `backoffice_auth_session_init`    | `src/ble_connection.c`   | Pin a session key for a backoffice-authenticated connection (svc 0x5500 char 0x01 write path). Lock entry, set `backoffice_authed = 1` unconditionally, then if the conn handle still matches: pin the key + `state_machine_post(0x18, &conn, 2)`. Caps at conn < 3. |
 
 `function_count` to be populated from `ghidra/exports/bleware_program.json`
 once the per-program dump script is set up.
@@ -146,7 +169,14 @@ Body shape:
     - `0x32` — `FUN_26736(byte0, dword4)` — another event
   - Free the message buffer (`FUN_00021B88`)
 
-`FUN_0001AC6C(0x10, ...)` is clearly a **structured-log emit** — the leading `0x10` is the log severity / verbosity; many call sites pass varargs that line up with embedded format strings (e.g. `"Hardware error <d>"`). The `FUN_00006D90` calls are similar but include source-file / line-number for error logs.
+`FUN_0001AC6C` is now decoded as `log_emit_v(service_id, fmt, ...)` in
+`src/log_emit.c` — a variadic log emit that posts a format-string +
+va-args envelope to a TI BLE-stack ICall service and waits 1000 ms for
+the ack. The leading `0x10` in every observed call site is the ICall
+**service id** of the bleware logger (not a severity); varargs line up
+with embedded format strings (e.g. `"Hardware error <d>"`). The
+`FUN_00006D90` (= `monitor_log`) calls are the related but separate
+location-aware emit used by the monitor module.
 
 ### Monitor (debug console) — architecture sketched
 
@@ -335,17 +365,19 @@ Two more function pointers (`0x0001E311`, `0x00019A81`) follow the table's null 
 
 | svc | write shim | read shim | char-uuid matcher | vtable literal |
 | --- | --- | --- | --- | --- |
-| 0x5510 | `svc_5510_write_attr_cb` @ `0x00019840` | `svc_5510_read_attr_cb` @ `0x0001E11C` | `FUN_0001D744` | `DAT_000198CC` → RAM `0x20005188` |
-| 0x5520 | `svc_5520_write_attr_cb` @ `0x000192A0` | `svc_5520_read_attr_cb` @ `0x0001DD98` | `FUN_0001AB6C` | `DAT_0001932C` → RAM `0x20005188` |
-| 0x5530 | `svc_5530_write_attr_cb` @ `0x00019720` | `svc_5530_read_attr_cb` @ `0x0001E054` | — | — |
-| 0x5540 | `svc_5540_write_attr_cb` @ `0x000194E0` | `svc_5540_read_attr_cb` @ `0x0001DF28` | — | — |
+| 0x5510 | `svc_5510_write_attr_cb` @ `0x00019840` | `svc_5510_read_attr_cb` @ `0x0001E11C` | `svc_5510_char_uuid_to_index` @ `0x0001D744` | RAM `0x20005188` (shared with 0x5520, 0x55A0) |
+| 0x5520 | `svc_5520_write_attr_cb` @ `0x000192A0` | `svc_5520_read_attr_cb` @ `0x0001DD98` | `svc_5520_char_uuid_to_index` @ `0x0001AB6C` | RAM `0x20005188` (shared) |
+| 0x5530 | `svc_5530_write_attr_cb` @ `0x00019720` | `svc_5530_read_attr_cb` @ `0x0001E054` | `svc_5530_char_uuid_to_index` @ `0x00010EB8` | RAM `0x20003D30` |
+| 0x5540 | `svc_5540_write_attr_cb` @ `0x000194E0` | `svc_5540_read_attr_cb` @ `0x0001DF28` | `vanmoof_ssp_uuid_to_index` (shared SSP matcher) | RAM `0x20003998` |
 | 0x5560 | `svc_5560_write_attr_cb` @ `0x00019A80` | `svc_5560_read_attr_cb` @ `0x0001E310` | `svc_5560_char_uuid_to_index` @ `0x00012FA8` | RAM `0x20003F84` |
-| 0x5570 | `svc_5570_write_attr_cb` @ `0x000199F0` | `svc_5570_read_attr_cb` @ `0x0001E1E4` | — | — |
-| 0x5590 | `svc_5590_write_attr_cb` @ `0x000197B0` | `svc_5590_read_attr_cb` @ `0x0001E0B8` | — | — |
-| 0x55A0 | `svc_55a0_write_attr_cb` @ `0x00019330` | `svc_55a0_read_attr_cb` @ `0x0001DDFC` | `FUN_0001ABEC` | `DAT_000193BC` → RAM `0x20005188` |
-| 0x55C0 | `svc_55c0_write_attr_cb` @ `0x00019690` | `svc_55c0_read_attr_cb` @ `0x0001DFF0` | — | — |
+| 0x5570 | `svc_5570_write_attr_cb` @ `0x000199F0` | `svc_5570_read_attr_cb` @ `0x0001E1E4` | `svc_5570_char_uuid_to_index` @ `0x0001D814` | RAM `0x20004F78` |
+| 0x5590 | `svc_5590_write_attr_cb` @ `0x000197B0` | `svc_5590_read_attr_cb` @ `0x0001E0B8` | `svc_5590_char_uuid_to_index` @ `0x00020A28` | RAM `0x20005214` |
+| 0x55A0 | `svc_55a0_write_attr_cb` @ `0x00019330` | `svc_55a0_read_attr_cb` @ `0x0001DDFC` | `svc_55a0_char_uuid_to_index` @ `0x0001ABEC` | RAM `0x20005188` (shared) |
+| 0x55C0 | `svc_55c0_write_attr_cb` @ `0x00019690` | `svc_55c0_read_attr_cb` @ `0x0001DFF0` | `svc_55c0_char_uuid_to_index` @ `0x0001D6DC` | RAM `0x20004EC4` |
 
-Every shim is structurally identical to the `svc_5560` pair already decoded in `src/gatt_svc_5560.c` — 140 B write, 94 B read, only three things vary per service:
+**All 9 pairs are now translated into C** — `src/gatt_service_shims.c` holds 8 of them via a `DEFINE_GATT_SHIM_PAIR` macro over a shared `gatt_shim_read_core` / `gatt_shim_write_core` pair, with svc 0x5560 kept separate in `src/gatt_svc_5560.c` for its longer architectural comment. The matchers and mailbox pointers are extern with weak BSS in `hal_stubs.S` until the per-service init code lands.
+
+Every shim is structurally identical to the `svc_5560` pair — 140 B write, 94 B read, only three things vary per service:
 1. the hardcoded svc UUID literal,
 2. the per-service char-UUID-to-index function (different table layouts, different number of chars),
 3. the vtable pointer (sampled: services 0x5510/0x5520/0x55A0 share vtable at RAM `0x20005188`; svc 0x5560 uses RAM `0x20003F84` — so there are at least **two** distinct vtables; the other services need spot-checking to see which they bind to).
@@ -936,6 +968,11 @@ Helpers named in Ghidra:
 | `0x0001E9D8` | `log_read_entry` | reads one 16 B entry; wraps via `(head + idx*16) & 0x1FFFF` |
 | `0x00014C68` | `log_seek_to_timestamp` | scans for `\n` lines, parses leading ASCII timestamp, persists new cursor to 4 KB sector at `0x03FDC000` |
 | `0x0001B9F4` | `log_gatt_notify_channel` | per-channel notify dispatch (channels 0/1/2 → chars `0x55C1/0x55C2/0x55C3`); channel 2 supports up to 0xF0 bytes (aligned down to 16) |
+| `0x0001E9D8` | `log_read_entry` | **Decoded** — `src/log_gatt.c`. Wraps `tail_offset + idx*16` with mask `0x1FFFF`, calls `extflash_read` for 16 B. 10 ms semaphore timeout. |
+| `0x00014C68` | `log_seek_to_timestamp` | **Decoded** — `src/log_gatt.c`. Walks one 256 B window at a time from `tail` toward `head`, finds first `'\n'`, parses leading u32 timestamp via `monitor_strtol(.., 10)`, breaks when first timestamp > target. Persists new `(head, tail)` pair to 4 KB cursor sector at `0x03FDC000` (circular log of 8-byte pairs; erases sector on wrap to 0). |
+| `0x000107BC` | `monitor_strtol` | TI runtime `strtol` clone — flag-table at `DAT_000108E8`, supports bases 2..36, 0x/0X hex prefix, `errno=0x22` on overflow. Used by the log timestamp scanner and elsewhere. |
+| `0x000230D8` | `log_region_erase` | erases the 4 KB cursor persist sector + 32 × 4 KB region sectors (128 KB total), yielding between each via `FUN_00027478` |
+| `0x00017B24` | `log_writer_restart` | startup recovery — scans the 4 KB cursor sector for the last valid persisted `(head, tail)` pair (validity = `head < 0x20000` AND `tail < 0x20000`), restores it into the state struct |
 | `0x000061C0` | `xs3_gatt_process_read_event` | central ReadAttrCB dispatcher (`src/gatt_read.c`) |
 | `0x0001EEF4` | `module_publish_sync_with_timeout` | synchronous Modbus fetch with semaphore-pend timeout |
 | `0x00026594` | `module_bus_is_idle` | inter-module bus idle predicate (`*DAT_000265A8 != -1`) |
@@ -1034,9 +1071,11 @@ ships full BLE-app + audio + monitor-console + OAD pipelines.
 | `source/monitor/cmd_os.c` | monitor `os` command (kernel introspection?) |
 | `source/monitor/cmd_packfs.c` | monitor `packfs` command |
 
-Logging is structured: `FUN_0001AC6C(0x10, fmt, ...)` is the level-10
-log emit; `FUN_00006D90(file, line, func, level, fmt, ...)` is the
-"location-aware" emit used in error paths.
+Logging is structured: `log_emit_v(0x10, fmt, ...)` (FUN_0001AC6C, see
+`src/log_emit.c`) is the application-level variadic dispatcher that
+posts to ICall service 0x10 and waits 1000 ms for ack;
+`monitor_log(file, line, func, level, fmt, ...)` (FUN_00006D90) is the
+"location-aware" emit used in error and monitor paths.
 
 ## Open questions
 
