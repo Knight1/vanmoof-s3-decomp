@@ -288,9 +288,9 @@ g_ecc_curve_params:
 /* ===== log_gatt.c helpers ===== */
     WEAK_NOOP(log_gatt_notify_channel)
     WEAK_NOOP(att_mtu_clamp)
-    WEAK_NOOP(log_read_entry)
-    WEAK_NOOP(log_seek_to_timestamp)
-    WEAK_NOOP(log_parse_ascii_uint)
+    /* log_read_entry, log_seek_to_timestamp now real in src/log_gatt.c
+     * (strong symbols override these weak entries from earlier passes). */
+    WEAK_NOOP(monitor_strtol)
     WEAK_NOOP(ti_semaphore_pend)
     WEAK_NOOP(extflash_read)
 

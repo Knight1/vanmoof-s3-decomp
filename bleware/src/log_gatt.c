@@ -107,15 +107,21 @@ extern uint8_t g_log_readout_buffer[0xF0];         /* DAT_000149E0 */
  * channel between the write callback and the notify finaliser. */
 extern uint8_t g_log_last_count;                   /* *DAT_000149DC */
 
-/* Read one 16-byte log entry. Wraps around the 128 KB circular log
- * region. `log_idx` is in 16-byte units relative to the current
- * `read_offset` (state[+0xC]). OEM @ `0x0001E9D8`. */
-extern int  log_read_entry(void *out_16B, int log_idx);
+/* Both `log_read_entry` and `log_seek_to_timestamp` are now real C
+ * symbols defined below in this file (no longer extern stubs). */
+int  log_read_entry      (void *out_16B, int log_idx);
+int  log_seek_to_timestamp(uint32_t target_unix_seconds);
 
-/* Seek the persisted read-cursor past the first line whose ASCII
- * timestamp exceeds `target_unix_seconds`. Also flushes the new
- * cursor pair to ext-flash at `0x03FDC000`. OEM @ `0x00014C68`. */
-extern int  log_seek_to_timestamp(uint32_t target_unix_seconds);
+/* Inner SPI / RTOS helpers. */
+extern int  extflash_read(uint32_t addr, uint32_t len, void *out);
+extern void extflash_erase_range(uint32_t addr, uint32_t len);
+extern void extflash_write(uint32_t addr, uint32_t len, const uint8_t *src);
+extern int  extflash_open(int mode);
+extern void extflash_close(void);
+extern uint32_t monitor_strtol(const char *s, char **endptr, int base); /* FUN_000107BC */
+extern int  ti_semaphore_pend(uint32_t handle, uint32_t timeout_ticks);
+extern void ti_semaphore_post(uint32_t handle);
+extern uint32_t g_ti_tick_period_us;     /* `*PTR_DAT_0000BA50` */
 
 /* Log-service write handler — bound to service `0x55C0` from
  * xs3_gatt_process_write_event. OEM @ `0x00014910`. */
@@ -190,4 +196,111 @@ int log_gatt_write_handler(uint32_t       conn_handle,
 
     log_gatt_notify_channel(2, g_log_readout_buffer, actual * LOG_ENTRY_SIZE);
     return 0;
+}
+
+/* Convert a millisecond delay to TI-RTOS ticks. The OEM stores the
+ * tick period in microseconds at `*PTR_DAT_0000BA50`, so:
+ *     ticks = (ms * 1000) / tick_period_us
+ * which the OEM lifts inverted as `(1000 / tick_period_us) * ms`. */
+static inline uint32_t log_ms_to_ticks(uint32_t ms)
+{
+    return (1000u / g_ti_tick_period_us) * ms;
+}
+
+/* `log_read_entry` — fetch one 16-byte log entry by index from the
+ * circular region. The index is in 16-byte units relative to the
+ * current `tail_offset` (state +0xC). Wrap mask 0x1FFFF.
+ *
+ * Returns 1 on success, 0 if the state-struct semaphore was
+ * contended (10 ms timeout). On semaphore acquired but extflash_open
+ * failure, returns 1 anyway (the OEM behaviour — left to the caller
+ * to notice the zero'd output buffer).
+ *
+ * OEM @ 0x0001E9D8.
+ */
+int log_read_entry(void *out_16B, int log_idx)
+{
+    if (ti_semaphore_pend(g_log_state.lock_handle,
+                          log_ms_to_ticks(10) /* 10 ms */) != 1) {
+        return 0;
+    }
+
+    uint32_t tail = g_log_state.cursor_persist_pair[1];   /* state +0xC */
+
+    if (extflash_open(1) != 0) {
+        uint32_t offset_in_region = (tail + (uint32_t)log_idx * LOG_ENTRY_SIZE) & LOG_REGION_MASK;
+        extflash_read(LOG_REGION_BASE + offset_in_region, LOG_ENTRY_SIZE, out_16B);
+        extflash_close();
+    }
+
+    ti_semaphore_post(g_log_state.lock_handle);
+    return 1;
+}
+
+/* `log_seek_to_timestamp` — advance the tail cursor past every line
+ * whose leading ASCII Unix-seconds timestamp is ≤ `target`.
+ *
+ * Walks one 256-byte window at a time from the current tail towards
+ * the head (state +0x08 = head_offset, state +0x0C = tail_offset).
+ * For each window, finds the first `'\n'`, parses the integer at
+ * `window[newline_pos + 1]` via `monitor_strtol(.., 10)` (base 10),
+ * and breaks the loop when the parsed timestamp first exceeds
+ * `target`.
+ *
+ * After the loop (whether broken or natural-end), persists the new
+ * (head, tail) pair to the 4 KB cursor sector at flash 0x03FDC000.
+ * The persist sector itself is a circular log of (head, tail) pairs —
+ * each pair is 8 bytes, position advances by 8 bytes per write, wraps
+ * mod 0x1000 (sector size). When the position wraps to 0 the sector
+ * is erased first.
+ *
+ * OEM @ 0x00014C68.
+ */
+int log_seek_to_timestamp(uint32_t target_unix_seconds)
+{
+    if (ti_semaphore_pend(g_log_state.lock_handle,
+                          log_ms_to_ticks(10)) != 1) {
+        return 0;
+    }
+    if (extflash_open(1) != 0) {
+        uint32_t tail = g_log_state.cursor_persist_pair[1];
+        uint8_t  window[256];
+
+        while (g_log_state.cursor_persist_pair[0] /* head_offset */ != tail) {
+            extflash_read(LOG_REGION_BASE + tail, sizeof window, window);
+
+            int nl_pos = 0;
+            while (nl_pos < (int)sizeof window && window[nl_pos] != '\n') {
+                nl_pos++;
+            }
+
+            if ((int)(sizeof window) - nl_pos > 10) {
+                /* `nl_pos` is the index of the '\n'. The next line's
+                 * leading integer starts at window[nl_pos + 1]. */
+                char    *endptr = NULL;
+                uint32_t ts = monitor_strtol((char *)&window[nl_pos + 1],
+                                             &endptr, 10);
+                if (target_unix_seconds < ts) {
+                    break;
+                }
+            }
+
+            tail = (tail + (uint32_t)nl_pos + 1u) & LOG_REGION_MASK;
+            g_log_state.cursor_persist_pair[1] = tail;
+        }
+
+        /* Persist the (head, tail) pair to the cursor sector. */
+        uint32_t cursor_pos = g_log_state.cursor_persist_offset;
+        if (cursor_pos == 0) {
+            extflash_erase_range(LOG_CURSOR_SECTOR, 0x1000);
+            cursor_pos = g_log_state.cursor_persist_offset;
+        }
+        extflash_write(LOG_CURSOR_SECTOR + cursor_pos, 8,
+                       (const uint8_t *)g_log_state.cursor_persist_pair);
+        g_log_state.cursor_persist_offset = (cursor_pos + 8) & 0xFFFu;
+
+        extflash_close();
+    }
+    ti_semaphore_post(g_log_state.lock_handle);
+    return 1;
 }
