@@ -310,7 +310,49 @@ Operational notes from the new handlers:
 - **`cmd_ble_disconnect`** calls `FUN_00021030(0xFFFD, 4)`. `0xFFFD` is the TI BLE-stack "all connections" sentinel (`LINKDB_CONNHANDLE_ALL`); reason code 4 = HCI "remote user terminated".
 - **`cmd_exit`** emits the ANSI keycode for F4 (`Esc [ 1 4 ~`) — this is what the OEM terminal driver listens for to detach the debug console. Not a real shell exit.
 
-Two more function pointers (`0x0001E311`, `0x00019A81`) follow the table's null terminator — these are **not** monitor commands. Their signatures (7-arg with `svc=0x5560`, conn_handle, char_idx, op-byte; 5-arg with CCCD UUID 0x2902 check) make them GATT callbacks bound to service `0x5560`. They should be folded into `gatt_read.c` / `gatt_write.c` analysis, not the monitor inventory.
+Two more function pointers (`0x0001E311`, `0x00019A81`) follow the table's null terminator — these are **not** monitor commands. They're the `pfnReadAttrCB` / `pfnWriteAttrCB` fields of a `gattServiceCBs_t` struct registered with TI's `GATTServApp_RegisterService` for service `0x5560`. **Decoded** in `src/gatt_svc_5560.c`:
+
+| OEM | Name | Role |
+| --- | --- | --- |
+| `0x0001E310` | `svc_5560_read_attr_cb` | TI-stack ReadAttrCB; resolves attr → char-idx via `svc_5560_char_uuid_to_index`, then delegates to the central read dispatcher via vtable offset +8 |
+| `0x00019A80` | `svc_5560_write_attr_cb` | TI-stack WriteAttrCB; CCCD writes (attr type-tag `0x02`, desc UUID `0x2902`) → CCCD path (vtable +4) + `cccd_write_validate`; everything else → normal write dispatcher (vtable +0) |
+| `0x00012FA8` | `svc_5560_char_uuid_to_index` | 9-entry 128-bit UUID table comparator at flash `DAT_0001309C + 0xC..+0x8C` (stride 0x10); returns 0..8 or 0xFF |
+| `0x0001F9AE` | `cccd_write_validate` | rejects unsupported notify/indicate bits (returns 0x80), commits new CCCD value via `cccd_write_store` when changed |
+| `0x00026D94` | `cccd_read` | per-conn CCCD value getter |
+| `0x00024D90` | `cccd_write_store` | per-conn CCCD value setter |
+
+**Central-dispatch vtable struct at RAM `0x20003F84`** (`*DAT_0001E370 == *DAT_00019B0C` — both shims dereference the same global):
+
+| Offset | Slot | Function |
+| --- | --- | --- |
+| +0x00 | normal-char write | `xs3_gatt_process_write_event` (or a thin wrapper) |
+| +0x04 | CCCD write | CCCD dispatcher (wraps `cccd_write_validate`) |
+| +0x08 | read | `xs3_gatt_process_read_event` (or a thin wrapper) |
+
+**Architectural correction.** Every service has its own such shim pair — they all delegate to the central dispatchers via a per-service vtable. Earlier passes implied the TI stack called the central dispatcher directly via the registry; that's wrong. The actual flow is TI-stack → per-service shim → vtable → central dispatcher → per-(svc, idx) handler.
+
+#### All 9 non-backoffice shim pairs (located by `movw r2, #0x55XX` byte-pattern search)
+
+| svc | write shim | read shim | char-uuid matcher | vtable literal |
+| --- | --- | --- | --- | --- |
+| 0x5510 | `svc_5510_write_attr_cb` @ `0x00019840` | `svc_5510_read_attr_cb` @ `0x0001E11C` | `FUN_0001D744` | `DAT_000198CC` → RAM `0x20005188` |
+| 0x5520 | `svc_5520_write_attr_cb` @ `0x000192A0` | `svc_5520_read_attr_cb` @ `0x0001DD98` | `FUN_0001AB6C` | `DAT_0001932C` → RAM `0x20005188` |
+| 0x5530 | `svc_5530_write_attr_cb` @ `0x00019720` | `svc_5530_read_attr_cb` @ `0x0001E054` | — | — |
+| 0x5540 | `svc_5540_write_attr_cb` @ `0x000194E0` | `svc_5540_read_attr_cb` @ `0x0001DF28` | — | — |
+| 0x5560 | `svc_5560_write_attr_cb` @ `0x00019A80` | `svc_5560_read_attr_cb` @ `0x0001E310` | `svc_5560_char_uuid_to_index` @ `0x00012FA8` | RAM `0x20003F84` |
+| 0x5570 | `svc_5570_write_attr_cb` @ `0x000199F0` | `svc_5570_read_attr_cb` @ `0x0001E1E4` | — | — |
+| 0x5590 | `svc_5590_write_attr_cb` @ `0x000197B0` | `svc_5590_read_attr_cb` @ `0x0001E0B8` | — | — |
+| 0x55A0 | `svc_55a0_write_attr_cb` @ `0x00019330` | `svc_55a0_read_attr_cb` @ `0x0001DDFC` | `FUN_0001ABEC` | `DAT_000193BC` → RAM `0x20005188` |
+| 0x55C0 | `svc_55c0_write_attr_cb` @ `0x00019690` | `svc_55c0_read_attr_cb` @ `0x0001DFF0` | — | — |
+
+Every shim is structurally identical to the `svc_5560` pair already decoded in `src/gatt_svc_5560.c` — 140 B write, 94 B read, only three things vary per service:
+1. the hardcoded svc UUID literal,
+2. the per-service char-UUID-to-index function (different table layouts, different number of chars),
+3. the vtable pointer (sampled: services 0x5510/0x5520/0x55A0 share vtable at RAM `0x20005188`; svc 0x5560 uses RAM `0x20003F84` — so there are at least **two** distinct vtables; the other services need spot-checking to see which they bind to).
+
+**Backoffice service `0x5500` is the only outlier** — it does NOT have a shim of this shape. Its writes go through the central write dispatcher's special-case branch (`cVar1 == 4` → `gatt_handle_backoffice_message_data`); its reads use the central read dispatcher's special-case `svc=0x5500, idx=0` producer.
+
+**Total registry surface:** 9 mirror-image shim pairs + 1 backoffice = **10 services**, not 11 as the earlier registry note implied. The earlier "11" was inferred from the per-service table size; the actual count is 10, with the 11th slot likely being a null terminator.
 
 **`monitor_dispatch_loop` @ `0x00024B38`** — **Decoded** —
 `src/monitor/dispatcher.c`. 36 B body + 4 B literal pool. Walks
@@ -568,7 +610,58 @@ For backoffice provisioning the same characteristic carries both directions:
 - **Write (request) and Notify (response):** `6ACC5505-E631-4069-944D-B8CA7598AD50` (subscribe to notifications first, then write fragments)
 - **Auth handshake required first:** write a 20-byte challenge to `6ACC5502-E631-4069-944D-B8CA7598AD50` — derives a session key on the connection that gates the other 0x55XX characteristics' write paths (each one calls `ble_connection_get_session_key` and rejects with `-1` if no key is set when the auth-required flag at `FUN_00025A84()` is set).
 
-### `xs3_gatt_write.c` — central GATT write dispatcher
+### `protocols/ssp.c` — System Service Protocol transport
+
+**Decoded** — `bleware/src/protocols/ssp.c`. The inter-module bus the OEM calls "Modbus" in my earlier notes is actually **SSP** — confirmed via embedded `monitor_log` strings:
+- `"SSP no init"` at flash `0x00015DCC`-ish (logged when the master queue handle is NULL)
+- `"SSP Out of memory"` (logged when frame alloc fails)
+- Source path: `source/protocols/ssp.c`
+
+**Frame structure** (header = 0x27 B + payload up to 0x100 B):
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| +0x0C | u32 ctx1 | caller context — usually 0 |
+| +0x10 | u32 ctx2 | caller context — usually 0 |
+| +0x14 | u32 timeout | always 5 |
+| +0x18 | u32 retry | always 100 |
+| +0x20 | u8 frame_type | always 2 (PUBLISH/FETCH share this) |
+| +0x21 | u8 priority | 7 = publish, 6 = fetch (RX-urgency higher) |
+| +0x22 | u8 sequence | auto-incremented from `g_ssp_sequence` |
+| +0x23 | u16 cmd_id | the SSP command/opcode |
+| +0x25 | u16 payload_len | 0 for FETCH |
+| +0x27 | u8[len] payload | only on PUBLISH |
+
+**Three primitives** (now real C in `ssp.c`, no longer weak stubs):
+
+| OEM | Name | Behaviour |
+| --- | --- | --- |
+| `0x00024508` | `module_forward_async(cmd_id, byte)` | wraps 1 B in a publish frame, enqueues |
+| `0x000244D8` | `module_publish_command(cmd, payload, len)` | N B publish |
+| `0x0001EEF4` | `module_publish_sync_with_timeout(module_idx, cmd, ms)` | sends FETCH via `ssp_signal_fetch`, pends per-module reply semaphore for `ms * 100` µs ticks. If a prior fetch timed out (stuck-flag bit at record+0x79), this call's timeout is bumped to 500 ms and the flag is cleared (one-shot grace). |
+
+**Internal helpers** also decoded:
+
+| OEM | Name | Role |
+| --- | --- | --- |
+| `0x000180D0` | `ssp_queue_publish_frame` | core PUBLISH enqueue (header build + sequence + alloc + mailbox post) |
+| `0x00015D24` | `ssp_publish_fetch_frame` | core FETCH enqueue (smaller header, priority 6, no payload, log paths) |
+| `0x00025B04` | `ssp_signal_fetch` | LED-pulse wrapper around `ssp_publish_fetch_frame` |
+| `0x00025A84` | `ble_authenticated_connection_count` | iterates 3 conn slots, counts how many have a session key — gates the activity-LED pulse on every TX |
+| `0x00027004` | `ble_activity_led_pulse` | drives DIO 0xD high via the IOC GPIO writer (`FUN_00022E08`) |
+
+**Global state**:
+
+| RAM addr | Symbol | Role |
+| --- | --- | --- |
+| `0x20003104` | `g_ssp_master` | singleton SSP master struct (+0x00 tx_queue, +0x20 mailbox); same address held by 3 flash literals (`DAT_00024504`, `DAT_00024534`, `DAT_00025B20`) |
+| `0x20004158` | `g_ssp_modules[]` | per-module reply-state array, 0x7C B per module: +0x44 reply semaphore, +0x54 u16 pending cmd (0xFFFF = idle), +0x79 u8 stuck-flag |
+| (RAM, via `*DAT_0001816C`) | `g_ssp_sequence` | 1-byte counter, post-incremented on every enqueue |
+
+**Behavioural notes**:
+- Every PUBLISH/FETCH consults `ble_authenticated_connection_count()` and pulses the LED on DIO 0xD if any BLE connection has completed the session-key handshake. Useful for triage: the LED tells you whether any traffic on the bus is BLE-initiated.
+- The "Modbus" framing label I'd been using everywhere should now be read as "SSP" — same on-the-wire idea (cmd_id + payload + sequence + reply correlation), but it's the OEM's own protocol, not a CRC-16/Modbus RTU clone. The CRC-16/Modbus we observed is used elsewhere (backoffice payload validation), not for SSP framing.
+- The "module_idx" parameter to the sync primitive maps to a slot in `g_ssp_modules[]`. Each SSP slave (motorware, mainware, etc.) has its own record; conn_handle is reused as module_idx by the GATT read dispatcher in a slightly confusing overload.
 
 **Decoded** — `xs3_gatt_process_write_event` @ `0x00004DB0` (868 B body; previously undefined in Ghidra's auto-analysis). Event struct layout from the dispatcher:
 

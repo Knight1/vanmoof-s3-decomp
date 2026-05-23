@@ -93,6 +93,15 @@ int      extflash_read (uint32_t addr, uint32_t len, void       *dst); /* FUN_00
 struct extflash_chip_info;
 const struct extflash_chip_info *extflash_get_chip_info(void);         /* FUN_000273D0 */
 
+/* Per-service TI BLE-stack callback shims for svc 0x5560
+ * (src/gatt_svc_5560.c). Registered with GATTServApp_RegisterService;
+ * delegate to the central dispatchers. */
+uint8_t svc_5560_read_attr_cb (uint32_t conn, void *attr, uint8_t *out_buf,
+                               uint16_t *out_len, uint16_t offset,
+                               uint16_t max_len, uint8_t op_byte);  /* FUN_0001E310 */
+uint8_t svc_5560_write_attr_cb(uint32_t conn, void *attr, uint8_t *value,
+                               uint16_t len, uint16_t offset);      /* FUN_00019A80 */
+
 /* Central GATT read dispatcher (src/gatt_read.c). Read-side analogue
  * of xs3_gatt_process_write_event. Called by the TI BLE-stack
  * ReadAttrCB for every char in the 11-service registry. */

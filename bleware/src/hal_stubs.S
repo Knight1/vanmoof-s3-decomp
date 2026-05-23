@@ -195,7 +195,48 @@ g_extflash_state:
     WEAK_NOOP(audio_clip_dump_one)
     WEAK_NOOP(audio_player_play)
     WEAK_NOOP(audio_player_stop_or_pause)
-    WEAK_NOOP(module_publish_command)
+/* `module_publish_command`, `module_forward_async`,
+ * `module_publish_sync_with_timeout`, `ble_authenticated_connection_count`,
+ * `ble_activity_led_pulse`, `ssp_signal_fetch`, `ssp_queue_publish_frame`,
+ * `ssp_publish_fetch_frame` are real strong symbols in
+ * src/protocols/ssp.c — no weak stub needed. */
+
+    WEAK_NOOP(ti_mailbox_post)
+    WEAK_NOOP(ssp_frame_alloc)
+    WEAK_NOOP(gpio_write)
+    WEAK_NOOP(ble_connection_get_session_key)
+
+/* SSP master state struct (singleton, RAM 0x20003104). */
+    .section .bss.g_ssp_master, "aw", %nobits
+    .weak    g_ssp_master
+    .type    g_ssp_master, %object
+    .size    g_ssp_master, 0x24
+g_ssp_master:
+    .skip    0x24
+
+/* Per-module reply-state array. The OEM allocates 6+ records of
+ * 0x7C bytes each; reserve a few here so module-index math doesn't
+ * trip the linker. */
+    .section .bss.g_ssp_modules, "aw", %nobits
+    .weak    g_ssp_modules
+    .type    g_ssp_modules, %object
+    .size    g_ssp_modules, 0x300
+g_ssp_modules:
+    .skip    0x300
+
+    .section .bss.g_ssp_sequence, "aw", %nobits
+    .weak    g_ssp_sequence
+    .type    g_ssp_sequence, %object
+    .size    g_ssp_sequence, 1
+g_ssp_sequence:
+    .skip    1
+
+    .section .bss.g_bleware_gpio_ctx, "aw", %nobits
+    .weak    g_bleware_gpio_ctx
+    .type    g_bleware_gpio_ctx, %object
+    .size    g_bleware_gpio_ctx, 4
+g_bleware_gpio_ctx:
+    .skip    4
 
 /* YModem target-offset pointer — OEM `*DAT_0000CC70`, a u32 in RAM
  * that cmd_audio_upload writes into before invoking ymodem_receive. */
@@ -204,6 +245,20 @@ g_extflash_state:
     .type    g_ymodem_target_offset, %object
     .size    g_ymodem_target_offset, 4
 g_ymodem_target_offset:
+    .skip    4
+
+/* ===== gatt_svc_5560.c helpers ===== */
+    WEAK_NOOP(svc_5560_char_uuid_to_index)
+    WEAK_NOOP(cccd_write_validate)
+
+/* Central-dispatch vtable pointer — OEM `*DAT_0001E370`. The actual
+ * struct lives at RAM 0x20003F84 and is populated by GATT-init code
+ * we haven't yet decoded. Weak BSS placeholder so the skeleton links. */
+    .section .bss.g_gatt_dispatch, "aw", %nobits
+    .weak    g_gatt_dispatch
+    .type    g_gatt_dispatch, %object
+    .size    g_gatt_dispatch, 4
+g_gatt_dispatch:
     .skip    4
 
 /* ===== gatt_read.c helpers ===== */
