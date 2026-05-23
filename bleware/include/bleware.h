@@ -141,4 +141,18 @@ void   monitor_free(void *p);
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
 
+/* ICall entity-registry lookup (src/icall_runtime.c). Returns the
+ * ICall entity index (0..5) that the calling BIOS task is registered
+ * under, or 0xff if the task isn't registered or we aren't in a
+ * runnable thread. OEM at flash 0x00020C54. */
+int  icall_caller_entity(void);
+
+/* Variadic log-emit helper (src/log_emit.c). Dispatches a format-string
+ * log line to the TI BLE-stack ICall logger service and synchronously
+ * waits for the ack (1000 ms timeout). `service_id` is the ICall
+ * service to address — 0x10 in every observed call site. Returns the
+ * status word the logger writes back into the first-variadic slot
+ * (zero on success). OEM at flash 0x0001AC6C. */
+uint32_t log_emit_v(uint32_t service_id, const char *fmt, ...);
+
 #endif /* BLEWARE_BLEWARE_H */

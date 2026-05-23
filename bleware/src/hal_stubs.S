@@ -288,6 +288,41 @@ name: ; \
 g_gatt_dispatch:
     .skip    4
 
+/* ===== log_emit.c + icall_runtime.c helpers =====
+ *
+ * `icall_caller_entity` is now a real strong symbol in
+ * src/icall_runtime.c. The remaining ICall / BIOS helpers stay as
+ * weak no-ops until their own decomp passes land. */
+    WEAK_NOOP(icall_send_service_msg)
+    WEAK_NOOP(icall_wait_match)
+    WEAK_NOOP(icall_free_message)
+    WEAK_NOOP(bios_get_thread_state)
+    WEAK_NOOP(bios_abort)
+    WEAK_NOOP(log_reply_match_pred)
+
+/* ===== icall_runtime.c helpers ===== */
+    WEAK_NOOP(ti_task_self)
+    WEAK_NOOP(icall_cs_enter)
+    WEAK_NOOP(icall_cs_exit)
+
+/* ICall entity registry — pointer global at flash 0x00020C9C in the
+ * OEM, holding 0x20004E78 (RAM array of 6×12-byte records). Weak BSS
+ * placeholder so the skeleton links; real placement comes from a
+ * future stack-init decomp. */
+    .section .bss.g_icall_entities_storage, "aw", %nobits
+    .weak    g_icall_entities_storage
+    .type    g_icall_entities_storage, %object
+    .size    g_icall_entities_storage, 0x48
+g_icall_entities_storage:
+    .skip    0x48
+
+    .section .data.g_icall_entities, "aw", %progbits
+    .weak    g_icall_entities
+    .type    g_icall_entities, %object
+    .size    g_icall_entities, 4
+g_icall_entities:
+    .word    g_icall_entities_storage
+
 /* ===== gatt_read.c helpers ===== */
     WEAK_NOOP(gatt_config_lookup_item)
     WEAK_NOOP(ble_connection_get_session_key)
