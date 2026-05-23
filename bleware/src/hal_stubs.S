@@ -305,6 +305,49 @@ g_gatt_dispatch:
     WEAK_NOOP(icall_cs_enter)
     WEAK_NOOP(icall_cs_exit)
 
+/* ===== gatt_write.c helpers ===== */
+    WEAK_NOOP(ble_connection_set_session_key)
+    WEAK_NOOP(auth_derive_session_key)
+    WEAK_NOOP(backoffice_auth_session_init)
+    WEAK_NOOP(FUN_00021884)
+    WEAK_NOOP(FUN_00026cc0)
+    WEAK_NOOP(FUN_00023204)
+    WEAK_NOOP(FUN_00022970)
+    WEAK_NOOP(FUN_00023114)
+
+/* ===== bluetoothtask_post.c helpers =====
+ *
+ * `ble_post_disconnect` is now a real strong symbol in
+ * src/bluetoothtask_post.c. The remaining bluetoothtask-queue helpers
+ * stay weak until their own decomp passes land. */
+    WEAK_NOOP(task_queue_enqueue_and_signal)
+
+/* Bluetoothtask user-message queue control struct — pointer global
+ * at flash 0x00021078 in the OEM, holding 0x200057C8. Weak BSS
+ * placeholder so the skeleton links; real placement comes from a
+ * future bluetoothtask-init decomp. */
+    .section .bss.g_bluetoothtask_msg_queue_storage, "aw", %nobits
+    .weak    g_bluetoothtask_msg_queue_storage
+    .type    g_bluetoothtask_msg_queue_storage, %object
+    .size    g_bluetoothtask_msg_queue_storage, 12
+g_bluetoothtask_msg_queue_storage:
+    .skip    12
+
+    .section .data.g_bluetoothtask_msg_queue, "aw", %progbits
+    .weak    g_bluetoothtask_msg_queue
+    .type    g_bluetoothtask_msg_queue, %object
+    .size    g_bluetoothtask_msg_queue, 4
+g_bluetoothtask_msg_queue:
+    .word    g_bluetoothtask_msg_queue_storage
+/* `module_publish_command`, `ble_authenticated_connection_count`,
+ * `runtime_permission_mask`,
+ * `block_dispatch_queue_post`, `FUN_00024740`, `ble_connection_get_session_key`,
+ * `gatt_config_lookup_item`, `monitor_log`, `module_forward_async`,
+ * `oad_gatt_write_handler`, `log_gatt_write_handler`,
+ * `gatt_handle_backoffice_message_data`, `FUN_00027448` (=
+ * `timekeeper_read_be`), `memcpy` already have weak entries from
+ * earlier passes. */
+
 /* ICall entity registry — pointer global at flash 0x00020C9C in the
  * OEM, holding 0x20004E78 (RAM array of 6×12-byte records). Weak BSS
  * placeholder so the skeleton links; real placement comes from a

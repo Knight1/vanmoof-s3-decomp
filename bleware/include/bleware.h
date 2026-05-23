@@ -134,12 +134,30 @@ int      xs3_gatt_process_read_event(uint32_t  module_idx,
                                      uint16_t *out_len,
                                      uint8_t   att_opcode);     /* FUN_000061c0 */
 
+/* Central GATT write dispatcher (src/gatt_write.c). Reached via the
+ * central vtable at RAM 0x20005A30+0 (no static xref — the populator
+ * runs through register-indirect addressing). Dispatches the per-svc,
+ * per-char write into the right module handler after running the
+ * crypto-flag gates and the runtime-permission check. The argument
+ * is a per-write event struct assembled by the BLE-stack shim. */
+struct gatt_write_event;
+int      xs3_gatt_process_write_event(struct gatt_write_event *evt); /* FUN_00004DB0 */
+
 /* Allocation helpers — TI-RTOS heap (OEM `monitor_alloc/free`). */
 void  *monitor_alloc(unsigned int size);
 void   monitor_free(void *p);
 
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
+
+/* Post a kind-0x04 "disconnect" message to the bluetoothtask's user-
+ * message queue (src/bluetoothtask_post.c). The bluetoothtask consumes
+ * it on its next event-flag-bit-30 wakeup and either force-disconnects
+ * the specific connection or, with conn = 0xFFFD, all connections.
+ * Called from the GATT-write dispatcher on auth/perm/pad failures and
+ * from the monitor `ble_disconnect` command. Returns 0 on success, -1
+ * if either the payload or envelope alloc fails. OEM at 0x00021030. */
+int  ble_post_disconnect(uint16_t conn, uint8_t reason);
 
 /* ICall entity-registry lookup (src/icall_runtime.c). Returns the
  * ICall entity index (0..5) that the calling BIOS task is registered
