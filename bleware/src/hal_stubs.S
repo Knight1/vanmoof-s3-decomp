@@ -288,22 +288,25 @@ name: ; \
 g_gatt_dispatch:
     .skip    4
 
-/* ===== log_emit.c + icall_runtime.c helpers =====
+/* ===== log_emit.c + icall_runtime.c + ti_rtos_kernel.c helpers =====
  *
- * `icall_caller_entity` is now a real strong symbol in
- * src/icall_runtime.c. The remaining ICall / BIOS helpers stay as
+ * `icall_caller_entity`, `icall_cs_enter`, `icall_cs_exit`, and
+ * `bios_abort` are now real strong symbols (see src/icall_runtime.c,
+ * src/ti_rtos_kernel.c). The remaining ICall / BIOS helpers stay as
  * weak no-ops until their own decomp passes land. */
     WEAK_NOOP(icall_send_service_msg)
     WEAK_NOOP(icall_wait_match)
     WEAK_NOOP(icall_free_message)
     WEAK_NOOP(bios_get_thread_state)
-    WEAK_NOOP(bios_abort)
     WEAK_NOOP(log_reply_match_pred)
 
-/* ===== icall_runtime.c helpers ===== */
+/* ===== icall_runtime.c + ti_rtos_kernel.c ROM-thunk pass-throughs ===== */
     WEAK_NOOP(ti_task_self)
-    WEAK_NOOP(icall_cs_enter)
-    WEAK_NOOP(icall_cs_exit)
+    WEAK_NOOP(bios_hwi_disable)
+    WEAK_NOOP(bios_task_disable)
+    WEAK_NOOP(bios_hwi_restore)
+    WEAK_NOOP(bios_task_restore)
+    WEAK_NOOP(abort_continuation)
 
 /* ===== gatt_write.c helpers ===== */
     WEAK_NOOP(ble_connection_set_session_key)
