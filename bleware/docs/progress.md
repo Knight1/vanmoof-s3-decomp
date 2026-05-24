@@ -28,13 +28,14 @@ peripheral wiring, anything that's specific to VanMoof.
 | ?? | pending (TBD as functions are categorised) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 18 | decomp (asm or c) |
+| 26 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
 
 ### Decoded functions
 
 | OEM address | OEM symbol                        | Source file              | Notes |
 | ----------- | --------------------------------- | ------------------------ | ----- |
+| 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |
 | 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
 | 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |
 | 0x00004DB0  | `xs3_gatt_process_write_event`    | `src/gatt_write.c`       | Central GATT write dispatcher (write-side analogue of `xs3_gatt_process_read_event`). Auth handshake on (0x5502, opcode 0x14, 20-byte payload), length/perm/pad gates, three crypto-flag paths (session-stream decrypt / manufacturing-ECB / indicate-confirm), then dispatch by service UUID to per-svc handlers (`oad_gatt_write_handler`, `log_gatt_write_handler`, `gatt_handle_backoffice_message_data`, `module_publish_command`, `module_forward_async`). Reached from `svc_XXXX_write_attr_cb` shims via `*0x20003F84 → 0x20005A30+0` — the populator of slot +0 is still not statically traceable. |
@@ -53,6 +54,13 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x00018B1C  | `auth_derive_session_key`         | `src/auth.c`             | Look up a 32-byte session-key record by client key id (`secrets_find_by_key`). On a fully un-provisioned device (no mfg key, no key records in slots 0..0x7B), synthesise the default OWNER_PERMS record: `"_____OWNER_PERMS" / 00000000 / FFFFFFFF / "UKEY" / CRC32(28B)`. Stores the result in `g_mkey_working_buffer` and returns a pointer to it (NULL on failure). |
 | 0x00024740  | `mfg_key_ecb_decrypt_chunks`      | `src/auth.c`             | Bulk ECB-decrypt helper: pulls the manufacturing key, then loops `len/16` times calling `block_dispatch_queue_post(key, kind=0x10, src, dst)` per 16-byte block. Caller (`xs3_gatt_process_write_event`) has already rounded length to a multiple of 16. |
 | 0x0001A218  | `backoffice_auth_session_init`    | `src/ble_connection.c`   | Pin a session key for a backoffice-authenticated connection (svc 0x5500 char 0x01 write path). Lock entry, set `backoffice_authed = 1` unconditionally, then if the conn handle still matches: pin the key + `state_machine_post(0x18, &conn, 2)`. Caps at conn < 3. |
+| 0x00021884  | `ssp_relay_u32`                   | `src/ssp_relay.c`        | Pulse the BLE activity LED if any conn is authenticated, then post a 4-byte LE frame onto the SSP/Modbus bus via `ssp_queue_publish_frame(&g_ssp_master, cmd_id, &le[0], 4, 0, 0, NULL)`. Used by GATT-write svc 0x5500 op 0x02 → `cmd 0x5503` and svc 0x5560 op 0x06 → readback relay. |
+| 0x00023204  | `ssp_relay_u16`                   | `src/ssp_relay.c`        | 2-byte variant of `ssp_relay_u32`. Used by GATT-write svc 0x5580 op 0x03 → `cmd 0x5584`. |
+| 0x00026CC0  | `timekeeper_submit_epoch`         | `src/timekeeper.c`       | BLE-side entry point for an epoch update: builds the 3-word request `{0, epoch, 0}` and hands it to `timekeeper_apply_request` (FUN_00020B18, still weak-stubbed) which lands it in the shared timekeeper state under a BasePriority-raised section. Reached from GATT-write svc 0x5560 op 0x06 path. |
+| 0x00017C6C  | `state_machine_post`              | `src/state_machine.c`    | Allocates a `{u8 state_id, _pad, u16 len, payload[len]}` envelope, hands it to `task_queue_publish_envelope(kind = 0x32)`, then frees the envelope. On `monitor_alloc` failure, logs `"Could not allocate memory for X"` via `monitor_log` and tail-calls `firmware_abort`. Sole caller in this batch: `backoffice_auth_session_init` (state_id = 0x18 — backoffice auth transition). |
+| 0x00025680  | `secrets_count_valid_in_keys_range` | `src/secrets.c`        | Tally of CRC-valid records in slots [0, 123]. Used by `auth_derive_session_key` as the "device is provisioned" gate — a fresh device with zero valid UKEY records (and no mfg key) falls back to a synthesized OWNER_PERMS default record. Companion of `secrets_count_free_slots`, which counts the invalid slots. |
+| 0x00020B18  | `timekeeper_apply_request`        | `src/timekeeper.c`       | Writer half of the timekeeper subsystem. Snapshots the live system clock via `sysclock_snapshot`, then folds the caller's 3-word `{epoch_lo, epoch_hi, epoch_ticks}` request into the 20-byte shared state struct at `*g_timekeeper_state` (epoch fields swapped to allow a single 64-bit reader load). Runs inside a `basepri = 0x20` raised-IRQ section (the state is also touched from a timer ISR). |
+| 0x00027448  | `timekeeper_read_be`              | `src/timekeeper.c`       | Reader half. Zeroes a 3-word scratch, calls `timekeeper_read_request` (sister of the writer — adds the live sysclock delta to the stored epoch), then returns the result as a packed 64-bit value `(scratch[0] << 32) \| scratch[1]`. Callers: `xs3_gatt_process_write_event` (svc 0x5560 op 0x06 readback), `xs3_gatt_process_read_event` (svc 0x5500 op 0x09), `monitor_log` callers, etc. |
 
 `function_count` to be populated from `ghidra/exports/bleware_program.json`
 once the per-program dump script is set up.
@@ -177,6 +185,31 @@ the ack. The leading `0x10` in every observed call site is the ICall
 with embedded format strings (e.g. `"Hardware error <d>"`). The
 `FUN_00006D90` (= `monitor_log`) calls are the related but separate
 location-aware emit used by the monitor module.
+
+### `gap_event_handler.c` — GAP Host command dispatcher
+
+`gap_event_91_3e_handler` @ `0x00010B40` (290 B). Dispatches on the
+GAP opcode byte at `msg[2]` within ICall event class `0x91` sub-code
+`0x3E`. Called from the bluetoothtask event loop's ICall dispatch
+switch at `0x0001AF2E`.
+
+Opcode map:
+
+| Opcode | Action |
+| --- | --- |
+| `0x01`, `0x0A` | `rom_gap_establish_link(opcode, msg)` — establish BLE link |
+| `0x03`, `0x83` | `rom_gap_update_link_param(conn, opcode, msg)`; if `msg[3]==0`, calls `rom_gap_config_conn_params` |
+| `0x06` | `rom_gap_set_param(conn, 0x40, 1)` then `rom_gap_get_param(0)`. On status==2 builds a 0x10-byte message and posts it to `queue_post_message(s_dest_service_id, …)`. On status==1 stack-builds a 12-byte gap-end-msg (flag byte 0). On status==0 same but flag byte = 1 and includes all 5 param halfwords. Sends via `rom_gap_send_msg` |
+| `0x0E`, `0x0F`, `0x10` | `gap_event_sub_dispatch(opcode, 0, msg)` |
+| `0x15`, `0x16`, `0x81` | `gap_event_sub_dispatch(opcode, 0x18, msg)` |
+| `0x17` | `gap_event_sub_dispatch(opcode, 6, msg)` |
+| `0x84` | `gap_event_sub_dispatch(opcode, 0x1C, msg)` |
+| other | returns 0 |
+
+ROM thunks (`rom_gap_establish_link`, `rom_gap_update_link_param`,
+`rom_gap_config_conn_params`, `rom_gap_set_param`, `rom_gap_get_param`,
+`rom_gap_send_msg`) are currently weak no-ops in `hal_stubs.S` pending
+SDK vendoring.
 
 ### Monitor (debug console) — architecture sketched
 
@@ -542,6 +575,7 @@ address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
 | `0x00003E78` | `gatt_handle_backoffice_message_data` | GATT-backoffice fragment handler — decrypts each 16-byte AES block with the M-Key (via ROM AES jump table at `_DAT_100001FC + 0x20`), reassembles into a 0x90-byte plaintext, CRC-16/Modbus-validates, then dispatches one of 9 sub-commands (record upsert / M-Key write / delete-by-key / no-op / module-forward async + sync / secrets sector erase / bulk record import / reserved). Reply notified on GATT channel 4 (0xF0 bytes). **OEM name confirmed via embedded symbol string at `0x0002B4B4`.** Source file: `source/xs3_gatt_backoffice.c` (path string at flash `0x00004140`). |
 | `0x00020848` | `block_dispatch_queue_post` | TI-RTOS-style queue post: packages `(key_buf, block_len, src, src_alias)` into a message and hands it to `FUN_000275E8` → `FUN_000125C4` → ROM jump table |
 | `0x00026504` | `byte_to_hex_chars` | writes 2 ASCII hex chars from a byte; hex table at flash `0x0002B46C` = `"0123456789ABCDEF"` |
+| `0x00010B40` | `gap_event_91_3e_handler` | renamed from `FUN_00010b40`; prototype `uint gap_event_91_3e_handler(void *msg)`. GAP Host command dispatcher for ICall event class 0x91/0x3E. |
 
 ### `provisioning.c` — backoffice GATT message handler (`xs3_gatt_backoffice.c`)
 

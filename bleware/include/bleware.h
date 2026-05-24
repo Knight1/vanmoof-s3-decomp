@@ -217,4 +217,9 @@ int  icall_caller_entity(void);
  * (zero on success). OEM at flash 0x0001AC6C. */
 uint32_t log_emit_v(uint32_t service_id, const char *fmt, ...);
 
+/* GAP Host event dispatcher — handles ICall event class 0x91
+ * sub-code 0x3E (BLE GAP Host commands). Called by the bluetoothtask
+ * event loop. OEM at flash 0x00010B40. */
+uint32_t gap_event_91_3e_handler(const void *msg);
+
 #endif /* BLEWARE_BLEWARE_H */

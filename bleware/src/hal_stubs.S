@@ -535,3 +535,32 @@ g_log_last_count:
     .size    g_backoffice_reassembly, 4
 g_backoffice_reassembly:
     .skip    4
+
+/* ===== gap_event_handler.c — ROM thunks and helpers =====
+ *
+ * These symbols are called by `gap_event_91_3e_handler` (OEM 0x00010B40).
+ * They resolve to TI BLE5-Stack ROM (AGAMA R1) in the real firmware;
+ * weak no-ops here until the SDK is vendored.
+ */
+    WEAK_NOOP(rom_gap_establish_link)
+    WEAK_NOOP(rom_gap_update_link_param)
+    WEAK_NOOP(rom_gap_config_conn_params)
+    WEAK_NOOP(rom_gap_set_param)
+    WEAK_NOOP(rom_gap_get_param)
+    WEAK_NOOP(rom_gap_send_msg)
+    WEAK_NOOP(rom_gap_process_event)
+    WEAK_NOOP(rom_gap_update_link_param_req_reply)
+    WEAK_NOOP(rom_gap_terminate_link_req)
+    WEAK_NOOP(gap_event_sub_dispatch)
+    WEAK_NOOP(queue_post_message)
+
+/* Destination service ID byte — OEM 0x00010C64 holds 0x2000566C.
+ * The byte at that RAM address selects which ICall service receives
+ * the gap-end-msg post. */
+    .section .bss.s_dest_service_id, "aw", %nobits
+    .weak    s_dest_service_id
+    .type    s_dest_service_id, %object
+    .size    s_dest_service_id, 1
+s_dest_service_id:
+    .skip    1
+
