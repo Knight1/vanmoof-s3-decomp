@@ -308,3 +308,89 @@ int extflash_write(uint32_t addr, uint32_t len, const void *src)
     ti_semaphore_post(g_extflash_state.bus_mutex);
     return ok;
 }
+
+/* ---- GPIO / CS helpers — IOC pin toggling -------------------------- */
+
+static int gpio_write(const void *gpio_ctx, uint32_t pin, int value)
+{
+    extern uint32_t g_gpio_max_pin;
+    extern uint32_t g_gpio_base_table[];
+    extern uint32_t g_gpio_dout_base;
+    if (pin > g_gpio_max_pin) return 2;
+    if ((uint32_t)gpio_ctx != g_gpio_base_table[pin]) return 2;
+    ((volatile uint8_t *)g_gpio_dout_base)[pin - 0xE0u] = (value != 0);
+    return 0;
+}
+
+void extflash_cs_assert(void)
+{
+    extern void *g_extflash_gpio_ctx;
+    gpio_write(g_extflash_gpio_ctx, 4, 0);
+}
+
+void extflash_cs_deassert(void)
+{
+    extern void *g_extflash_gpio_ctx;
+    gpio_write(g_extflash_gpio_ctx, 4, 1);
+}
+
+int extflash_wait_wip_clear(uint8_t *out_status)
+{
+    extern uint8_t g_extflash_rdsr_cmd;
+    uint8_t status;
+    int rc;
+    do {
+        extflash_cs_assert();
+        rc = extflash_spi_tx(&g_extflash_rdsr_cmd, 1);
+        if (rc != 0) { extflash_cs_deassert(); return -2; }
+        rc = extflash_spi_rx(&status, 1);
+        extflash_cs_deassert();
+        if (rc != 0) return -2;
+    } while (status & 1u);
+    if (out_status != NULL) *out_status = status;
+    return 0;
+}
+
+int extflash_write_enable(void)
+{
+    extern uint8_t g_extflash_wren_cmd;
+    extflash_cs_assert();
+    int rc = extflash_spi_tx(&g_extflash_wren_cmd, 1);
+    extflash_cs_deassert();
+    return (rc == 0) ? 0 : -3;
+}
+
+/* ---- SPI TX/RX — driver wrapper calls ------------------------------- */
+
+/* TI SPI driver transfer primitive (ROM/thunk). OEM @ 0x000274E8. */
+extern int FUN_000274e8(void *handle, void *xfer);
+
+/* SPI transmit. Builds a {len, buf} struct on the stack, calls the
+ * TI SPI driver via `FUN_000274e8(handle, &struct)`. Returns 0 on
+ * success, -1 on failure. OEM @ 0x00024448 (42 B). */
+int extflash_spi_tx(const void *buf, uint32_t len)
+{
+    extern void *g_extflash_spi_handle;
+    extern int   FUN_000274e8(void *handle, void *xfer);
+
+    struct { uint32_t len; const void *buf; uint32_t mode; } xfer;
+    xfer.mode = 0;
+    xfer.len  = len;
+    xfer.buf  = buf;
+
+    return (FUN_000274e8(g_extflash_spi_handle, &xfer) == 0) ? -1 : 0;
+}
+
+/* SPI receive. Same shape as TX but with mode=0 and a receive buffer.
+ * OEM @ 0x00024418 (42 B). */
+int extflash_spi_rx(void *buf, uint32_t len)
+{
+    extern void *g_extflash_spi_handle;  /* DAT_00024444 - 0xC */
+
+    struct { uint32_t len; void *buf; uint32_t mode; } xfer;
+    xfer.buf  = buf;
+    xfer.len  = len;
+    xfer.mode = 0;
+
+    return (FUN_000274e8(g_extflash_spi_handle, &xfer) == 0) ? -1 : 0;
+}

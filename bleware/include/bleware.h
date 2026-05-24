@@ -150,6 +150,10 @@ int      xs3_gatt_process_read_event(uint32_t  module_idx,
 struct gatt_write_event;
 int      xs3_gatt_process_write_event(struct gatt_write_event *evt); /* FUN_00004DB0 */
 
+/* CRC-32/zlib (src/crc32.c). Reflected, polynomial 0xEDB88320.
+ * No final XOR. OEM at 0x00025198. */
+uint32_t crc32_le(uint32_t seed, const void *buf, uint32_t len);
+
 /* Allocation helpers — TI-RTOS heap (OEM `monitor_alloc/free`). */
 void  *monitor_alloc(unsigned int size);
 void   monitor_free(void *p);

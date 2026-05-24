@@ -28,7 +28,7 @@ peripheral wiring, anything that's specific to VanMoof.
 | ?? | pending (TBD as functions are categorised) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 34 | decomp (asm or c) |
+| 52 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
 
 ### Decoded functions
@@ -42,6 +42,23 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x00020338  | `log_block_count_get`             | `src/log_gatt.c`         | Returns available 16-byte log blocks (head - tail delta, 0x20000 wrap, rounded up). Semaphore-protected with 10 ms timeout. Called by 3 monitor commands + GATT read dispatcher. 76 B. |
 | 0x000273DC  | `log_total_size_byte`             | `src/log_gatt.c`         | Reads a single byte from RAM 0x20005B6C (log capacity field). Caller masks with 0xFFF and shifts left 4. 10 B. |
 | 0x00023CC8  | `task_queue_publish_envelope`     | `src/bluetoothtask_post.c` | Allocates an 8-byte {kind, payload_ptr} envelope and enqueues it on the bluetoothtask's user-message queue via `task_queue_enqueue_and_signal`. Returns 0 on success, 0x13 on alloc failure. 48 B. |
+| 0x00026F94  | `extflash_cs_assert`              | `src/extflash.c`         | Chip-select GPIO assertion — sets DIO 4 low via `gpio_write`. 10 B. |
+| 0x00026F84  | `extflash_cs_deassert`            | `src/extflash.c`         | Chip-select GPIO deassertion — sets DIO 4 high. 10 B. |
+| 0x00021764  | `extflash_wait_wip_clear`         | `src/extflash.c`         | Polls SPI NOR RDSR (0x05) until WIP bit 0 clears. Busy-loops with CS-framed SPI bursts. Returns 0 on success, -2 on bus error. 78 B. |
+| 0x00024478  | `extflash_write_enable`           | `src/extflash.c`         | Sends single-byte WREN (0x06) framed by CS assert/deassert. Returns 0 on success, -3 on bus error. 52 B. |
+| 0x00022E08  | `gpio_write` (static)             | `src/extflash.c`         | IOC GPIO pin writer — validates pin ≤ max and base-address match, then writes `value` to `(volatile uint8_t *)(0x400220E0 - 0xE0 + pin)`. Returns 0 on success, 2 on error. 46 B. |
+| 0x0001EAF8  | `timekeeper_read_request`         | `src/timekeeper.c`       | Reader half of the timekeeper — adds live sysclock delta to the stored epoch under BasePri=0x20 critical section. Writes `{lo, hi, ticks}` triple to caller scratch. 84 B. |
+| 0x00024448  | `extflash_spi_tx`                 | `src/extflash.c`         | SPI transmit wrapper — builds {len, buf} struct and calls TI SPI driver `FUN_000274e8`. Returns 0 on success, -1 on failure. 42 B. |
+| 0x00024418  | `extflash_spi_rx`                 | `src/extflash.c`         | SPI receive wrapper — same shape as TX for reading. 42 B. |
+| 0x000265C4  | `bleware_control_event_post`      | `src/oad.c`              | Posts a 1-byte status event as kind 0x32 to the bluetoothtask queue via `task_queue_publish_envelope`. Called by OAD (status codes 0x12-0x17) and `cmd_ble_erase_all_bonds`. 20 B. |
+| 0x00020098  | `oad_state_lock`                  | `src/oad.c`              | Acquires the OAD session semaphore — converts ms to ticks, runs privilege-check + Hwi disable, Semaphore_pend, restore. 80 B. |
+| 0x00025060  | `oad_session_close`               | `src/oad.c`              | Tears down OAD session — probes semaphore (0 ms timeout), disables Hwi, sets conn_handle to 0xFFFF (idle), posts semaphore. 34 B. |
+| 0x00024D14  | `secrets_delete_by_key`           | `src/secrets.c`          | Backoffice sub-command 3 — looks up keyed record, fills with 0xFF, writes back via `secrets_record_write_verify`. Returns 0 if key not found. 42 B. |
+| 0x00026C30  | `secrets_sector_erase`            | `src/secrets.c`          | Backoffice sub-command 6 — thin wrapper around `extflash_erase_range(0x5A000, 0x1000)`. Returns 1. 18 B. |
+| 0x00025198  | `crc32_le`                        | `src/crc32.c` (new)      | Reflected CRC-32/zlib (poly 0xEDB88320), on-the-fly per-byte via `crc32_step_byte`. No final XOR. 58 B + 22 B helper. |
+| 0x0002774A  | `backoffice_ack_noop`             | `src/provisioning.c`     | Backoffice sub-command 4 — heartbeat probe. Always returns 1. 4 B. |
+| 0x000222AC  | `mkey_record_write_slot126`       | `src/provisioning.c`     | Backoffice sub-command 2 — takes 24 B record, stamps "MKEY" tag, CRC-32s, writes slot 126. 62 B. |
+| 0x0001F7F8  | `firmware_abort`                  | `src/provisioning.c`     | Logs "Platform reset", drains pending TX, sets abort flag, infinite-loops. Called on alloc failure in state_machine_post. 54 B. |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |
 | 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
 | 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |

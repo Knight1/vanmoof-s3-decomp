@@ -131,11 +131,11 @@ g_mkey_owning_struct_field3C:
  * Decoded plate-comments live in src/provisioning.c. Each gets its own
  * real .c body as it lands. The current weak no-ops let the skeleton
  * link with provisioning.o present. */
-    WEAK_NOOP(mkey_record_write_slot126)
-    WEAK_NOOP(secrets_delete_by_key)
-    WEAK_NOOP(backoffice_ack_noop)
+    /* WEAK_NOOP(mkey_record_write_slot126) — now strong in provisioning.c */
+    /* WEAK_NOOP(backoffice_ack_noop) — now strong in provisioning.c */
+    /* WEAK_NOOP(secrets_delete_by_key) — now strong in secrets.c */
     WEAK_NOOP(module_forward_async)
-    WEAK_NOOP(secrets_sector_erase)
+    /* WEAK_NOOP(secrets_sector_erase) — now strong in secrets.c */
     WEAK_NOOP(module_forward_sync)
     WEAK_NOOP(ble_connection_is_active)
     WEAK_NOOP(ble_connection_touch)
@@ -144,9 +144,10 @@ g_mkey_owning_struct_field3C:
     WEAK_NOOP(crc16_modbus)
 
 /* ===== OAD helpers (src/oad.c) ===== */
-    WEAK_NOOP(oad_state_lock)
-    WEAK_NOOP(bleware_control_event_post)
-    WEAK_NOOP(oad_session_close)
+/* OAD helpers now strong in src/oad.c. */
+    /* WEAK_NOOP(oad_state_lock) */
+    /* WEAK_NOOP(bleware_control_event_post) */
+    /* WEAK_NOOP(oad_session_close) */
     WEAK_NOOP(extflash_erase_range)
     WEAK_NOOP(extflash_write)
     WEAK_NOOP(ti_semaphore_post)
@@ -157,17 +158,87 @@ g_mkey_owning_struct_field3C:
 /* Inner publish helper used by state_machine_post. Now strong in
  * bluetoothtask_post.c. */
     /* WEAK_NOOP(task_queue_publish_envelope) — now strong */
-/* Firmware abort routine (FUN_0001F7F8), tail-called on alloc failure. */
-    WEAK_NOOP(firmware_abort)
+/* Firmware abort now strong in provisioning.c. */
+    /* WEAK_NOOP(firmware_abort) — now strong */
 
-/* OAD state struct (single instance, RAM-resident). Weak BSS so the
- * skeleton links; real RAM address baked by the OEM C runtime. */
+    WEAK_NOOP(FUN_00027766)
+    WEAK_NOOP(FUN_0002776a)
+/* ROM Semaphore thunks used by oad_state_lock / oad_session_close:
+ * thunk_EXT_FUN_1002ecc2 = SemaphoreP_pend (with owner tracking?)
+ * thunk_EXT_FUN_1002e2c4 = HwiP_disable
+ * thunk_EXT_FUN_1002e9e6 = HwiP_restore */
+    WEAK_NOOP(thunk_FUN_1002ecc2)
+    WEAK_NOOP(thunk_FUN_1002e2c4)
+    WEAK_NOOP(thunk_FUN_1002e9e6)
+/* FUN_000274e8 — TI SPI driver transfer primitive */
+    WEAK_NOOP(FUN_000274e8)
     .section .bss.g_oad_state, "aw", %nobits
     .weak    g_oad_state
     .type    g_oad_state, %object
     .size    g_oad_state, 0x68
 g_oad_state:
     .skip    0x68
+
+/* OAD state globals used by oad_state_lock and oad_session_close:
+ * DAT_000200E8 = pointer to tick period (0x0002BB88), DAT_00025084 =
+ * pointer to OAD session struct (0x20009A90), DAT_000265D8 = control
+ * event tag literal (0x0002752F). */
+    .section .data.g_tick_period_ptr, "aw", %progbits
+    .weak    g_tick_period_ptr
+    .type    g_tick_period_ptr, %object
+    .size    g_tick_period_ptr, 4
+g_tick_period_ptr:
+    .word    0x0002BB88
+
+    .section .data.g_oad_conn_handle, "aw", %progbits
+    .weak    g_oad_conn_handle
+    .type    g_oad_conn_handle, %object
+    .size    g_oad_conn_handle, 4
+g_oad_conn_handle:
+    .word    0x20009A90
+
+    .section .data.g_oad_sem_handle, "aw", %progbits
+    .weak    g_oad_sem_handle
+    .type    g_oad_sem_handle, %object
+    .size    g_oad_sem_handle, 4
+g_oad_sem_handle:
+    .word    0x20009A94
+
+    .section .data.g_ble_control_tag, "aw", %progbits
+    .weak    g_ble_control_tag
+    .type    g_ble_control_tag, %object
+    .size    g_ble_control_tag, 4
+g_ble_control_tag:
+    .word    0x0002752F
+
+/* Provisioning globals:
+ * DAT_000222E8 = "MKEY" tag LE word, DAT_0001F848 = abort flag in RAM */
+    .section .data.g_mkey_tag, "aw", %progbits
+    .weak    g_mkey_tag
+    .type    g_mkey_tag, %object
+    .size    g_mkey_tag, 4
+g_mkey_tag:
+    .word    0x59454B4D   /* "MKEY" little-endian */
+
+    .section .bss.g_abort_flag, "aw", %nobits
+    .weak    g_abort_flag
+    .type    g_abort_flag, %object
+    .size    g_abort_flag, 4
+g_abort_flag:
+    .skip    4
+
+/* Firmware abort — platform strings referenced by firmware_abort */
+    .section .rodata.s_Platform_reset, "a", %progbits
+    .weak    s_Platform_reset
+    .type    s_Platform_reset, %object
+s_Platform_reset:
+    .string "Platform reset"
+
+    .section .rodata.s_source_xs3_app_c, "a", %progbits
+    .weak    s_source_xs3_app_c
+    .type    s_source_xs3_app_c, %object
+s_source_xs3_app_c:
+    .string "source/xs3_app.c"
 
 /* TI-RTOS tick-period word — OEM `PTR_DAT_0000BA50`. */
     .section .bss.g_ti_tick_period_us, "aw", %nobits
@@ -177,13 +248,16 @@ g_oad_state:
 g_ti_tick_period_us:
     .skip    4
 
-/* ===== extflash.c helpers ===== */
-    WEAK_NOOP(extflash_cs_assert)
-    WEAK_NOOP(extflash_cs_deassert)
-    WEAK_NOOP(extflash_spi_tx)
-    WEAK_NOOP(extflash_spi_rx)
-    WEAK_NOOP(extflash_wait_wip_clear)
-    WEAK_NOOP(extflash_write_enable)
+/* ===== extflash.c helpers =====
+ * extflash_cs_assert, extflash_cs_deassert, extflash_wait_wip_clear,
+ * extflash_write_enable are now strong in extflash.c. */
+    /* WEAK_NOOP(extflash_cs_assert) */
+    /* WEAK_NOOP(extflash_cs_deassert) */
+    /* WEAK_NOOP(extflash_spi_tx) — now strong in extflash.c */
+    /* WEAK_NOOP(extflash_spi_rx) — now strong in extflash.c */
+    /* WEAK_NOOP(extflash_wait_wip_clear) */
+    /* WEAK_NOOP(extflash_write_enable) */
+    /* WEAK_NOOP(gpio_write) */
 
 /* Singleton state struct (OEM `DAT_00016AFC`). 16-byte placeholder so
  * the skeleton links; the real RAM is populated by the extflash
@@ -221,7 +295,7 @@ g_extflash_state:
 
     WEAK_NOOP(ti_mailbox_post)
     WEAK_NOOP(ssp_frame_alloc)
-    WEAK_NOOP(gpio_write)
+    /* WEAK_NOOP(gpio_write) — now static in extflash.c */
 /* `ble_connection_get_session_key` is now a real strong symbol in
  * src/ble_connection.c (was a weak stub here and again at line 399). */
 
@@ -265,6 +339,57 @@ g_ssp_bus_pending_cmd_ptr:
     .type    g_bleware_gpio_ctx, %object
     .size    g_bleware_gpio_ctx, 4
 g_bleware_gpio_ctx:
+    .skip    4
+
+/* GPIO state globals used by gpio_write (static in extflash.c):
+ * OEM DAT_00022E38 = 0x20005A78 (max pin), DAT_00022E3C = 0x2000A2E8
+ * (base-address table), DAT_00022E40 = 0x400220E0 (DOUT base). */
+    .section .bss.g_gpio_max_pin, "aw", %nobits
+    .weak    g_gpio_max_pin
+    .type    g_gpio_max_pin, %object
+    .size    g_gpio_max_pin, 4
+g_gpio_max_pin:
+    .skip    4
+
+    .section .data.g_gpio_dout_base, "aw", %progbits
+    .weak    g_gpio_dout_base
+    .type    g_gpio_dout_base, %object
+    .size    g_gpio_dout_base, 4
+g_gpio_dout_base:
+    .word    0x400220E0
+
+/* Extflash CS gpio_ctx — OEM DAT_00026F90/DAT_00026FA0 both = 0x20001B34 */
+    .section .bss.g_extflash_gpio_ctx, "aw", %nobits
+    .weak    g_extflash_gpio_ctx
+    .type    g_extflash_gpio_ctx, %object
+    .size    g_extflash_gpio_ctx, 4
+g_extflash_gpio_ctx:
+    .skip    4
+
+/* Extflash opcode bytes — sourced from driver-header table at 0x0002A450.
+ * DAT_000217A8 = 0x0002A451 = rdsr_cmd (0x05), DAT_000244A4 = 0x0002A451
+ * same table, byte +1 = rdsr, +2 = wren. */
+    .section .data.g_extflash_rdsr_cmd, "aw", %progbits
+    .weak    g_extflash_rdsr_cmd
+    .type    g_extflash_rdsr_cmd, %object
+    .size    g_extflash_rdsr_cmd, 1
+g_extflash_rdsr_cmd:
+    .byte    0x05
+
+    .section .data.g_extflash_wren_cmd, "aw", %progbits
+    .weak    g_extflash_wren_cmd
+    .type    g_extflash_wren_cmd, %object
+    .size    g_extflash_wren_cmd, 1
+g_extflash_wren_cmd:
+    .byte    0x06
+
+/* SPI driver handle — OEM DAT_00024474 - 0xC = DAT_00024444 - 0xC,
+ * both resolve through g_extflash_state at 0x20001B34 - 0xC = 0x20001B28 */
+    .section .bss.g_extflash_spi_handle, "aw", %nobits
+    .weak    g_extflash_spi_handle
+    .type    g_extflash_spi_handle, %object
+    .size    g_extflash_spi_handle, 4
+g_extflash_spi_handle:
     .skip    4
 
 /* YModem target-offset pointer — OEM `*DAT_0000CC70`, a u32 in RAM
@@ -346,7 +471,7 @@ g_gatt_dispatch:
 /* `timekeeper_apply_request` (FUN_00020B18) + `sysclock_snapshot` are
  * now strong in src/timekeeper.c. Its leaf helpers remain stubbed: */
     /* WEAK_NOOP(sysclock_snapshot) -- now strong in timekeeper.c */
-    WEAK_NOOP(timekeeper_read_request)      /* FUN_0001EAF8 */
+    /* WEAK_NOOP(timekeeper_read_request) — now strong in timekeeper.c */
 
 /* Heap-resident timekeeper shared state + tick-modulus constant. */
     .section .bss.g_timekeeper_state, "aw", %nobits

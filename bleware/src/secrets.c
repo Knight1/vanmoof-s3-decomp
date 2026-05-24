@@ -30,6 +30,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "bleware.h"
+
 #define SECRETS_SECTOR_BASE   0x0005A000u
 #define SECRETS_RECORD_BYTES  0x20u           /* 32 B per record */
 #define SECRETS_RECORD_COUNT  128u            /* 4 KB / 32 B    */
@@ -345,4 +347,30 @@ uint32_t runtime_permission_mask(void)
         return 0;
     }
     return *(uint32_t *)(g_mkey_ptr + 0x14u);
+}
+
+/* Backoffice sub-command 3: delete a keyed record by its 32-bit key.
+ * Looks up the slot, fills it with 0xFF (erased-flash state), writes
+ * it back via secrets_record_write_verify. Returns verify result on
+ * success, 0 if the key isn't found. OEM @ 0x00024D14 (42 B). */
+int secrets_delete_by_key(uint32_t key)
+{
+    extern void *memset(void *dst, int c, unsigned int n);  /* FUN_0001B6B2 */
+    uint8_t     buf[32];
+    int         slot;
+
+    slot = secrets_find_by_key(key, buf);
+    if (slot < 0) {
+        return 0;
+    }
+    memset(buf, 0xFF, 32);
+    return secrets_record_write_verify(slot, buf);
+}
+
+/* Backoffice sub-command 6: erase the entire 4 KB secrets sector.
+ * Thin wrapper around extflash_erase_range. OEM @ 0x00026C30 (18 B). */
+int secrets_sector_erase(void)
+{
+    extflash_erase_range(0x0005A000u, 0x1000u);
+    return 1;
 }

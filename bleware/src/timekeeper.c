@@ -64,14 +64,6 @@ void sysclock_snapshot(uint32_t out_clock[3])
     }
 }
 
-/* Combine a stored `{epoch_lo, epoch_hi, epoch_ticks}` request with a
- * fresh sysclock snapshot into a 64-bit "current time" reading. This
- * is the read counterpart to `timekeeper_apply_request`: it adds the
- * delta between the stored snapshot tick and the live tick to the
- * stored epoch and writes the resulting `{lo, hi, ticks}` triple back
- * into the caller-supplied scratch. */
-extern void timekeeper_read_request(uint32_t scratch[3]);          /* FUN_0001EAF8 */
-
 #define TIMEKEEPER_BASEPRI_MASK   0x20u
 
 /* Cortex-M BASEPRI helpers — masked-IRQ critical section. */
@@ -132,6 +124,40 @@ int timekeeper_apply_request(const uint32_t request[3])
 
     basepri_restore(prev_basepri);
     return 0;
+}
+
+/* Combine a stored `{epoch_lo, epoch_hi, epoch_ticks}` with a fresh
+ * sysclock snapshot. Adds the delta between stored and live clock to
+ * the stored epoch. OEM @ 0x0001EAF8. */
+void timekeeper_read_request(uint32_t scratch[3])
+{
+    uint32_t prev_basepri = basepri_raise(TIMEKEEPER_BASEPRI_MASK);
+
+    uint32_t snapshot[3];
+    sysclock_snapshot(snapshot);
+
+    uint32_t *state = g_timekeeper_state;
+
+    scratch[0] = state[1];
+
+    uint32_t delta = (snapshot[2] - state[2]) + state[0];
+    uint32_t subticks = snapshot[1] + state[3];
+
+    extern uint32_t g_tk_tick_modulus2;
+    if (g_tk_tick_modulus2 - 1u < subticks) {
+        delta++;
+        subticks -= g_tk_tick_modulus2;
+    }
+    scratch[2] = subticks;
+
+    delta += state[4];
+    scratch[1] = delta;
+
+    if (delta < state[0]) {
+        scratch[0] = state[1] + 1u;
+    }
+
+    basepri_restore(prev_basepri);
 }
 
 void timekeeper_submit_epoch(uint32_t epoch)

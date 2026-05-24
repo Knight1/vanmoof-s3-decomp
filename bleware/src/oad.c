@@ -83,8 +83,7 @@ extern int      oad_state_lock(uint32_t lock_handle, int timeout_ms);    /* FUN_
 extern void     bleware_control_event_post(uint32_t status);                      /* FUN_000265C4 */
 extern void     oad_session_close(void);                                 /* FUN_00025060 */
 extern void     FUN_00024740(uint8_t *dst, const uint8_t *src, uint32_t len); /* scramble decrypt */
-extern void     extflash_erase_range(uint32_t addr, uint32_t len);       /* FUN_00016A50 */
-extern void     extflash_write(uint32_t addr, uint32_t len, const uint8_t *src); /* FUN_00015B9C */
+/* extflash_erase_range, extflash_write — declared in bleware.h */
 extern int      extflash_open(void);
 extern void     extflash_close(void);
 extern int      module_publish_command(uint32_t cmd_id, const void *buf, /* FUN_000244D8 */
@@ -282,4 +281,67 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
         }
     }
     return 0;
+}
+
+/* Acquire the OAD session lock semaphore. Converts `timeout_ms` to
+ * TI-RTOS ticks (using the global tick period), disables Hwi if
+ * privilege permits, calls Semaphore_pend, restores Hwi. OEM @ 0x00020098. */
+int oad_state_lock(uint32_t lock_handle, int timeout_ms)
+{
+    extern uint32_t  *g_tick_period_ptr;     /* DAT_000200E8 = 0x0002BB88 → 10 µs */
+    extern int        FUN_00027766(void);
+    extern void       FUN_0002776a(uint32_t, uint32_t);
+    extern int        thunk_FUN_1002ecc2(uint32_t, uint32_t);
+    extern void       thunk_FUN_1002e2c4(uint32_t);
+    extern void       thunk_FUN_1002e9e6(uint32_t);
+    uint32_t           tick_us;
+    uint32_t           timeout_ticks;
+    int                was_privileged;
+
+    was_privileged = FUN_00027766();   /* check if in privileged/Hwi-disabled mode */
+    if (was_privileged != 0) {
+        thunk_FUN_1002e2c4(lock_handle);
+    }
+
+    tick_us       = *g_tick_period_ptr;
+    timeout_ticks = (uint32_t)timeout_ms * (1000u / tick_us);
+
+    thunk_FUN_1002ecc2(lock_handle, timeout_ticks);
+    FUN_0002776a(lock_handle, timeout_ticks);  /* post-pend hook */
+
+    if (was_privileged != 0) {
+        thunk_FUN_1002e9e6(lock_handle);
+    }
+    return 1;
+}
+
+/* Post a 1-byte control event to the bluetoothtask queue as kind 0x32.
+ * The single status byte is packed into a heap envelope. OEM @ 0x000265C4. */
+void bleware_control_event_post(uint32_t status)
+{
+    extern uint32_t g_ble_control_tag;   /* DAT_000265D8 = 0x0002752F */
+    uint8_t         payload;
+
+    payload = (uint8_t)status;
+    task_queue_publish_envelope(0x32u, &payload, 1, g_ble_control_tag);
+}
+
+/* Tear down the OAD session: probes the semaphore (0 ms timeout),
+ * disables Hwi if needed, sets conn_handle to 0xFFFF (idle), and
+ * posts the semaphore. OEM @ 0x00025060. */
+void oad_session_close(void)
+{
+    extern uint16_t *g_oad_conn_handle;     /* DAT_00025084 + 0 → first field = conn_handle */
+    extern int       thunk_FUN_1002bfb0(uint32_t, uint32_t);  /* Semaphore_pend */
+    extern void      thunk_FUN_1002cd20(uint32_t);            /* Semaphore_post */
+    extern void      thunk_FUN_1002e2c4(uint32_t);            /* HwiP_disable */
+    uint16_t        *conn_ptr = g_oad_conn_handle;
+    int              rc;
+
+    rc = thunk_FUN_1002bfb0(*(uint32_t *)(conn_ptr + 2), 0);  /* sem at +4 */
+    if (rc == 0) {
+        thunk_FUN_1002e2c4(*(uint32_t *)(conn_ptr + 2));
+        *conn_ptr = 0xFFFFu;
+    }
+    thunk_FUN_1002cd20(*(uint32_t *)(conn_ptr + 2));
 }

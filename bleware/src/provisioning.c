@@ -154,7 +154,7 @@ extern int  block_dispatch_queue_post(const void *key_record,
 
 /* Helpers used inside the file. */
 extern uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed); /* OEM 0x0002651C */
-extern uint32_t crc32_le(uint32_t seed, const uint8_t *buf, int len);
+/* crc32_le — now declared in bleware.h */
 extern int      secrets_record_read(int index, void *out_record);
 extern int      secrets_record_write_verify(int index, const void *record);
 extern int      secrets_upsert_keyed_record(const void *record_24);
@@ -470,5 +470,56 @@ build_reply: {
 
     gatt_notify_channel(4, reasm);
     return 0;
+    }
+}
+
+/* Backoffice sub-command 4: heartbeat / capability probe. Always
+ * returns 1 (ack). OEM @ 0x0002774A (4 B). */
+int backoffice_ack_noop(void)
+{
+    return 1;
+}
+
+/* Backoffice sub-command 2: write the M-Key to slot 126. Takes a
+ * 24-byte record payload, stamps the "MKEY" tag at offset +24,
+ * computes CRC-32 over the full 28-byte payload, and writes the
+ * 32-byte record via secrets_record_write_verify. OEM @ 0x000222AC. */
+int mkey_record_write_slot126(const void *rec_24)
+{
+    extern const uint32_t g_mkey_tag;           /* DAT_000222E8 = "MKEY" LE */
+    const uint8_t        *src = (const uint8_t *)rec_24;
+    uint8_t               buf[32];
+
+    memcpy(buf, src, 24);
+    memcpy(buf + 24, &g_mkey_tag, 4);
+    uint32_t crc = crc32_le(0xFFFFFFFFu, buf, 28);
+    memcpy(buf + 28, &crc, 4);
+
+    return secrets_record_write_verify(0x7E, buf);
+}
+
+/* Firmware abort — logs a "Platform reset" message via monitor_log,
+ * waits for pending TX to drain, sets a flag, and infinite-loops.
+ * OEM @ 0x0001F7F8 (54 B). */
+void firmware_abort(void)
+{
+    extern const char s_Platform_reset[];   /* "Platform reset" @ flash */
+    extern const char s_source_xs3_app_c[]; /* "source/xs3_app.c" */
+    extern uint32_t    g_abort_flag;        /* DAT_0001F848 */
+    extern int         FUN_000202e4(void);  /* pending-TX check */
+    extern void        FUN_00027274(void);  /* power-safe hook */
+    int                done;
+
+    monitor_log(s_source_xs3_app_c + 1, 0x2FB, 0, 1, s_Platform_reset);
+
+    do {
+        done = FUN_000202e4();
+    } while (done == 0);
+
+    FUN_00027274();
+    g_abort_flag = 1;
+
+    for (;;) {
+        /* infinite loop — device is halted */
     }
 }
