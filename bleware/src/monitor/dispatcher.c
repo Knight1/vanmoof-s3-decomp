@@ -76,3 +76,17 @@ void monitor_print_help_line(const char *name, const char *description)
     monitor_log("source/monitor/cmd_help.c", 0xE, NULL, 8,
                 "    %-33s - %s\r\n", name, description);
 }
+
+/* Case-sensitive string comparison for command matching. Returns 1
+ * if the strings are equal, 0 otherwise. Used by the monitor dispatch
+ * loop and individual cmd_* handlers to match user input.
+ * OEM @ 0x000251BE (32 B). */
+int monitor_command_matches(const char *input, const char *name)
+{
+    while (*input == *name) {
+        if (*input == '\0') return 1;
+        input++;
+        name++;
+    }
+    return 0;
+}

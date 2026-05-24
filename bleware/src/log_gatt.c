@@ -89,7 +89,7 @@ extern int  ti_semaphore_pend(uint32_t handle, uint32_t timeout_ticks);
 /* `FUN_000229B0(conn_handle, &len_inout)` — clamps `len_inout` to the
  * ATT MTU negotiated for `conn_handle`. (Decoded shape: writes the
  * effective MTU bytes back via the pointer.) */
-extern void att_mtu_clamp(uint32_t conn_handle, uint32_t *len_inout);
+/* att_mtu_clamp — declared in bleware.h */
 
 /* Module-forward (Modbus async send) — already declared in bleware.h. */
 
@@ -230,6 +230,60 @@ int log_read_entry(void *out_16B, int log_idx)
 
     ti_semaphore_post(g_log_state.lock_handle);
     return 1;
+}
+
+/* Per-channel log notify dispatcher — channel 0/1 map to 0x55C1/0x55C2
+ * (16-byte fixed), channel 2 maps to 0x55C3 (variable up to 0xF0 bytes,
+ * aligned down to 16). Copies payload to channel buffer and sends
+ * GATT_Notification if conn_handle is active.
+ * OEM @ 0x0001B9F4 (98 B). */
+int log_gatt_notify_channel(int channel, const void *buf, uint32_t len)
+{
+    extern uint8_t  g_log_notify_chan_tag;     /* state_base - 4 */
+    extern uint32_t g_log_notify_state[5];     /* +0:pad, +4:ch1_conn, +8:ch0_conn,
+                                                  +12:ch2_conn, +16:param */
+    extern void    *memcpy(void *dst, const void *src, unsigned int n);
+    extern int      FUN_00016D1C(int conn, void *buf, uint32_t flag,
+                                 void *param, uint16_t len, uint8_t tag,
+                                 uint32_t extra);
+
+    void    *chan_buf;
+    uint16_t copy_len;
+    int      conn_handle;
+
+    if (channel == 0) {
+        chan_buf    = (void *)0x2000AB00;   /* DAT_0001BA60 */
+        conn_handle = (int)g_log_notify_state[2];  /* +8 */
+        copy_len    = 16;
+    } else if (channel == 1) {
+        chan_buf    = (void *)0x2000AB10;   /* DAT_0001BA5C */
+        conn_handle = (int)g_log_notify_state[1];  /* +4 */
+        copy_len    = 16;
+    } else if (channel == 2) {
+        if (len < 0xF1) {
+            copy_len = (uint16_t)len;
+            if (len & 0xF) {
+                copy_len = (uint16_t)(len & 0xFFFFFFF0u);
+            }
+        } else {
+            copy_len = 0xF0;
+        }
+        *(uint16_t *)((uint8_t *)&g_log_notify_state[-1]) = copy_len;
+        chan_buf    = (void *)0x20009E34;   /* DAT_0001BA58 */
+        conn_handle = (int)g_log_notify_state[3];  /* +12 */
+    } else {
+        return 2;
+    }
+
+    memcpy(chan_buf, buf, copy_len);
+
+    if (conn_handle != 0) {
+        uint8_t tag = g_log_notify_chan_tag;
+        FUN_00016D1C(conn_handle, chan_buf, 0,
+                     (void *)g_log_notify_state[4],
+                     copy_len, tag, *(uint32_t *)((uint8_t *)&g_log_notify_state[4] + 4));
+    }
+    return 0;
 }
 
 /* `log_seek_to_timestamp` — advance the tail cursor past every line

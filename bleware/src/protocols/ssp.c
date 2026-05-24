@@ -301,3 +301,32 @@ int module_bus_is_idle(void)
     extern uint16_t *g_ssp_bus_pending_cmd_ptr;  /* DAT_000265A8 = 0x20009A90 */
     return (*g_ssp_bus_pending_cmd_ptr == 0xFFFFu) ? 0 : 1;
 }
+
+/* Synchronous forward — publish a command payload and block on the
+ * per-module reply semaphore. Used by the backoffice handler for
+ * sub-command 8 (module-forward-sync). Returns 0 on reply received,
+ * -1 on timeout. OEM @ 0x000177E8 (72 B). */
+int module_forward_sync(uint16_t cmd_id, const uint8_t *payload,
+                        unsigned int len)
+{
+    extern uint8_t  g_ssp_modules[];   /* RAM 0x20004158 */
+    uint8_t        *rec;
+    uint32_t        sem_handle;
+    int             rc;
+
+    /* Build and send the publish frame. module_idx is always 0 for
+     * backoffice-initiated sync forwards — the reply comes back on
+     * the main bus semaphore. */
+    rc = ssp_queue_publish_frame(&g_ssp_master, cmd_id, payload, len, 0, 0, NULL);
+    if (rc != 0) {
+        return -1;
+    }
+
+    /* Wait on the module-0 reply semaphore with ~2.5 s timeout.
+     * SSP_MODULE_REC_STRIDE = 0x7C, SSP_MODULE_REC_REPLY_SEM = 0x44 */
+    rec        = g_ssp_modules + 0 * SSP_MODULE_REC_STRIDE;
+    sem_handle = *(uint32_t *)(rec + SSP_MODULE_REC_REPLY_SEM);
+
+    rc = ti_semaphore_pend(sem_handle, 2500u * 10u);  /* ~2.5s at 10µs/tick */
+    return (rc != 0) ? 0 : -1;
+}

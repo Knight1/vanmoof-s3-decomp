@@ -58,8 +58,8 @@ uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed)
     uint32_t crc = seed & 0xFFFFu;
 
     while (len != 0) {
-        uint8_t b = *buf;
-        crc ^= b;
+        uint8_t byte_val = *buf;
+        crc ^= byte_val;
         for (int i = 0; i < 8; i++) {
             if (crc & 1u) {
                 crc = (crc >> 1) ^ 0xA001u;

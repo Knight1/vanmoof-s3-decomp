@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "bleware.h"
 
@@ -448,4 +449,129 @@ int extflash_block_wp_enabled(void)
     }
     ti_semaphore_post(g_extflash_state.bus_mutex);
     return (status & 0x3Cu) ? 1 : 0;
+}
+
+/* 4 KB-sector read-modify-write. Reads the sector containing `addr`,
+ * merges the caller's `len` bytes at `src` into the in-sector offset,
+ * erases the sector, and writes it back. Handles cross-sector spans
+ * by looping. Returns 1 on success, 0 on failure.
+ * OEM @ 0x000193C0 (76 B). */
+int extflash_sector_write(uint32_t addr, uint32_t len, const void *src)
+{
+    extern void  *FUN_000259A4(void);  /* scratch buffer alloc */
+    uint8_t      *scratch;
+    int           ok;
+
+    scratch = (uint8_t *)FUN_000259A4();
+    if (scratch == NULL) {
+        return 0;
+    }
+
+    uint32_t sector_mask = 0xFFFFF000u;  /* DAT_0001944C */
+    uint32_t remaining   = len;
+    const uint8_t *p     = (const uint8_t *)src;
+
+    while (remaining != 0) {
+        uint32_t sector_addr = addr & sector_mask;
+        uint32_t chunk       = remaining;
+
+        if (sector_addr != ((addr + remaining) & sector_mask)) {
+            /* cross-sector — clamp to end of current sector */
+            chunk = 0x1000u - (addr & 0xFFFu);
+        }
+
+        /* Read the full 4 KB sector, merge, erase, write back */
+        if (extflash_read(sector_addr, 0x1000u, scratch) == 0) {
+            ok = 0;
+            break;
+        }
+        extflash_erase_range(sector_addr, 0x1000u);
+        memcpy(scratch + (addr & 0xFFFu), p, chunk);
+        if (extflash_write(sector_addr, 0x1000u, scratch) == 0) {
+            ok = 0;
+            break;
+        }
+
+        addr    += chunk;
+        p       += chunk;
+        remaining -= chunk;
+        ok = 1;
+    }
+
+    ti_semaphore_post(*(uint32_t *)0x20000000);  /* DAT_00019448 semaphore post */
+    return ok;
+}
+
+/* Open the external SPI flash driver. If already open, returns 1
+ * immediately. Otherwise: initialises the PIN driver, copies SPI
+ * params from the flash driver-header table, opens the SPI bus at
+ * a slow bitrate, sends a Release-Power-Down (0xAB) command, waits
+ * WIP clear, runs chip identification (REMS JEDEC probe). On success
+ * closes the slow handle and reopens at production speed.
+ * Returns 1 on success, 0 on failure.
+ * OEM @ 0x000152FC (~170 B). */
+int extflash_open(int unused)
+{
+    extern void  FUN_0001733C(void *pin_cfg, const void *pin_table);
+    extern void  FUN_000269B4(void *spi_params_out);
+    extern void *FUN_00022630(int idx, void *params);
+    extern void  FUN_000274DE(void *handle);
+    extern void  FUN_00025BC2(void *pin_cfg);
+    extern int   extflash_identify_chip(void);
+    extern void  thunk_EXT_FUN_1002CE00(int ms);       /* ROM sleep */
+
+    char         *state = (char *)&g_extflash_state;
+    void         *pin_cfg;
+    void         *spi_handle;
+    uint8_t       spi_params[32];
+    uint8_t       rdp_cmd[4];
+    int           rc;
+
+    (void)unused;
+
+    if (state[0] != 0) {
+        return 1;  /* already open */
+    }
+
+    pin_cfg = state + 0x14;  /* PIN config field in extflash_state */
+    FUN_0001733C(pin_cfg, (void *)(uintptr_t)0x0002A45C);  /* PIN table */
+    FUN_000269B4(spi_params);
+
+    spi_params[0] = 0;
+    /* open SPI at slow bitrate (index 0) */
+    spi_handle = FUN_00022630(0, spi_params);
+    *(void **)(state + 8) = spi_handle;
+
+    extflash_cs_deassert();
+    thunk_EXT_FUN_1002CE00(10);  /* sleep 10 ms */
+
+    rdp_cmd[0] = 0xAB;  /* Release Power-Down */
+    extflash_cs_assert();
+    rc = extflash_spi_tx(rdp_cmd, 1);
+    extflash_cs_deassert();
+
+    if (rc == 0) {
+        /* busy-wait ~200 iterations */
+        volatile int spin = 200;
+        while (spin != 0) { spin--; }
+        rc = extflash_wait_wip_clear(NULL);
+    }
+
+    if (rc == 0) {
+        rc = extflash_identify_chip();
+    }
+
+    if (rc == 1) {
+        /* reopen at production bitrate */
+        FUN_000274DE(*(void **)(state + 8));
+        *(uint32_t *)(spi_params + 4) = 0x00028000;  /* production bitrate */
+        spi_handle = FUN_00022630(0, spi_params);
+        state[0] = 1;
+        *(void **)(state + 8) = spi_handle;
+        return 1;
+    }
+
+    FUN_00025BC2(pin_cfg);
+    FUN_000274DE(*(void **)(state + 8));
+    return 0;
 }

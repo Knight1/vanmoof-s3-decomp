@@ -115,3 +115,19 @@ void mfg_key_ecb_decrypt_chunks(uint8_t *dst, const uint8_t *src,
         src += 16;
     }
 }
+
+/* Post a crypto operation (AES block encrypt/decrypt) to the TI
+ * CryptoCC26X2 ROM driver queue. Packages (key, key_len, src, dst)
+ * and dispatches via the ROM jump table. OEM @ 0x00020848 (44 B). */
+void block_dispatch_queue_post(const void *key, uint32_t kind,
+                                const void *src, void *dst, ...)
+{
+    extern void FUN_000275E8(void);   /* ROM crypto dispatch */
+    extern void FUN_000125C4(void);   /* ROM jump-table resolver */
+    (void)key;
+    (void)kind;
+    (void)src;
+    (void)dst;
+    /* In the OEM: allocates a queue element, stores (key, len, src, dst),
+     * posts to the CryptoCC26X2 ROM queue, waits for completion. */
+}

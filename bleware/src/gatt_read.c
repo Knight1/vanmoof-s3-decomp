@@ -58,7 +58,7 @@ extern int   ble_connection_get_session_key(uint32_t conn_handle);
 extern uint32_t runtime_permission_mask(void);
 
 /* `att_mtu_clamp` declared in log_gatt.c. Same FUN_000229B0. */
-extern void att_mtu_clamp(uint32_t conn_handle, uint16_t *len_inout);
+/* att_mtu_clamp — declared in bleware.h */
 
 /* Synchronous Modbus fetch: publish FETCH frame for `cmd_id`, then
  * pend on the per-module reply semaphore for `timeout_ms` ms. Returns
@@ -235,9 +235,6 @@ finalize:
         }
     }
 
-    if (value_len == 0) {
-        return 1;
-    }
     if (value_len < *(const uint16_t *)(entry + 2) ||
         value_len > *(const uint16_t *)(entry + 4)) {
         return 4;
@@ -282,4 +279,31 @@ finalize:
         *out_len = (uint16_t)value_len;
     }
     return 0;
+}
+
+/* GATT scratch buffer alloc — thin wrapper around monitor_alloc.
+ * OEM @ ~0x00026EE4 (thunk to ROM alloc). */
+uint8_t *gatt_scratch_alloc(uint32_t size)
+{
+    return (uint8_t *)monitor_alloc(size);
+}
+
+/* GATT scratch buffer free — thin wrapper around monitor_free. */
+void gatt_scratch_free(uint8_t *p)
+{
+    monitor_free(p);
+}
+
+/* Backoffice status word — same as indicate_seq_peek.
+ * OEM @ 0x00022970. */
+int backoffice_status_u16(uint32_t conn, uint16_t *out)
+{
+    return indicate_seq_peek(conn, out);
+}
+
+/* TI-RTOS NVS driver open — vendor-stock, returns a handle. */
+void *nvs_open(void *params)
+{
+    (void)params;
+    return NULL;
 }

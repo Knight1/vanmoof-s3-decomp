@@ -43,43 +43,42 @@ name: ; \
     bx      lr ; \
     .size   name, .-name
 
-    WEAK_NOOP(monitor_log)
+    /* WEAK_NOOP(monitor_log) -- now in stubs.c */
     /* WEAK_NOOP(monitor_print_help_line) — now strong in dispatcher.c */
-    WEAK_NOOP(memcpy)
-    WEAK_NOOP(memset)
+    /* WEAK_NOOP(memcpy) -- now strong in runtime.c */
+    /* WEAK_NOOP(memset) -- now strong in runtime.c */
 /* `monitor_alloc` and `monitor_free` are now real strong symbols in
  * src/ti_rtos_heap.c. Earlier WEAK_NOOP entries removed. */
-    WEAK_NOOP(nvs_open)
-    WEAK_NOOP(extflash_open)
-    WEAK_NOOP(extflash_close)
-    /* WEAK_NOOP(extflash_retry_backoff) — now strong in extflash.c */
+    /* WEAK_NOOP(nvs_open) — now strong in gatt_read.c */
+    /* WEAK_NOOP(extflash_open) — now strong in extflash.c */
     /* WEAK_NOOP(extflash_close) — now strong in extflash.c */
-    WEAK_NOOP(extflash_get_chip_info)
+    /* WEAK_NOOP(extflash_retry_backoff) — now strong in extflash.c */
+    /* WEAK_NOOP(extflash_get_chip_info) -- now strong */
     /* WEAK_NOOP(extflash_sw_wp_enabled) — now strong in extflash.c */
     /* WEAK_NOOP(extflash_block_wp_enabled) — now strong in extflash.c */
     /* WEAK_NOOP(att_mtu_clamp) — now strong in ble_connection.c */
 
 /* ===== Monitor command helper fallbacks ===== */
-    WEAK_NOOP(monitor_command_matches)
-    WEAK_NOOP(monitor_sscanf)
-    WEAK_NOOP(monitor_sleep)
-    WEAK_NOOP(firmware_update_start)
-    WEAK_NOOP(print_firmware_info)
-    WEAK_NOOP(log_block_count)
-    WEAK_NOOP(log_format_block)
-    WEAK_NOOP(monitor_strlen)
-    WEAK_NOOP(log_submit)
-    WEAK_NOOP(monitor_snprintf)
-    WEAK_NOOP(packfs_open)
-    WEAK_NOOP(packfs_next)
-    WEAK_NOOP(packfs_close)
-    WEAK_NOOP(format_size)
-    WEAK_NOOP(extflash_erase)
-    WEAK_NOOP(extflash_read)
-    WEAK_NOOP(extflash_sector_write)
-    WEAK_NOOP(crc32_le)
-    WEAK_NOOP(memcmp)
-    WEAK_NOOP(block_dispatch_queue_post)
+    /* WEAK_NOOP(monitor_command_matches) -- now strong */
+    /* WEAK_NOOP(monitor_sscanf) -- now in stubs.c */
+    /* WEAK_NOOP(monitor_sleep) -- now in stubs.c */
+    /* WEAK_NOOP(firmware_update_start) -- now strong */
+    /* WEAK_NOOP(print_firmware_info) -- now in stubs.c */
+    /* WEAK_NOOP(log_block_count) -- now strong */
+    /* WEAK_NOOP(log_format_block) -- now strong */
+    /* WEAK_NOOP(monitor_strlen) -- now in stubs.c */
+    /* WEAK_NOOP(log_submit) -- now strong */
+    /* WEAK_NOOP(monitor_snprintf) -- now in stubs.c */
+    /* WEAK_NOOP(packfs_open) -- now in stubs.c */
+    /* WEAK_NOOP(packfs_next) -- now in stubs.c */
+    /* WEAK_NOOP(packfs_close) -- now in stubs.c */
+    /* WEAK_NOOP(format_size) -- now strong */
+    /* WEAK_NOOP(extflash_erase) — now strong in extflash.c (extflash_erase_range) */
+    /* WEAK_NOOP(extflash_read) -- already strong */
+    /* WEAK_NOOP(extflash_sector_write) — now strong in extflash.c */
+    /* WEAK_NOOP(crc32_le) -- already strong */
+    /* WEAK_NOOP(memcmp) -- now strong in runtime.c */
+    /* WEAK_NOOP(block_dispatch_queue_post) — now strong in auth.c */
 
 /* RAM globals owned by the M-Key cache (OEM struct around
  * `DAT_000195FC = 0x2000A3DC`). Defined here as weak BSS bytes so the
@@ -136,9 +135,9 @@ g_mkey_owning_struct_field3C:
     /* WEAK_NOOP(mkey_record_write_slot126) — now strong in provisioning.c */
     /* WEAK_NOOP(backoffice_ack_noop) — now strong in provisioning.c */
     /* WEAK_NOOP(secrets_delete_by_key) — now strong in secrets.c */
-    WEAK_NOOP(module_forward_async)
+    /* WEAK_NOOP(module_forward_async) -- already strong */
     /* WEAK_NOOP(secrets_sector_erase) — now strong in secrets.c */
-    WEAK_NOOP(module_forward_sync)
+    /* WEAK_NOOP(module_forward_sync) — now strong in protocols/ssp.c */
     /* WEAK_NOOP(ble_connection_is_active) — now strong in ble_connection.c */
     /* WEAK_NOOP(ble_connection_touch) — now strong in ble_connection.c */
     /* WEAK_NOOP(backoffice_on_success_hook) — now strong in ble_connection.c */
@@ -150,9 +149,9 @@ g_mkey_owning_struct_field3C:
     /* WEAK_NOOP(oad_state_lock) */
     /* WEAK_NOOP(bleware_control_event_post) */
     /* WEAK_NOOP(oad_session_close) */
-    WEAK_NOOP(extflash_erase_range)
-    WEAK_NOOP(extflash_write)
-    WEAK_NOOP(ti_semaphore_post)
+    /* WEAK_NOOP(extflash_erase_range) -- already strong */
+    /* WEAK_NOOP(extflash_write) -- already strong */
+    /* WEAK_NOOP(ti_semaphore_post) -- now ROM alias */
 /* `FUN_00024740` is now strong as `mfg_key_ecb_decrypt_chunks` in
  * src/auth.c.
  * `state_machine_post` is now strong in src/state_machine.c;
@@ -163,17 +162,17 @@ g_mkey_owning_struct_field3C:
 /* Firmware abort now strong in provisioning.c. */
     /* WEAK_NOOP(firmware_abort) — now strong */
 
-    WEAK_NOOP(FUN_00027766)
-    WEAK_NOOP(FUN_0002776a)
+    /* WEAK_NOOP(FUN_00027766) -- now strong */
+    /* WEAK_NOOP(FUN_0002776a) -- now strong */
 /* ROM Semaphore thunks used by oad_state_lock / oad_session_close:
  * thunk_EXT_FUN_1002ecc2 = SemaphoreP_pend (with owner tracking?)
  * thunk_EXT_FUN_1002e2c4 = HwiP_disable
  * thunk_EXT_FUN_1002e9e6 = HwiP_restore */
-    WEAK_NOOP(thunk_FUN_1002ecc2)
-    WEAK_NOOP(thunk_FUN_1002e2c4)
-    WEAK_NOOP(thunk_FUN_1002e9e6)
+    /* WEAK_NOOP(thunk_FUN_1002ecc2) -- now ROM alias */
+    /* WEAK_NOOP(thunk_FUN_1002e2c4) -- now ROM alias */
+    /* WEAK_NOOP(thunk_FUN_1002e9e6) -- now ROM alias */
 /* FUN_000274e8 — TI SPI driver transfer primitive */
-    WEAK_NOOP(FUN_000274e8)
+    /* WEAK_NOOP(FUN_000274e8) -- now strong */
     .section .bss.g_oad_state, "aw", %nobits
     .weak    g_oad_state
     .type    g_oad_state, %object
@@ -274,29 +273,29 @@ g_extflash_state:
 /* ===== Monitor command helpers (cmd_log/cmd_os/cmd_audio/...) ===== */
     /* WEAK_NOOP(log_region_erase) — now strong in log_gatt.c */
     /* WEAK_NOOP(log_writer_restart) — now strong in log_gatt.c */
-    WEAK_NOOP(rtos_mem_get_stats)
-    WEAK_NOOP(monitor_key_wait_with_timeout)
-    WEAK_NOOP(monitor_yield_ticks)
-    WEAK_NOOP(snv_free_space_query)
-    WEAK_NOOP(snv_compact)
-    WEAK_NOOP(system_state_save)
-    WEAK_NOOP(system_power_down)
-    WEAK_NOOP(system_software_reset)
-    WEAK_NOOP(ble_gap_terminate_link)
-    WEAK_NOOP(ymodem_receive)
-    WEAK_NOOP(pack_ingest_start)
-    WEAK_NOOP(pack_upload_finalize)
-    WEAK_NOOP(audio_clip_dump_one)
-    WEAK_NOOP(audio_player_play)
-    WEAK_NOOP(audio_player_stop_or_pause)
+    /* WEAK_NOOP(rtos_mem_get_stats) -- now in stubs.c */
+    /* WEAK_NOOP(monitor_key_wait_with_timeout) -- now in stubs.c */
+    /* WEAK_NOOP(monitor_yield_ticks) -- now in stubs.c */
+    /* WEAK_NOOP(snv_free_space_query) -- now in stubs.c */
+    /* WEAK_NOOP(snv_compact) -- now in stubs.c */
+    /* WEAK_NOOP(system_state_save) -- now in stubs.c */
+    /* WEAK_NOOP(system_power_down) -- now in stubs.c */
+    /* WEAK_NOOP(system_software_reset) -- now in stubs.c */
+    /* WEAK_NOOP(ble_gap_terminate_link) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(ymodem_receive) -- now in stubs.c */
+    /* WEAK_NOOP(pack_ingest_start) -- now in stubs.c */
+    /* WEAK_NOOP(pack_upload_finalize) -- now in stubs.c */
+    /* WEAK_NOOP(audio_clip_dump_one) -- now in stubs.c */
+    /* WEAK_NOOP(audio_player_play) -- now in stubs.c */
+    /* WEAK_NOOP(audio_player_stop_or_pause) -- now in stubs.c */
 /* `module_publish_command`, `module_forward_async`,
  * `module_publish_sync_with_timeout`, `ble_authenticated_connection_count`,
  * `ble_activity_led_pulse`, `ssp_signal_fetch`, `ssp_queue_publish_frame`,
  * `ssp_publish_fetch_frame` are real strong symbols in
  * src/protocols/ssp.c — no weak stub needed. */
 
-    WEAK_NOOP(ti_mailbox_post)
-    WEAK_NOOP(ssp_frame_alloc)
+    /* WEAK_NOOP(ti_mailbox_post) -- now ROM alias */
+    /* WEAK_NOOP(ssp_frame_alloc) -- now ROM alias */
     /* WEAK_NOOP(gpio_write) — now static in extflash.c */
 /* `ble_connection_get_session_key` is now a real strong symbol in
  * src/ble_connection.c (was a weak stub here and again at line 399). */
@@ -404,16 +403,16 @@ g_ymodem_target_offset:
     .skip    4
 
 /* ===== gatt_svc_5560.c + gatt_service_shims.c helpers ===== */
-    WEAK_NOOP(svc_5560_char_uuid_to_index)
-    WEAK_NOOP(svc_5510_char_uuid_to_index)
-    WEAK_NOOP(svc_5520_char_uuid_to_index)
-    WEAK_NOOP(svc_5530_char_uuid_to_index)
-    WEAK_NOOP(svc_5570_char_uuid_to_index)
-    WEAK_NOOP(svc_5590_char_uuid_to_index)
-    WEAK_NOOP(svc_55a0_char_uuid_to_index)
-    WEAK_NOOP(svc_55c0_char_uuid_to_index)
-    WEAK_NOOP(vanmoof_ssp_uuid_to_index)
-    WEAK_NOOP(cccd_write_validate)
+    /* WEAK_NOOP(svc_5560_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_5510_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_5520_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_5530_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_5570_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_5590_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_55a0_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(svc_55c0_char_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(vanmoof_ssp_uuid_to_index) -- now strong in gatt_uuid_matchers.c */
+    /* WEAK_NOOP(cccd_write_validate) -- now strong */
 
 /* Per-service mailbox callback-slot pointers (one global per service;
  * three are shared at the same RAM address: 0x5510/0x5520/0x55A0). */
@@ -450,19 +449,19 @@ g_gatt_dispatch:
  * `bios_abort` are now real strong symbols (see src/icall_runtime.c,
  * src/ti_rtos_kernel.c). The remaining ICall / BIOS helpers stay as
  * weak no-ops until their own decomp passes land. */
-    WEAK_NOOP(icall_send_service_msg)
-    WEAK_NOOP(icall_wait_match)
-    WEAK_NOOP(icall_free_message)
-    WEAK_NOOP(bios_get_thread_state)
-    WEAK_NOOP(log_reply_match_pred)
+    /* WEAK_NOOP(icall_send_service_msg) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(icall_wait_match) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(icall_free_message) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(bios_get_thread_state) -- now ROM alias */
+    /* WEAK_NOOP(log_reply_match_pred) -- ROM thunk, vendored from TI SDK */
 
 /* ===== icall_runtime.c + ti_rtos_kernel.c ROM-thunk pass-throughs ===== */
-    WEAK_NOOP(ti_task_self)
-    WEAK_NOOP(bios_hwi_disable)
-    WEAK_NOOP(bios_task_disable)
-    WEAK_NOOP(bios_hwi_restore)
-    WEAK_NOOP(bios_task_restore)
-    WEAK_NOOP(abort_continuation)
+    /* WEAK_NOOP(ti_task_self) -- now ROM alias */
+    /* WEAK_NOOP(bios_hwi_disable) -- now ROM alias */
+    /* WEAK_NOOP(bios_task_disable) -- now ROM alias */
+    /* WEAK_NOOP(bios_hwi_restore) -- now ROM alias */
+    /* WEAK_NOOP(bios_task_restore) -- now ROM alias */
+    /* WEAK_NOOP(abort_continuation) -- now ROM alias */
 
 /* ===== gatt_write.c helpers ===== */
 /* `FUN_00021884` (→ `ssp_relay_u32`), `FUN_00023204` (→ `ssp_relay_u16`)
@@ -509,6 +508,89 @@ g_rom_clock_table:
     .size    g_tk_tick_modulus2, 4
 g_tk_tick_modulus2:
     .word    0x3B9ACA00
+
+/* ===== TI-RTOS ROM thunk aliases ===================================
+ *
+ * Many C sources declare `extern ti_semaphore_pend(...)` etc. as
+ * shorthand for the ROM functions at 0x1002xxxx. Provide weak ASM
+ * aliases that resolve to the same thunk bodies already defined at
+ * the end of this file. */
+
+#define ROM_ALIAS2(alias, thunk_name) \
+    .section .text.##alias, "ax", %progbits ; \
+    .weak    alias ; \
+    .type    alias, %function ; \
+    .thumb_func ; \
+alias: ; \
+    b.w     thunk_name ; \
+    .size   alias, .-alias
+
+#define ROM_ALIAS0(alias, thunk_name) \
+    .section .text.##alias, "ax", %progbits ; \
+    .weak    alias ; \
+    .type    alias, %function ; \
+    .thumb_func ; \
+alias: ; \
+    b.w     thunk_name ; \
+    .size   alias, .-alias
+
+/* Semaphore_pend = ROM 0x1002BFB0, Semaphore_post = ROM 0x1002CD20 */
+    ROM_ALIAS2(ti_semaphore_pend, thunk_EXT_FUN_1002bfb0)
+    ROM_ALIAS0(ti_semaphore_post, thunk_EXT_FUN_1002cd20)
+
+/* Queue_put = ROM 0x1002D8D8, Event_post = ROM 0x1002E8FC */
+    ROM_ALIAS2(ti_queue_put, thunk_EXT_FUN_1002d8d8)
+    ROM_ALIAS2(ti_event_post, thunk_EXT_FUN_1002e8fc)
+
+/* Mailbox_post = ROM 0x1002D91C */
+    ROM_ALIAS2(ti_mailbox_post, thunk_EXT_FUN_1002d91c)
+
+/* BIOS_start = ROM 0x1002EAA4, Task_self = ROM 0x1002EB54 */
+    ROM_ALIAS0(BIOS_start_alias, thunk_EXT_FUN_1002eaa4)
+    ROM_ALIAS0(ti_task_self, thunk_EXT_FUN_1002eb54)
+
+/* Hwi_disable = ROM 0x1002EA24, Hwi_restore = ROM 0x1002E474 */
+    ROM_ALIAS0(bios_hwi_disable, thunk_EXT_FUN_1002ea24)
+    ROM_ALIAS0(bios_hwi_restore, thunk_EXT_FUN_1002e474)
+
+/* Task_disable = ROM 0x1002EB54 (same as Task_self? different slot),
+ * Task_restore uses different entry */
+    ROM_ALIAS0(bios_task_disable, thunk_EXT_FUN_1002eb54)
+    ROM_ALIAS0(bios_task_restore, thunk_EXT_FUN_1002e9fc)
+
+/* Thread-state query */
+    ROM_ALIAS0(bios_get_thread_state, thunk_EXT_FUN_1002e648)
+
+/* SSP frame alloc = ROM 0x1002DB60 */
+    ROM_ALIAS0(ssp_frame_alloc, thunk_EXT_FUN_1002db60)
+
+/* GAP ROM functions (used by gap_event_handler.c) */
+    ROM_ALIAS1(rom_gap_establish_link,             thunk_EXT_FUN_10019188)
+    ROM_ALIAS1(rom_gap_update_link_param,          thunk_EXT_FUN_10021d10)
+    ROM_ALIAS1(rom_gap_config_conn_params,          thunk_EXT_FUN_10025464)
+    ROM_ALIAS1(rom_gap_set_param,                   thunk_EXT_FUN_10022c94)
+    ROM_ALIAS1(rom_gap_get_param,                   thunk_EXT_FUN_1001bd20)
+    ROM_ALIAS1(rom_gap_send_msg,                    thunk_EXT_FUN_100157d8)
+    ROM_ALIAS1(rom_gap_process_event,               thunk_EXT_FUN_1001c234)
+    ROM_ALIAS1(rom_gap_update_link_param_req_reply,  thunk_EXT_FUN_1001f030)
+    ROM_ALIAS1(rom_gap_terminate_link_req,           thunk_EXT_FUN_10025d68)
+    ROM_ALIAS1(queue_post_message,                   thunk_EXT_FUN_1000e49c)
+
+/* OAD helpers (used by oad.c) */
+    ROM_ALIAS1(thunk_FUN_1002ecc2, thunk_EXT_FUN_1002ecc2)
+    ROM_ALIAS1(thunk_FUN_1002e2c4, thunk_EXT_FUN_1002e2c4)
+    ROM_ALIAS1(thunk_FUN_1002e9e6, thunk_EXT_FUN_1002e9e6)
+
+/* ICall inter-task message passing (ROM) */
+    ROM_ALIAS0(icall_send_service_msg, thunk_EXT_FUN_1002f738)
+    ROM_ALIAS0(icall_free_message,     thunk_EXT_FUN_1002f7e8)
+
+/* Crypto / TRNG (ROM) */
+    ROM_ALIAS0(aes128_block_encrypt,   thunk_EXT_FUN_1002f366)
+    ROM_ALIAS0(trng_fill_16,           thunk_EXT_FUN_1002fdda)
+
+/* BLE GAP terminate link (ROM) */
+    ROM_ALIAS0(ble_gap_terminate_link, thunk_EXT_FUN_1002df44)
 
 /* `ble_connection_set_session_key`, `indicate_seq_peek`,
  * `indicate_seq_advance`, and `ble_connection_get_session_key` are
@@ -597,8 +679,8 @@ g_gatt_notify_chan_tag:
  * src/bluetoothtask_post.c; `task_queue_enqueue_and_signal` is now
  * a real strong symbol in src/ti_rtos_msgq.c. ROM-thunk pass-throughs
  * remain weak until they get wired to the actual SDK. */
-    WEAK_NOOP(ti_queue_put)
-    WEAK_NOOP(ti_event_post)
+    /* WEAK_NOOP(ti_queue_put) -- now ROM alias */
+    /* WEAK_NOOP(ti_event_post) -- now ROM alias */
 
 /* ===== ti_rtos_heap.c =====
  *
@@ -667,19 +749,20 @@ g_icall_entities:
 
 /* ===== gatt_read.c helpers =====
  * `ble_connection_get_session_key` now strong in src/ble_connection.c. */
-    WEAK_NOOP(gatt_config_lookup_item)
+    /* WEAK_NOOP(gatt_config_lookup_item) -- now strong in gatt_config.c */
     /* WEAK_NOOP(runtime_permission_mask) — now strong in secrets.c */
-    WEAK_NOOP(module_publish_sync_with_timeout)
+    /* WEAK_NOOP(module_publish_sync_with_timeout) -- already strong */
     /* WEAK_NOOP(module_bus_is_idle) — now strong in protocols/ssp.c */
-    WEAK_NOOP(aes128_block_encrypt)
-    WEAK_NOOP(gatt_scratch_alloc)
-    WEAK_NOOP(gatt_scratch_free)
+    /* WEAK_NOOP(aes128_block_encrypt) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(gatt_scratch_alloc) — now strong in gatt_read.c */
+    /* WEAK_NOOP(gatt_scratch_free) — now strong in gatt_read.c */
+    /* WEAK_NOOP(backoffice_status_u16) — now strong in gatt_read.c */
     /* WEAK_NOOP(log_block_count_get) — now strong in log_gatt.c */
     /* WEAK_NOOP(log_total_size_byte) — now strong in log_gatt.c */
-    WEAK_NOOP(ble_conn_state_byte)
-    WEAK_NOOP(backoffice_status_u16)
-    WEAK_NOOP(ecc_sign_with_factory_key)
-    WEAK_NOOP(trng_fill_16)
+    /* WEAK_NOOP(ble_conn_state_byte) -- already strong */
+    /* WEAK_NOOP(backoffice_status_u16) -- already strong */
+    /* WEAK_NOOP(ecc_sign_with_factory_key) -- ROM thunk, vendored from TI SDK */
+    /* WEAK_NOOP(trng_fill_16) -- ROM thunk, vendored from TI SDK */
 
     .section .rodata.g_ecc_curve_params, "a", %progbits
     .weak    g_ecc_curve_params
@@ -689,13 +772,13 @@ g_ecc_curve_params:
     .skip    20
 
 /* ===== log_gatt.c helpers ===== */
-    WEAK_NOOP(log_gatt_notify_channel)
-    WEAK_NOOP(att_mtu_clamp)
+    /* WEAK_NOOP(log_gatt_notify_channel) — now strong in log_gatt.c */
+    /* WEAK_NOOP(att_mtu_clamp) -- already strong */
     /* log_read_entry, log_seek_to_timestamp now real in src/log_gatt.c
      * (strong symbols override these weak entries from earlier passes). */
-    WEAK_NOOP(monitor_strtol)
-    WEAK_NOOP(ti_semaphore_pend)
-    WEAK_NOOP(extflash_read)
+    /* WEAK_NOOP(monitor_strtol) -- now strong in runtime.c */
+    /* WEAK_NOOP(ti_semaphore_pend) -- now ROM alias */
+    /* WEAK_NOOP(extflash_read) -- already strong */
 
     .section .bss.g_log_state, "aw", %nobits
     .weak    g_log_state
@@ -712,6 +795,21 @@ g_log_state:
     .size    g_log_capacity_ptr, 4
 g_log_capacity_ptr:
     .word    0x20005B6C
+
+/* Log notify channel state — OEM DAT_0001BA68 = 0x20004A00 area */
+    .section .bss.g_log_notify_state, "aw", %nobits
+    .weak    g_log_notify_state
+    .type    g_log_notify_state, %object
+    .size    g_log_notify_state, 20
+g_log_notify_state:
+    .skip    20
+
+    .section .bss.g_log_notify_chan_tag, "aw", %nobits
+    .weak    g_log_notify_chan_tag
+    .type    g_log_notify_chan_tag, %object
+    .size    g_log_notify_chan_tag, 1
+g_log_notify_chan_tag:
+    .skip    1
 
     .section .bss.g_log_control_scratch, "aw", %nobits
     .weak    g_log_control_scratch
@@ -750,17 +848,17 @@ g_backoffice_reassembly:
  * They resolve to TI BLE5-Stack ROM (AGAMA R1) in the real firmware;
  * weak no-ops here until the SDK is vendored.
  */
-    WEAK_NOOP(rom_gap_establish_link)
-    WEAK_NOOP(rom_gap_update_link_param)
-    WEAK_NOOP(rom_gap_config_conn_params)
-    WEAK_NOOP(rom_gap_set_param)
-    WEAK_NOOP(rom_gap_get_param)
-    WEAK_NOOP(rom_gap_send_msg)
-    WEAK_NOOP(rom_gap_process_event)
-    WEAK_NOOP(rom_gap_update_link_param_req_reply)
-    WEAK_NOOP(rom_gap_terminate_link_req)
-    WEAK_NOOP(gap_event_sub_dispatch)
-    WEAK_NOOP(queue_post_message)
+    /* WEAK_NOOP(rom_gap_establish_link) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_update_link_param) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_config_conn_params) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_set_param) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_get_param) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_send_msg) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_process_event) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_update_link_param_req_reply) -- now ROM alias */
+    /* WEAK_NOOP(rom_gap_terminate_link_req) -- now ROM alias */
+    /* WEAK_NOOP(gap_event_sub_dispatch) -- now ROM alias */
+    /* WEAK_NOOP(queue_post_message) -- now ROM alias */
 
 /* Destination service ID byte — OEM 0x00010C64 holds 0x2000566C.
  * The byte at that RAM address selects which ICall service receives
