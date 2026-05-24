@@ -67,7 +67,7 @@ int      module_forward_sync(uint16_t cmd, const uint8_t *payload,
 int      ble_connection_is_active(uint32_t conn_idx);            /* FUN_00023D30 */
 void     ble_connection_touch(uint32_t conn_idx);                /* FUN_00023608 */
 void     backoffice_on_success_hook(void);                       /* FUN_00022BE8 */
-int      gatt_notify_channel(int channel, const void *buf);      /* FUN_0001B538 */
+int      gatt_notify_channel(int channel, const void *buf, uint16_t len); /* FUN_0001B538 */
 uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed); /* FUN_0002651C */
 
 /* OAD over-the-air firmware update (src/oad.c). Service 0x5510 write
@@ -214,6 +214,19 @@ int      indicate_seq_advance(uint16_t conn);                     /* 0x00023114 
 int      ble_connection_get_session_key(uint32_t conn);           /* 0x00023DCC */
 int      ble_connection_set_session_key(uint32_t conn, const void *key_16); /* 0x000231C8 */
 int      ble_conn_state_byte(uint32_t conn, uint8_t *out_byte);    /* 0x000228B0 */
+
+/* ATT MTU clamp — reads the negotiated MTU for a connection and
+ * writes it back via *len_inout. OEM @ 0x000229B0. */
+int      att_mtu_clamp(uint32_t conn, uint16_t *len_inout);
+
+/* BLE connection introspection (src/ble_connection.c). Used by cmd_ble_info. */
+int      ble_connection_count(int unused);
+int      ble_connection_present(int index);
+void     ble_connection_addr(int index, uint8_t *dst);
+void     ble_connection_params(int index, uint16_t *interval,
+                               uint16_t *latency, uint16_t *timeout);
+int      ble_connection_is_rider_app(int index);
+uint8_t *ble_device_address(int addr_type);
 
 /* Runtime permission mask — reads the 32-bit capability mask from the
  * M-Key struct at RAM 0x2000A3DC offset +0x14, gated on whether the

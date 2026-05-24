@@ -49,3 +49,26 @@ uint32_t crc32_le(uint32_t seed, const void *buf, uint32_t len)
     }
     return crc;
 }
+
+/* CRC-16/Modbus — polynomial 0xA001 (reflected 0x8005), initial
+ * value 0xFFFF. Used to validate the backoffice GATT message payload
+ * in provisioning.c. OEM @ 0x0002651C (48 B). */
+uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed)
+{
+    uint32_t crc = seed & 0xFFFFu;
+
+    while (len != 0) {
+        uint8_t b = *buf;
+        crc ^= b;
+        for (int i = 0; i < 8; i++) {
+            if (crc & 1u) {
+                crc = (crc >> 1) ^ 0xA001u;
+            } else {
+                crc >>= 1;
+            }
+        }
+        buf++;
+        len--;
+    }
+    return crc;
+}

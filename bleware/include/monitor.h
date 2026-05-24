@@ -14,7 +14,7 @@ enum monitor_cmd_verb {
 
 void monitor_log(const char *file, int line, const char *fn, int level,
                  const char *fmt, ...);
-int  monitor_print_help_line(const char *name, const char *description);
+void monitor_print_help_line(const char *name, const char *description);
 int  monitor_command_matches(const char *input, const char *name);
 
 void *memcpy(void *dst, const void *src, unsigned int n);

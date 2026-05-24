@@ -338,3 +338,56 @@ uint8_t log_total_size_byte(void)
     extern uint8_t *g_log_capacity_ptr;  /* DAT_000273e4 = 0x20005B6C */
     return *g_log_capacity_ptr;
 }
+
+/* Erase the entire 128 KB log region (32 × 4 KB sectors) plus the
+ * 4 KB cursor-persist sector at 0x03FDC000. Yields between each sector
+ * to keep the RTOS alive. OEM @ 0x000230D8 (50 B). */
+void log_region_erase(void)
+{
+    extern int  extflash_open(int mode);
+    extern void extflash_close(void);
+    /* extflash_erase_range — declared in bleware.h */
+    extern void FUN_00027478(void);   /* yield / sleep helper */
+
+    if (extflash_open(1) != 0) {
+        for (int i = 0; i < 32; i++) {
+            extflash_erase_range(LOG_REGION_BASE + (uint32_t)i * 0x1000u, 0x1000u);
+            FUN_00027478();   /* yield between sectors */
+        }
+        extflash_erase_range(LOG_CURSOR_SECTOR, 0x1000u);
+        extflash_close();
+    }
+}
+
+/* Restore the log writer's (head, tail) cursors from the persist
+ * sector at 0x03FDC000. Scans the sector forward from offset 0 in
+ * 8-byte strides, looking for the last valid (head, tail) pair
+ * (validity = head < 0x20000 AND tail < 0x20000). Restores that
+ * pair into the log state struct. OEM @ 0x00017B24 (78 B). */
+void log_writer_restart(void)
+{
+    extern int  extflash_open(int mode);
+    extern void extflash_close(void);
+    extern int  extflash_read(uint32_t addr, uint32_t len, void *out);
+
+    if (extflash_open(1) != 0) {
+        uint32_t offset = 0;
+        uint32_t head = 0, tail = 0;
+        uint8_t  pair[8];
+
+        do {
+            extflash_read(LOG_CURSOR_SECTOR + offset, sizeof pair, pair);
+            uint32_t h = *(uint32_t *)(pair + 0);
+            uint32_t t = *(uint32_t *)(pair + 4);
+            if (h < LOG_REGION_SIZE && t < LOG_REGION_SIZE) {
+                head = h;
+                tail = t;
+            }
+            offset += sizeof pair;
+        } while (offset < 0x1000u);
+
+        g_log_state.cursor_persist_pair[0] = head;
+        g_log_state.cursor_persist_pair[1] = tail;
+        extflash_close();
+    }
+}

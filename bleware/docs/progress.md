@@ -28,7 +28,7 @@ peripheral wiring, anything that's specific to VanMoof.
 | ?? | pending (TBD as functions are categorised) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 52 | decomp (asm or c) |
+| 71 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
 
 ### Decoded functions
@@ -59,6 +59,24 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x0002774A  | `backoffice_ack_noop`             | `src/provisioning.c`     | Backoffice sub-command 4 — heartbeat probe. Always returns 1. 4 B. |
 | 0x000222AC  | `mkey_record_write_slot126`       | `src/provisioning.c`     | Backoffice sub-command 2 — takes 24 B record, stamps "MKEY" tag, CRC-32s, writes slot 126. 62 B. |
 | 0x0001F7F8  | `firmware_abort`                  | `src/provisioning.c`     | Logs "Platform reset", drains pending TX, sets abort flag, infinite-loops. Called on alloc failure in state_machine_post. 54 B. |
+| 0x0002651C  | `crc16_modbus`                     | `src/crc32.c`            | CRC-16/Modbus (poly 0xA001, seed 0xFFFF). Used to validate backoffice GATT message payload. 48 B. |
+| 0x000230D8  | `log_region_erase`                 | `src/log_gatt.c`         | Erases 128 KB log region + cursor sector. Yields between sectors. Called by cmd_log_flush. 50 B. |
+| 0x00017B24  | `log_writer_restart`               | `src/log_gatt.c`         | Scans cursor-persist sector for last valid (head,tail) pair, restores log state. 78 B. |
+| 0x00025B84  | `extflash_retry_backoff`           | `src/extflash.c`         | Sleeps 2 ms if retry=0, else returns -1. 28 B. |
+| 0x0002758E  | `extflash_close`                   | `src/extflash.c`         | Closes SPI flash (tail-calls ROM SPI_close). 6 B. |
+| 0x00023D30  | `ble_connection_is_active`        | `src/ble_connection.c`   | Semaphore_pend, conn_handle sanity check, Semaphore_post — returns bool match. 36 B. |
+| 0x00022BE8  | `backoffice_on_success_hook`      | `src/ble_connection.c`   | Zeroes M-ID record (slot 124), stamps tag, CRC-32s, writes via secrets_record_write_verify. Called after backoffice provisioning success. 54 B. |
+| 0x00023640  | `extflash_sw_wp_enabled`          | `src/extflash.c`         | Checks SRP0 protect bit (0x80) in SPI NOR status register under bus mutex. Returns 1 if set, 0 if clear, -1 on error. 34 B. |
+| 0x00023678  | `extflash_block_wp_enabled`       | `src/extflash.c`         | Checks block-protect bits (0x3C) in SPI NOR status register. Same semaphore + WIP pattern. 34 B. |
+| 0x000229B0  | `att_mtu_clamp`                    | `src/ble_connection.c`   | Semaphore_pend, conn_handle check, read MTU at +0x5C into *len_inout, Semaphore_post. Returns 0 on match, -1 on mismatch. 58 B. |
+| 0x00021244  | `monitor_print_help_line`         | `src/monitor/dispatcher.c` | Emits "    %-33s - %s\r\n" via monitor_log. Called by every cmd_* handler's verb-0 (PRINT_HELP) path. 24 B. |
+| 0x0001B538  | `gatt_notify_channel`             | `src/gatt_notify.c` (new) | Per-channel GATT notification dispatcher (ch 0/2/3/4). Copies to channel buffer, sends GATT_Notification if conn_handle active. 98 B. |
+| —           | `ble_connection_count`            | `src/ble_connection.c`   | Returns count of active BLE connections (conn_handle != 0xFFFF). Iterates 3 slots. |
+| —           | `ble_connection_present`          | `src/ble_connection.c`   | Wrapper around ble_connection_is_active. |
+| —           | `ble_connection_addr`             | `src/ble_connection.c`   | Semaphore_pend, memcpy 6-byte peer addr at +0x4A, Semaphore_post. |
+| —           | `ble_connection_params`           | `src/ble_connection.c`   | Reads interval (+0x56), latency (+0x58), timeout (+0x5A) under lock. |
+| —           | `ble_connection_is_rider_app`     | `src/ble_connection.c`   | Reads rider-app flag at +0x64 under lock. |
+| —           | `ble_device_address`              | `src/ble_connection.c`   | Returns local device BLE address (calls init helper, returns 6-byte buffer). |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |
 | 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
 | 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |

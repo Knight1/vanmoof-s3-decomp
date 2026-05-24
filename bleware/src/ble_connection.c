@@ -35,6 +35,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "bleware.h"
 
@@ -111,6 +112,40 @@ int ble_connection_get_session_key(uint32_t conn)
     return key;
 }
 
+/* Check if a BLE connection handle is currently active (conn_handle
+ * sanity-check under semaphore). OEM @ 0x00023D30 (36 B). */
+int ble_connection_is_active(uint32_t conn)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    uint16_t stored_conn = e->conn_handle;
+    ti_semaphore_post(e->sem);
+
+    return (conn == stored_conn) ? 1 : 0;
+}
+
+/* Touch (keep-alive) a BLE connection entry. No-op; BLE stack
+ * manages keepalive internally. OEM @ 0x00023608. */
+void ble_connection_touch(uint32_t conn)
+{
+    (void)conn;
+}
+
+/* Backoffice on-success hook — zeroes M-ID record (slot 124) and
+ * writes fresh CRC. OEM @ 0x00022BE8. */
+void backoffice_on_success_hook(void)
+{
+    extern uint32_t g_backoffice_success_tag;
+    uint8_t buf[32];
+
+    memset(buf, 0, 32);
+    memcpy(buf + 0x18, &g_backoffice_success_tag, 4);
+    uint32_t crc = crc32_le(0xFFFFFFFFu, buf, 28);
+    memcpy(buf + 0x1C, &crc, 4);
+    secrets_record_write_verify(0x7C, buf);
+}
+
 /* Read a per-connection state byte at offset 0x65. Same Semaphore_pend/
  * conn-sanity-check / Semaphore_post template as the other accessors.
  * Returns 0 on success (byte written to *out_byte), -1 if conn doesn't
@@ -177,4 +212,98 @@ int backoffice_auth_session_init(uint16_t conn, const void *session_key)
     }
     ti_semaphore_post(e->sem);
     return rc;
+}
+
+/* Read the ATT MTU for a connection and clamp the caller's length
+ * to that value. Per-connection template: Semaphore_pend, check
+ * conn_handle, read mtu at offset 0x5C, store, Semaphore_post.
+ * Returns 0 on success, -1 if conn handle doesn't match.
+ * OEM @ 0x000229B0 (58 B). */
+int att_mtu_clamp(uint32_t conn, uint16_t *len_inout)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *len_inout = *(uint16_t *)((uint8_t *)e + 0x5C);
+        ti_semaphore_post(e->sem);
+        return 0;
+    }
+    ti_semaphore_post(e->sem);
+    return -1;
+}
+
+/* Return the count of active BLE connections (conn_handle != 0xFFFF).
+ * `unused` parameter matches OEM signature. OEM @ ~0x00025F38. */
+int ble_connection_count(int unused)
+{
+    int count = 0;
+    (void)unused;
+    for (int i = 0; i < 3; i++) {
+        if (ble_connection_is_active((uint32_t)i) != 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Check if connection slot `index` has a valid conn_handle.
+ * OEM @ ~0x00025F1C. */
+int ble_connection_present(int index)
+{
+    return ble_connection_is_active((uint32_t)index);
+}
+
+/* Read the 6-byte peer BLE address for connection `index`.
+ * Same template: Semaphore_pend, conn check, memcpy addr, Semaphore_post.
+ * OEM @ ~0x00025E90. */
+void ble_connection_addr(int index, uint8_t *dst)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[index];
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (index == e->conn_handle) {
+        memcpy(dst, (uint8_t *)e + 0x4A, 6);
+    }
+    ti_semaphore_post(e->sem);
+}
+
+/* Read connection parameters (interval, latency, timeout) for `index`.
+ * OEM @ ~0x00025EE4. */
+void ble_connection_params(int index, uint16_t *interval,
+                           uint16_t *latency, uint16_t *timeout)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[index];
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (index == e->conn_handle) {
+        *interval = *(uint16_t *)((uint8_t *)e + 0x56);
+        *latency  = *(uint16_t *)((uint8_t *)e + 0x58);
+        *timeout  = *(uint16_t *)((uint8_t *)e + 0x5A);
+    }
+    ti_semaphore_post(e->sem);
+}
+
+/* Check if connection `index` is a rider-app connection.
+ * OEM @ ~0x00025E74. */
+int ble_connection_is_rider_app(int index)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[index];
+    int result = 0;
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (index == e->conn_handle) {
+        result = (*(uint8_t *)((uint8_t *)e + 0x64) != 0) ? 1 : 0;
+    }
+    ti_semaphore_post(e->sem);
+    return result;
+}
+
+/* Get the local device BLE address (from FCFG1 or stack).
+ * `addr_type` selects public (0) or random (1) address.
+ * OEM @ ~0x00025E58. */
+uint8_t *ble_device_address(int addr_type)
+{
+    extern uint8_t g_ble_local_addr[6];  /* RAM buffer, populated at init */
+    extern void   FUN_00025BFE(void);    /* local-addr init helper */
+    (void)addr_type;
+    FUN_00025BFE();
+    return g_ble_local_addr;
 }

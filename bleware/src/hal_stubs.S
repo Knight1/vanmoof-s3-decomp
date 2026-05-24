@@ -44,7 +44,7 @@ name: ; \
     .size   name, .-name
 
     WEAK_NOOP(monitor_log)
-    WEAK_NOOP(monitor_print_help_line)
+    /* WEAK_NOOP(monitor_print_help_line) — now strong in dispatcher.c */
     WEAK_NOOP(memcpy)
     WEAK_NOOP(memset)
 /* `monitor_alloc` and `monitor_free` are now real strong symbols in
@@ -52,10 +52,12 @@ name: ; \
     WEAK_NOOP(nvs_open)
     WEAK_NOOP(extflash_open)
     WEAK_NOOP(extflash_close)
-    WEAK_NOOP(extflash_retry_backoff)
+    /* WEAK_NOOP(extflash_retry_backoff) — now strong in extflash.c */
+    /* WEAK_NOOP(extflash_close) — now strong in extflash.c */
     WEAK_NOOP(extflash_get_chip_info)
-    WEAK_NOOP(extflash_sw_wp_enabled)
-    WEAK_NOOP(extflash_block_wp_enabled)
+    /* WEAK_NOOP(extflash_sw_wp_enabled) — now strong in extflash.c */
+    /* WEAK_NOOP(extflash_block_wp_enabled) — now strong in extflash.c */
+    /* WEAK_NOOP(att_mtu_clamp) — now strong in ble_connection.c */
 
 /* ===== Monitor command helper fallbacks ===== */
     WEAK_NOOP(monitor_command_matches)
@@ -119,12 +121,12 @@ g_mkey_owning_struct_field34:
     .size    g_mkey_owning_struct_field3C, 4
 g_mkey_owning_struct_field3C:
     .skip    4
-    WEAK_NOOP(ble_connection_count)
-    WEAK_NOOP(ble_connection_present)
-    WEAK_NOOP(ble_connection_is_rider_app)
-    WEAK_NOOP(ble_connection_addr)
-    WEAK_NOOP(ble_connection_params)
-    WEAK_NOOP(ble_device_address)
+    /* WEAK_NOOP(ble_connection_count) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_connection_present) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_connection_addr) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_connection_params) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_connection_is_rider_app) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_device_address) — now strong in ble_connection.c */
 
 /* ===== Backoffice GATT message handler — sub-command helpers =====
  *
@@ -137,11 +139,11 @@ g_mkey_owning_struct_field3C:
     WEAK_NOOP(module_forward_async)
     /* WEAK_NOOP(secrets_sector_erase) — now strong in secrets.c */
     WEAK_NOOP(module_forward_sync)
-    WEAK_NOOP(ble_connection_is_active)
-    WEAK_NOOP(ble_connection_touch)
-    WEAK_NOOP(backoffice_on_success_hook)
-    WEAK_NOOP(gatt_notify_channel)
-    WEAK_NOOP(crc16_modbus)
+    /* WEAK_NOOP(ble_connection_is_active) — now strong in ble_connection.c */
+    /* WEAK_NOOP(ble_connection_touch) — now strong in ble_connection.c */
+    /* WEAK_NOOP(backoffice_on_success_hook) — now strong in ble_connection.c */
+    /* WEAK_NOOP(gatt_notify_channel) — now strong in gatt_notify.c */
+    /* WEAK_NOOP(crc16_modbus) — now strong in crc32.c */
 
 /* ===== OAD helpers (src/oad.c) ===== */
 /* OAD helpers now strong in src/oad.c. */
@@ -270,8 +272,8 @@ g_extflash_state:
     .skip    0x10
 
 /* ===== Monitor command helpers (cmd_log/cmd_os/cmd_audio/...) ===== */
-    WEAK_NOOP(log_region_erase)
-    WEAK_NOOP(log_writer_restart)
+    /* WEAK_NOOP(log_region_erase) — now strong in log_gatt.c */
+    /* WEAK_NOOP(log_writer_restart) — now strong in log_gatt.c */
     WEAK_NOOP(rtos_mem_get_stats)
     WEAK_NOOP(monitor_key_wait_with_timeout)
     WEAK_NOOP(monitor_yield_ticks)
@@ -536,6 +538,14 @@ g_ble_connection_table_storage:
 g_ble_connection_table:
     .word    g_ble_connection_table_storage
 
+/* Local BLE device address buffer (6 bytes), used by ble_device_address */
+    .section .bss.g_ble_local_addr, "aw", %nobits
+    .weak    g_ble_local_addr
+    .type    g_ble_local_addr, %object
+    .size    g_ble_local_addr, 6
+g_ble_local_addr:
+    .skip    6
+
 /* LCG state + lock pair (slots populated by stack init at runtime). */
     .section .bss.g_lcg_state, "aw", %nobits
     .weak    g_lcg_state
@@ -557,6 +567,29 @@ g_lcg_lock_enter:
     .size    g_lcg_lock_exit, 4
 g_lcg_lock_exit:
     .word    0
+
+/* Backoffice on-success tag — OEM DAT_00022C20 = "M-ID" LE */
+    .section .data.g_backoffice_success_tag, "aw", %progbits
+    .weak    g_backoffice_success_tag
+    .type    g_backoffice_success_tag, %object
+    .size    g_backoffice_success_tag, 4
+g_backoffice_success_tag:
+    .word    0x44492D4D   /* "M-ID" little-endian */
+
+/* GATT notify channel state — RAM 0x200049CC (DAT_0001B5B0) + tag byte */
+    .section .bss.g_gatt_notify_state, "aw", %nobits
+    .weak    g_gatt_notify_state
+    .type    g_gatt_notify_state, %object
+    .size    g_gatt_notify_state, 20
+g_gatt_notify_state:
+    .skip    20
+
+    .section .bss.g_gatt_notify_chan_tag, "aw", %nobits
+    .weak    g_gatt_notify_chan_tag
+    .type    g_gatt_notify_chan_tag, %object
+    .size    g_gatt_notify_chan_tag, 1
+g_gatt_notify_chan_tag:
+    .skip    1
 
 /* ===== bluetoothtask_post.c + ti_rtos_msgq.c helpers =====
  *

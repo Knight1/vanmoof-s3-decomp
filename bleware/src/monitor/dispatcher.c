@@ -64,3 +64,15 @@ __attribute__((weak))
 const monitor_cmd_handler_t g_monitor_commands[] = {
     NULL,
 };
+
+/* Emit one help-table row via monitor_log: format "    %-33s - %s\r\n"
+ * with `name` (the command name) and `description`. Used by every
+ * cmd_* handler's verb-0 (PRINT_HELP) path. OEM @ 0x00021244 (24 B). */
+void monitor_print_help_line(const char *name, const char *description)
+{
+    extern void monitor_log(const char *file, int line,
+                            const char *func, int level,
+                            const char *fmt, ...);
+    monitor_log("source/monitor/cmd_help.c", 0xE, NULL, 8,
+                "    %-33s - %s\r\n", name, description);
+}

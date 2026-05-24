@@ -311,7 +311,10 @@ int extflash_write(uint32_t addr, uint32_t len, const void *src)
 
 /* ---- GPIO / CS helpers — IOC pin toggling -------------------------- */
 
-static int gpio_write(const void *gpio_ctx, uint32_t pin, int value)
+/* IOC GPIO writer — sets the DIO pin `pin` to `value` (0=low, 1=high).
+ * Called by extflash CS helpers AND ble_activity_led_pulse in ssp.c.
+ * OEM @ 0x00022E08 (46 B). */
+int gpio_write(const void *gpio_ctx, uint32_t pin, int value)
 {
     extern uint32_t g_gpio_max_pin;
     extern uint32_t g_gpio_base_table[];
@@ -360,6 +363,28 @@ int extflash_write_enable(void)
     return (rc == 0) ? 0 : -3;
 }
 
+/* Simple backoff — if retry counter is zero, sleep 2 ms and return
+ * the counter; otherwise returns -1 (no more retries). OEM @ 0x00025B84. */
+int extflash_retry_backoff(int retry)
+{
+    extern void FUN_000274f2(int ms);   /* clock/sleep wrapper */
+    if (retry == 0) {
+        FUN_000274f2(2);  /* sleep 2 ms */
+        return retry;
+    }
+    return -1;
+}
+
+/* Close the external flash driver — releases the SPI bus handle.
+ * OEM @ 0x0002758E (6 B, thunk). */
+void extflash_close(void)
+{
+    /* The OEM body is a single tail-call to a ROM SPI-closing routine.
+     * Stubbed here; the real implementation calls TI-SDK SPI_close. */
+    extern void thunk_EXT_FUN_1002d420(void);
+    thunk_EXT_FUN_1002d420();
+}
+
 /* ---- SPI TX/RX — driver wrapper calls ------------------------------- */
 
 /* TI SPI driver transfer primitive (ROM/thunk). OEM @ 0x000274E8. */
@@ -393,4 +418,34 @@ int extflash_spi_rx(void *buf, uint32_t len)
     xfer.mode = 0;
 
     return (FUN_000274e8(g_extflash_spi_handle, &xfer) == 0) ? -1 : 0;
+}
+
+/* Check SRP0 protect bit. OEM @ 0x00023640 (34 B). */
+int extflash_sw_wp_enabled(void)
+{
+    uint8_t status = 0;
+    if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
+        return -1;
+    }
+    if (extflash_wait_wip_clear(&status) != 0) {
+        ti_semaphore_post(g_extflash_state.bus_mutex);
+        return -1;
+    }
+    ti_semaphore_post(g_extflash_state.bus_mutex);
+    return (status & 0x80u) ? 1 : 0;
+}
+
+/* Check block-protect bits. OEM @ 0x00023678 (34 B). */
+int extflash_block_wp_enabled(void)
+{
+    uint8_t status = 0;
+    if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
+        return -1;
+    }
+    if (extflash_wait_wip_clear(&status) != 0) {
+        ti_semaphore_post(g_extflash_state.bus_mutex);
+        return -1;
+    }
+    ti_semaphore_post(g_extflash_state.bus_mutex);
+    return (status & 0x3Cu) ? 1 : 0;
 }
