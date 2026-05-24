@@ -83,12 +83,9 @@ extern void     block_dispatch_queue_post(const void *key, uint32_t kind,
  * src/bluetoothtask_post.c. */
 
 /* ---- Per-service relays -----------------------------------------
- * `backoffice_auth_session_init` declared in bleware.h
- * (src/ble_connection.c). */
-extern void     FUN_00021884(uint16_t cmd_id, uint32_t value_24bit);        /* svc 0x5500 op 0x02 + svc 0x5560 op 0x06 relay */
-extern void     FUN_00026cc0(uint32_t epoch_be);                            /* svc 0x5560 op 0x06 timekeeper-set */
-extern uint32_t FUN_00027448(void);                                         /* timekeeper-read returning current epoch */
-extern void     FUN_00023204(uint16_t cmd_id, uint16_t value);              /* svc 0x5580 op 0x03 relay */
+ * `backoffice_auth_session_init`, `ssp_relay_u32`, `ssp_relay_u16`,
+ * `timekeeper_submit_epoch`, `timekeeper_read_be` all declared in
+ * bleware.h. */
 
 extern void     module_publish_command(uint16_t cmd_id, const void *buf,
                                        uint16_t len);
@@ -305,7 +302,7 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
             uint32_t v24 = ((uint32_t)value_data[0] << 16) |
                            ((uint32_t)value_data[1] << 8)  |
                            ((uint32_t)value_data[2]);
-            FUN_00021884(0x5503, v24);
+            ssp_relay_u32(0x5503, v24);
             return 0;
         }
         case 0x04:
@@ -365,9 +362,9 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
                              ((uint32_t)value_data[1] << 16) |
                              ((uint32_t)value_data[2] << 8)  |
                              ((uint32_t)value_data[3]);
-            FUN_00026cc0(epoch);
-            uint32_t now = FUN_00027448();
-            FUN_00021884((uint16_t)(svc_uuid + char_idx + 1), now);
+            timekeeper_submit_epoch(epoch);
+            uint32_t now = (uint32_t)timekeeper_read_be();
+            ssp_relay_u32((uint16_t)(svc_uuid + char_idx + 1), now);
             return 0;
         }
         return -1;
@@ -398,7 +395,7 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
         case 0x03: {
             uint16_t v = (uint16_t)(((uint16_t)value_data[2] << 8) |
                                     value_data[3]);
-            FUN_00023204(0x5584, v);
+            ssp_relay_u16(0x5584, v);
             return 0;
         }
         default:

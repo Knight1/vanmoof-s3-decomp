@@ -133,8 +133,7 @@ int ble_connection_set_session_key(uint32_t conn, const void *key_16)
  * lock (even on stale conn — matching OEM behavior); then, only if
  * the conn handle still matches, pins the key and notifies the state
  * machine of the new auth state. OEM @ 0x0001A218. */
-extern void state_machine_post(uint32_t event_id, const void *payload,
-                               uint16_t len);  /* FUN_00017C6C */
+/* `state_machine_post` declared in bleware.h. */
 
 #define MAX_BACKOFFICE_AUTH_CONN  3   /* OEM check `conn < 3` */
 

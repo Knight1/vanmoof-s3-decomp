@@ -150,6 +150,27 @@ void   monitor_free(void *p);
 /* TI-RTOS BIOS_start (ROM thunk). */
 void  BIOS_start(void) __attribute__((noreturn));
 
+/* Integer-payload SSP relay helpers (src/ssp_relay.c). Both pulse
+ * the BLE activity LED first (if any authenticated conn), then post
+ * a single little-endian frame onto the inter-module bus. */
+void  ssp_relay_u32(uint16_t cmd_id, uint32_t value);  /* 0x00021884 */
+void  ssp_relay_u16(uint16_t cmd_id, uint16_t value);  /* 0x00023204 */
+
+/* Bleware timekeeper subsystem (src/timekeeper.c). */
+void  timekeeper_submit_epoch(uint32_t epoch);                    /* 0x00026CC0 */
+int   timekeeper_apply_request(const uint32_t request[3]);        /* 0x00020B18 */
+uint64_t timekeeper_read_be(void);                                /* 0x00027448 */
+
+/* State-machine notify primitive (src/state_machine.c). Wraps a small
+ * payload in an envelope and posts it as kind 0x32 onto the
+ * bluetoothtask user-message queue. OEM @ 0x00017C6C. */
+void  state_machine_post(uint32_t state_id, const void *payload, uint16_t len);
+
+/* Secrets-store population accessor (src/secrets.c). Counts valid
+ * UKEY records in slots [0, 123] — used as the "device is provisioned"
+ * gate by `auth_derive_session_key`. OEM @ 0x00025680. */
+int   secrets_count_valid_in_keys_range(void);
+
 /* Session-key derivation + manufacturing-ECB helpers (src/auth.c). */
 void *auth_derive_session_key(uint32_t client_key_id);            /* 0x00018B1C */
 void  mfg_key_ecb_decrypt_chunks(uint8_t       *dst,

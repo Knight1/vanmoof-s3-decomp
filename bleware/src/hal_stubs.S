@@ -141,9 +141,13 @@ g_mkey_owning_struct_field3C:
     WEAK_NOOP(extflash_write)
     WEAK_NOOP(ti_semaphore_post)
 /* `FUN_00024740` is now strong as `mfg_key_ecb_decrypt_chunks` in
- * src/auth.c. */
-    WEAK_NOOP(state_machine_post)
-    WEAK_NOOP(secrets_count_valid_in_keys_range)
+ * src/auth.c.
+ * `state_machine_post` is now strong in src/state_machine.c;
+ * `secrets_count_valid_in_keys_range` is now strong in src/secrets.c. */
+/* Inner publish helper used by state_machine_post (FUN_000219A2). */
+    WEAK_NOOP(task_queue_publish_envelope)
+/* Firmware abort routine (FUN_0001F7F8), tail-called on alloc failure. */
+    WEAK_NOOP(firmware_abort)
 
 /* OAD state struct (single instance, RAM-resident). Weak BSS so the
  * skeleton links; real RAM address baked by the OEM C runtime. */
@@ -313,11 +317,30 @@ g_gatt_dispatch:
     WEAK_NOOP(abort_continuation)
 
 /* ===== gatt_write.c helpers ===== */
-    WEAK_NOOP(FUN_00021884)
-    WEAK_NOOP(FUN_00026cc0)
-    WEAK_NOOP(FUN_00023204)
-/* `auth_derive_session_key` is now strong in src/auth.c;
+/* `FUN_00021884` (→ `ssp_relay_u32`), `FUN_00023204` (→ `ssp_relay_u16`)
+ * now strong in src/ssp_relay.c; `FUN_00026cc0` (→ `timekeeper_submit_epoch`)
+ * now strong in src/timekeeper.c.
+ * `auth_derive_session_key` is now strong in src/auth.c;
  * `backoffice_auth_session_init` in src/ble_connection.c. */
+/* `timekeeper_apply_request` (FUN_00020B18) is now strong in
+ * src/timekeeper.c. Its leaf helpers remain stubbed: */
+    WEAK_NOOP(sysclock_snapshot)            /* FUN_000236E8 */
+    WEAK_NOOP(timekeeper_read_request)      /* FUN_0001EAF8 */
+
+/* Heap-resident timekeeper shared state + tick-modulus constant. */
+    .section .bss.g_timekeeper_state, "aw", %nobits
+    .weak    g_timekeeper_state
+    .type    g_timekeeper_state, %object
+    .size    g_timekeeper_state, 4
+g_timekeeper_state:
+    .zero    4
+
+    .section .bss.g_timekeeper_tick_modulus, "aw", %nobits
+    .weak    g_timekeeper_tick_modulus
+    .type    g_timekeeper_tick_modulus, %object
+    .size    g_timekeeper_tick_modulus, 4
+g_timekeeper_tick_modulus:
+    .zero    4
 /* `ble_connection_set_session_key`, `indicate_seq_peek`,
  * `indicate_seq_advance`, and `ble_connection_get_session_key` are
  * now real strong symbols in src/ble_connection.c (earlier WEAK_NOOP
@@ -453,7 +476,7 @@ g_icall_entities:
     WEAK_NOOP(gatt_scratch_free)
     WEAK_NOOP(log_block_count_get)
     WEAK_NOOP(log_total_size_byte)
-    WEAK_NOOP(timekeeper_read_be)
+/* `timekeeper_read_be` (FUN_00027448) is now strong in src/timekeeper.c. */
     WEAK_NOOP(ble_conn_state_byte)
     WEAK_NOOP(backoffice_status_u16)
     WEAK_NOOP(ecc_sign_with_factory_key)

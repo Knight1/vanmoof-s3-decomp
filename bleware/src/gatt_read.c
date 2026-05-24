@@ -86,7 +86,8 @@ extern void     gatt_scratch_free(uint8_t *p);
 /* Producers wired into specific (svc, char_idx) read targets. */
 extern uint32_t log_block_count_get(void);                     /* 0x00020338 */
 extern uint8_t  log_total_size_byte(void);                     /* 0x000273dc */
-extern uint64_t timekeeper_read_be(void);                      /* 0x00027448 */
+/* `timekeeper_read_be` declared in bleware.h (now strong in
+ * src/timekeeper.c). */
 extern int      ble_conn_state_byte(uint32_t conn, uint8_t *out_byte);  /* 0x000228b0 */
 extern int      backoffice_status_u16(uint32_t conn, uint16_t *out);    /* 0x00022970 */
 extern void     ecc_sign_with_factory_key(void *dst, uint32_t dst_len,

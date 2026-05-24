@@ -156,6 +156,29 @@ int secrets_find_by_key(uint32_t key, void *out_record)
     return -1;
 }
 
+/* Count slots in [0, 123] whose stored CRC validates — the population
+ * of intact UKEY records on the device. Used by `auth_derive_session_key`
+ * as the "device is provisioned" gate: a device with zero valid keyed
+ * records (and no mfg key) falls back to the synthesized OWNER_PERMS
+ * default record.
+ *
+ * Note that this scans the same slot range as `secrets_count_free_slots`
+ * but counts the *valid* slots, not the invalid ones — and that range
+ * extends to slot 123 inclusive (`index < 0x7C`), matching the upper
+ * limit of the keyed-record region.
+ *
+ * OEM @ 0x00025680. */
+int secrets_count_valid_in_keys_range(void)
+{
+    int valid_count = 0;
+    for (int index = 0; index < (int)SECRETS_KEYED_SLOT_LIMIT; index++) {
+        if (secrets_record_read(index, NULL) == 1) {
+            valid_count++;
+        }
+    }
+    return valid_count;
+}
+
 /* Count slots in [0, 123] whose stored CRC does NOT validate. These are
  * the "free" slots that an upsert may claim for a new record.
  *
