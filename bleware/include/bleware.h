@@ -156,10 +156,15 @@ void  BIOS_start(void) __attribute__((noreturn));
 void  ssp_relay_u32(uint16_t cmd_id, uint32_t value);  /* 0x00021884 */
 void  ssp_relay_u16(uint16_t cmd_id, uint16_t value);  /* 0x00023204 */
 
+/* Inter-module bus idle check (src/protocols/ssp.c). Returns 0 if
+ * the bus is idle, 1 if a transaction is in-flight. OEM @ 0x00026594. */
+int   module_bus_is_idle(void);
+
 /* Bleware timekeeper subsystem (src/timekeeper.c). */
-void  timekeeper_submit_epoch(uint32_t epoch);                    /* 0x00026CC0 */
-int   timekeeper_apply_request(const uint32_t request[3]);        /* 0x00020B18 */
-uint64_t timekeeper_read_be(void);                                /* 0x00027448 */
+void     sysclock_snapshot(uint32_t out_clock[3]);                 /* 0x000236E8 */
+void     timekeeper_submit_epoch(uint32_t epoch);                  /* 0x00026CC0 */
+int      timekeeper_apply_request(const uint32_t request[3]);      /* 0x00020B18 */
+uint64_t timekeeper_read_be(void);                                 /* 0x00027448 */
 
 /* State-machine notify primitive (src/state_machine.c). Wraps a small
  * payload in an envelope and posts it as kind 0x32 onto the
@@ -190,6 +195,14 @@ int      indicate_seq_peek(uint16_t conn, uint16_t *out_seq);     /* 0x00022970 
 int      indicate_seq_advance(uint16_t conn);                     /* 0x00023114 */
 int      ble_connection_get_session_key(uint32_t conn);           /* 0x00023DCC */
 int      ble_connection_set_session_key(uint32_t conn, const void *key_16); /* 0x000231C8 */
+int      ble_conn_state_byte(uint32_t conn, uint8_t *out_byte);    /* 0x000228B0 */
+
+/* Runtime permission mask — reads the 32-bit capability mask from the
+ * M-Key struct at RAM 0x2000A3DC offset +0x14, gated on whether the
+ * first 0x20 bytes of the struct are non-zero (initialized). Both GATT
+ * dispatchers apply it as a gate against the per-char required mask.
+ * OEM @ 0x00026050. */
+uint32_t runtime_permission_mask(void);
 
 /* 15-bit LCG pseudo-random (src/lcg_random.c). OEM at 0x00023E34. */
 uint32_t lcg_random_u15(void);

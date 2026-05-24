@@ -33,8 +33,36 @@
 /* Sample the live system clock into a 12-byte snapshot on the caller's
  * stack. Layout is `{ pad0:u32, high:u32, low_scaled:u32 }`; the third
  * field is the low half of the tick count multiplied through the
- * board's tick-to-microseconds scale (DAT_0002371C). */
-extern void sysclock_snapshot(uint32_t out_clock[3]);              /* FUN_000236E8 */
+ * board's tick-to-microseconds scale (DAT_0002371C).
+ *
+ * The OEM calls through a ROM function-pointer table (DAT_00023718 @
+ * flash 0x1000018C → slot +0x30 = `Clock_getTicks` or equivalent TI-RTOS
+ * ROM service) to get a 64-bit tick count, then scales the lower 16 bits
+ * by the 1 000 000 000 µs/s modulus. OEM at 0x000236E8 (48 B). */
+void sysclock_snapshot(uint32_t out_clock[3])
+{
+    /* ROM indirect: (*(*DAT_00023718 + 0x30))() → returns 64-bit in r0:r1.
+     * DAT_00023718 = 0x1000018C — the TI-RTOS ROM clock function table pointer.
+     * Slot +0x30 maps to ClockP_getTicks or a similar tick-source hook. */
+    extern uint32_t *g_rom_clock_table;
+    typedef uint64_t (*clock_get_ticks_t)(void);
+    uint64_t raw_ticks;
+    clock_get_ticks_t get_ticks;
+
+    get_ticks  = (clock_get_ticks_t)*(uint32_t *)(g_rom_clock_table + 0x30u / 4u);
+    raw_ticks  = get_ticks();
+
+    out_clock[1] = (uint32_t)(raw_ticks >> 32);   /* high 32 bits */
+    out_clock[0] = 0u;                              /* pad */
+    {
+        extern uint32_t g_timekeeper_tick_modulus;  /* DAT_0002371C = 1 000 000 000 */
+        uint32_t raw_low_16  = (uint32_t)(raw_ticks >> 16) & 0xFFFFu;
+        uint64_t scaled       = (uint64_t)g_timekeeper_tick_modulus * raw_low_16;
+        /* pack: bits [47:32] → upper 16, bits [31:16] → lower 16 */
+        out_clock[2] = ((uint32_t)(scaled >> 32) << 16)
+                     | ((uint32_t)scaled >> 16);
+    }
+}
 
 /* Combine a stored `{epoch_lo, epoch_hi, epoch_ticks}` request with a
  * fresh sysclock snapshot into a 64-bit "current time" reading. This

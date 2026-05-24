@@ -309,3 +309,40 @@ uint32_t secrets_ensure_mid_record(void)
     secrets_record_write_verify(0x7C, buf);
     return 0;
 }
+
+/* Check whether `len` bytes starting at `buf` are all equal to `byte_val`.
+ * Returns 1 if all bytes match, 0 if any byte differs. If `len == 0`,
+ * returns 1 (vacuous truth). OEM at 0x00026564 (22 B). */
+static int byte_range_all_equal(const uint8_t *buf, uint8_t byte_val, uint32_t len)
+{
+    if (len == 0) {
+        return 1;
+    }
+    do {
+        if (*buf != byte_val) {
+            return 0;
+        }
+        buf++;
+        len--;
+    } while (len != 0);
+    return 1;
+}
+
+/* Read the runtime permission mask from the M-Key working buffer.
+ * If the first 32 bytes (0x20) of the buffer at `DAT_00026068`
+ * (RAM 0x2000A3DC) are all zero, the buffer is uninitialized and
+ * this returns 0 (no permissions). Otherwise returns the 32-bit
+ * permission mask field at buffer offset +0x14.
+ *
+ * Called by both GATT dispatchers to gate per-characteristic
+ * access against the current secrets/permissions state.
+ * OEM at 0x00026050 (24 B). */
+uint32_t runtime_permission_mask(void)
+{
+    extern uint8_t *g_mkey_ptr;  /* DAT_00026068 = 0x2000A3DC */
+
+    if (byte_range_all_equal(g_mkey_ptr, 0x00u, 0x20u) != 0) {
+        return 0;
+    }
+    return *(uint32_t *)(g_mkey_ptr + 0x14u);
+}

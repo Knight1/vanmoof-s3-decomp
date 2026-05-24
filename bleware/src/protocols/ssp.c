@@ -292,3 +292,12 @@ int ssp_publish_fetch_frame(struct ssp_master_state *master,
     (void)extra;
     return 0;
 }
+
+/* Check whether a Modbus/SSP transaction is currently in-flight.
+ * Returns 0 if the bus is idle (pending-cmd word == 0xFFFF), 1 if busy.
+ * OEM at 0x00026594 (18 B). */
+int module_bus_is_idle(void)
+{
+    extern uint16_t *g_ssp_bus_pending_cmd_ptr;  /* DAT_000265A8 = 0x20009A90 */
+    return (*g_ssp_bus_pending_cmd_ptr == 0xFFFFu) ? 0 : 1;
+}

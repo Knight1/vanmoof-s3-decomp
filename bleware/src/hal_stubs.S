@@ -89,6 +89,16 @@ name: ; \
 g_mkey_working_buffer:
     .skip    4
 
+/* OEM DAT_00026068 — a flash literal holding 0x2000A3DC, the base of
+ * the M-Key owned struct. Used by runtime_permission_mask to check if
+ * the buffer is zero-filled (uninitialized) or has a valid mask at +0x14. */
+    .section .data.g_mkey_ptr, "aw", %progbits
+    .weak    g_mkey_ptr
+    .type    g_mkey_ptr, %object
+    .size    g_mkey_ptr, 4
+g_mkey_ptr:
+    .word    0x2000A3DC
+
     .section .bss.g_mkey_owning_struct_field30, "aw", %nobits
     .weak    g_mkey_owning_struct_field30
     .type    g_mkey_owning_struct_field30, %object
@@ -239,6 +249,16 @@ g_ssp_modules:
 g_ssp_sequence:
     .skip    1
 
+/* SSP bus-idle pending-cmd pointer — OEM DAT_000265A8 = 0x20009A90.
+ * Points to the uint16_t "pending command" field of whatever module
+ * is currently the bus-master target. 0xFFFF means idle. */
+    .section .data.g_ssp_bus_pending_cmd_ptr, "aw", %progbits
+    .weak    g_ssp_bus_pending_cmd_ptr
+    .type    g_ssp_bus_pending_cmd_ptr, %object
+    .size    g_ssp_bus_pending_cmd_ptr, 4
+g_ssp_bus_pending_cmd_ptr:
+    .word    0x20009A90
+
     .section .bss.g_bleware_gpio_ctx, "aw", %nobits
     .weak    g_bleware_gpio_ctx
     .type    g_bleware_gpio_ctx, %object
@@ -322,9 +342,9 @@ g_gatt_dispatch:
  * now strong in src/timekeeper.c.
  * `auth_derive_session_key` is now strong in src/auth.c;
  * `backoffice_auth_session_init` in src/ble_connection.c. */
-/* `timekeeper_apply_request` (FUN_00020B18) is now strong in
- * src/timekeeper.c. Its leaf helpers remain stubbed: */
-    WEAK_NOOP(sysclock_snapshot)            /* FUN_000236E8 */
+/* `timekeeper_apply_request` (FUN_00020B18) + `sysclock_snapshot` are
+ * now strong in src/timekeeper.c. Its leaf helpers remain stubbed: */
+    /* WEAK_NOOP(sysclock_snapshot) -- now strong in timekeeper.c */
     WEAK_NOOP(timekeeper_read_request)      /* FUN_0001EAF8 */
 
 /* Heap-resident timekeeper shared state + tick-modulus constant. */
@@ -335,12 +355,33 @@ g_gatt_dispatch:
 g_timekeeper_state:
     .zero    4
 
-    .section .bss.g_timekeeper_tick_modulus, "aw", %nobits
+    .section .data.g_timekeeper_tick_modulus, "aw", %progbits
     .weak    g_timekeeper_tick_modulus
     .type    g_timekeeper_tick_modulus, %object
     .size    g_timekeeper_tick_modulus, 4
 g_timekeeper_tick_modulus:
-    .zero    4
+    .word    0x3B9ACA00   /* 1 000 000 000 — OEM @ 0x0002371C */
+
+/* ROM clock function-pointer table — OEM @ 0x00023718 = 0x1000018C.
+ * Points into the TI-RTOS ROM API table at offset +0x30 (12 bytes in).
+ * sysclock_snapshot uses this to call ClockP_getTicks or equivalent. */
+    .section .data.g_rom_clock_table, "aw", %progbits
+    .weak    g_rom_clock_table
+    .type    g_rom_clock_table, %object
+    .size    g_rom_clock_table, 4
+g_rom_clock_table:
+    .word    0x1000018C
+
+/* Same tick-modulus constant used by timekeeper_apply_request for wrap
+ * handling (OEM DAT_00020B64 — also 0x3B9ACA00). Timekeeper state uses
+ * this for the modulus when tick-rollover is detected. */
+    .section .data.g_tk_tick_modulus2, "aw", %progbits
+    .weak    g_tk_tick_modulus2
+    .type    g_tk_tick_modulus2, %object
+    .size    g_tk_tick_modulus2, 4
+g_tk_tick_modulus2:
+    .word    0x3B9ACA00
+
 /* `ble_connection_set_session_key`, `indicate_seq_peek`,
  * `indicate_seq_advance`, and `ble_connection_get_session_key` are
  * now real strong symbols in src/ble_connection.c (earlier WEAK_NOOP
@@ -468,9 +509,9 @@ g_icall_entities:
 /* ===== gatt_read.c helpers =====
  * `ble_connection_get_session_key` now strong in src/ble_connection.c. */
     WEAK_NOOP(gatt_config_lookup_item)
-    WEAK_NOOP(runtime_permission_mask)
+    /* WEAK_NOOP(runtime_permission_mask) — now strong in secrets.c */
     WEAK_NOOP(module_publish_sync_with_timeout)
-    WEAK_NOOP(module_bus_is_idle)
+    /* WEAK_NOOP(module_bus_is_idle) — now strong in protocols/ssp.c */
     WEAK_NOOP(aes128_block_encrypt)
     WEAK_NOOP(gatt_scratch_alloc)
     WEAK_NOOP(gatt_scratch_free)

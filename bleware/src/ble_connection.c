@@ -111,6 +111,26 @@ int ble_connection_get_session_key(uint32_t conn)
     return key;
 }
 
+/* Read a per-connection state byte at offset 0x65. Same Semaphore_pend/
+ * conn-sanity-check / Semaphore_post template as the other accessors.
+ * Returns 0 on success (byte written to *out_byte), -1 if conn doesn't
+ * match. OEM at 0x000228B0 (60 B). */
+int ble_conn_state_byte(uint32_t conn, uint8_t *out_byte)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *out_byte = *(uint8_t *)((uint8_t *)e + 0x65);
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}
+
 int ble_connection_set_session_key(uint32_t conn, const void *key_16)
 {
     struct ble_connection_state *e = &g_ble_connection_table[conn];
