@@ -84,6 +84,13 @@ int      log_gatt_write_handler(uint32_t       conn_handle,
                                 const uint8_t *payload,
                                 uint32_t       payload_len);     /* FUN_00014910 */
 
+/* Log-block count (src/log_gatt.c). Returns the number of 16-byte
+ * blocks available between head and tail in the 128 KB circular log
+ * buffer (0x20000 wrap, rounded up). Returns 0 on semaphore timeout.
+ * OEM @ 0x00020338 / OEM @ 0x000273DC. */
+uint32_t log_block_count_get(void);
+uint8_t  log_total_size_byte(void);
+
 /* External SPI NOR-flash driver (src/extflash.c). Sector size 4 KB.
  * `extflash_erase_range` aligns down and erases every 4 KB sector
  * intersecting [addr, addr+len). Returns 1 on success, 0 on failure. */
@@ -170,6 +177,13 @@ uint64_t timekeeper_read_be(void);                                 /* 0x00027448
  * payload in an envelope and posts it as kind 0x32 onto the
  * bluetoothtask user-message queue. OEM @ 0x00017C6C. */
 void  state_machine_post(uint32_t state_id, const void *payload, uint16_t len);
+
+/* Envelope alloc + queue post for the bluetoothtask's user-message
+ * queue (src/bluetoothtask_post.c). Allocates an 8-byte {kind, ptr}
+ * envelope and hands it to task_queue_enqueue_and_signal. Returns 0
+ * on success, 0x13 on alloc failure. OEM @ 0x00023CC8. */
+int   task_queue_publish_envelope(uint32_t kind, const void *payload,
+                                  uint16_t len, uint32_t tag);
 
 /* Secrets-store population accessor (src/secrets.c). Counts valid
  * UKEY records in slots [0, 123] — used as the "device is provisioned"

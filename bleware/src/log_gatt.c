@@ -80,9 +80,7 @@ extern int log_gatt_notify_channel(int channel, const void *buf, uint32_t len);
 /* Helpers. */
 extern int      extflash_open(int mode);
 extern void     extflash_close(void);
-extern int      extflash_read(uint32_t addr, uint32_t len, void *out);
-extern void     extflash_erase_range(uint32_t addr, uint32_t len);
-extern void     extflash_write(uint32_t addr, uint32_t len, const uint8_t *src);
+/* extflash_read, extflash_erase_range, extflash_write — declared in bleware.h */
 extern uint32_t log_parse_ascii_uint(const char *s, char **endptr, int base); /* FUN_000107BC */
 
 /* TI-RTOS Semaphore_pend; ROM thunk via `*PTR_DAT_0001EA30 = tick µs`. */
@@ -112,10 +110,7 @@ extern uint8_t g_log_last_count;                   /* *DAT_000149DC */
 int  log_read_entry      (void *out_16B, int log_idx);
 int  log_seek_to_timestamp(uint32_t target_unix_seconds);
 
-/* Inner SPI / RTOS helpers. */
-extern int  extflash_read(uint32_t addr, uint32_t len, void *out);
-extern void extflash_erase_range(uint32_t addr, uint32_t len);
-extern void extflash_write(uint32_t addr, uint32_t len, const uint8_t *src);
+/* Inner SPI / RTOS helpers — extflash_* declared in bleware.h. */
 extern int  extflash_open(int mode);
 extern void extflash_close(void);
 extern uint32_t monitor_strtol(const char *s, char **endptr, int base); /* FUN_000107BC */
@@ -303,4 +298,43 @@ int log_seek_to_timestamp(uint32_t target_unix_seconds)
     }
     ti_semaphore_post(g_log_state.lock_handle);
     return 1;
+}
+
+/* Return the number of available 16-byte log blocks (head - tail
+ * difference, with 0x20000 wrap). Rounds up to the next 16-byte
+ * boundary. Returns 0 if the semaphore is held longer than 10 ms.
+ * OEM at 0x00020338 (76 B). */
+uint32_t log_block_count_get(void)
+{
+    if (ti_semaphore_pend(g_log_state.lock_handle,
+                          log_ms_to_ticks(10)) != 1) {
+        return 0;
+    }
+
+    uint32_t head = g_log_state.cursor_persist_pair[0];  /* state +0x08 */
+    uint32_t tail = g_log_state.cursor_persist_pair[1];  /* state +0x0C */
+    uint32_t blocks;
+
+    if (head < tail) {
+        blocks = (head - tail) + 0x20000u;
+    } else {
+        blocks = head - tail;
+    }
+    /* Round up to 16-byte blocks, plus 1 if any fractional block. */
+    blocks >>= 4;
+    if ((blocks & 0x0Fu) != 0) {
+        blocks++;
+    }
+
+    ti_semaphore_post(g_log_state.lock_handle);
+    return blocks;
+}
+
+/* Return the log total size byte — reads a single byte from the
+ * global at DAT_000273e4 (RAM 0x20005B6C). Caller masks with 0xFFF
+ * and shifts left 4 to get the effective byte count. OEM at 0x000273DC. */
+uint8_t log_total_size_byte(void)
+{
+    extern uint8_t *g_log_capacity_ptr;  /* DAT_000273e4 = 0x20005B6C */
+    return *g_log_capacity_ptr;
 }

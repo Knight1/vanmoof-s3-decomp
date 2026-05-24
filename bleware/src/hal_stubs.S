@@ -154,8 +154,9 @@ g_mkey_owning_struct_field3C:
  * src/auth.c.
  * `state_machine_post` is now strong in src/state_machine.c;
  * `secrets_count_valid_in_keys_range` is now strong in src/secrets.c. */
-/* Inner publish helper used by state_machine_post (FUN_000219A2). */
-    WEAK_NOOP(task_queue_publish_envelope)
+/* Inner publish helper used by state_machine_post. Now strong in
+ * bluetoothtask_post.c. */
+    /* WEAK_NOOP(task_queue_publish_envelope) — now strong */
 /* Firmware abort routine (FUN_0001F7F8), tail-called on alloc failure. */
     WEAK_NOOP(firmware_abort)
 
@@ -515,9 +516,8 @@ g_icall_entities:
     WEAK_NOOP(aes128_block_encrypt)
     WEAK_NOOP(gatt_scratch_alloc)
     WEAK_NOOP(gatt_scratch_free)
-    WEAK_NOOP(log_block_count_get)
-    WEAK_NOOP(log_total_size_byte)
-/* `timekeeper_read_be` (FUN_00027448) is now strong in src/timekeeper.c. */
+    /* WEAK_NOOP(log_block_count_get) — now strong in log_gatt.c */
+    /* WEAK_NOOP(log_total_size_byte) — now strong in log_gatt.c */
     WEAK_NOOP(ble_conn_state_byte)
     WEAK_NOOP(backoffice_status_u16)
     WEAK_NOOP(ecc_sign_with_factory_key)
@@ -545,6 +545,15 @@ g_ecc_curve_params:
     .size    g_log_state, 0x10
 g_log_state:
     .skip    0x10
+
+/* OEM DAT_000273e4 — flash literal holding 0x20005B6C. Pointer to a
+ * single-byte log capacity field, read by log_total_size_byte. */
+    .section .data.g_log_capacity_ptr, "aw", %progbits
+    .weak    g_log_capacity_ptr
+    .type    g_log_capacity_ptr, %object
+    .size    g_log_capacity_ptr, 4
+g_log_capacity_ptr:
+    .word    0x20005B6C
 
     .section .bss.g_log_control_scratch, "aw", %nobits
     .weak    g_log_control_scratch

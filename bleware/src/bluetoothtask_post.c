@@ -84,3 +84,30 @@ int ble_post_disconnect(uint16_t conn, uint8_t reason)
     monitor_free(pl);
     return -1;
 }
+
+/* Allocate an 8-byte control envelope {kind, payload_ptr} and enqueue it
+ * to the bluetoothtask's user-message queue. On failure returns 0x13
+ * (alloc failed). On success, task_queue_enqueue_and_signal takes care
+ * of posting the event bit 30 to wake the bluetoothtask.
+ * OEM @ 0x00023CC8 (48 B). */
+int task_queue_publish_envelope(uint32_t kind, const void *payload,
+                                uint16_t len, uint32_t tag)
+{
+    struct bt_msg_envelope *env;
+    struct bluetoothtask_queue *mq;
+
+    (void)len;   /* unused by this wrapper — caller pre-sizes the payload */
+    (void)tag;   /* tag is consumed by the caller, not the envelope */
+
+    env = (struct bt_msg_envelope *)monitor_alloc(sizeof *env);
+    if (env == NULL) {
+        return 0x13;
+    }
+
+    mq = g_bluetoothtask_msg_queue;
+    env->kind    = (uint8_t)kind;
+    env->payload = (void *)payload;
+
+    return task_queue_enqueue_and_signal(mq->queue_handle,
+                                         mq->event_handle, env) ? 0 : 0x13;
+}

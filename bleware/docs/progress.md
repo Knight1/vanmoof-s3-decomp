@@ -28,7 +28,7 @@ peripheral wiring, anything that's specific to VanMoof.
 | ?? | pending (TBD as functions are categorised) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 31 | decomp (asm or c) |
+| 34 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
 
 ### Decoded functions
@@ -39,6 +39,9 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x000236E8  | `sysclock_snapshot`               | `src/timekeeper.c`       | Samples the TI-RTOS system tick counter via ROM function-pointer table (0x1000018C+0x30), scales the lower 16 bits by 1 000 000 000 µs/s, writes 12-byte `{0, high32, scaled}` triple. Leaf function called by both timekeeper halves. 48 B. |
 | 0x000228B0  | `ble_conn_state_byte`             | `src/ble_connection.c`   | Per-connection state byte reader at offset 0x65. Same Semaphore_pend/conn-sanity-check/Semaphore_post template as the other ble_connection accessors. Called by `xs3_gatt_process_read_event` for svc 0x5520 char 1 (connection state). 60 B. |
 | 0x00026050  | `runtime_permission_mask`         | `src/secrets.c`          | Reads the 32-bit capability mask from the M-Key struct at RAM 0x2000A3DC offset +0x14, gated on whether the first 0x20 bytes are non-zero (initialized). Called by both GATT dispatchers. 24 B. Companion helper `byte_range_all_equal` (0x00026564, 22 B). |
+| 0x00020338  | `log_block_count_get`             | `src/log_gatt.c`         | Returns available 16-byte log blocks (head - tail delta, 0x20000 wrap, rounded up). Semaphore-protected with 10 ms timeout. Called by 3 monitor commands + GATT read dispatcher. 76 B. |
+| 0x000273DC  | `log_total_size_byte`             | `src/log_gatt.c`         | Reads a single byte from RAM 0x20005B6C (log capacity field). Caller masks with 0xFFF and shifts left 4. 10 B. |
+| 0x00023CC8  | `task_queue_publish_envelope`     | `src/bluetoothtask_post.c` | Allocates an 8-byte {kind, payload_ptr} envelope and enqueues it on the bluetoothtask's user-message queue via `task_queue_enqueue_and_signal`. Returns 0 on success, 0x13 on alloc failure. 48 B. |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |
 | 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
 | 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |
@@ -582,6 +585,7 @@ address discovery needs to walk MOVW/MOVT pairs and `add.w` immediates.
 | `0x00010B40` | `gap_event_91_3e_handler` | renamed from `FUN_00010b40`; prototype `uint gap_event_91_3e_handler(void *msg)`. GAP Host command dispatcher for ICall event class 0x91/0x3E. |
 | `0x000228B0` | `ble_conn_state_byte` | renamed from `FUN_000228b0`; prototype `int ble_conn_state_byte(uint conn, byte *out_byte)`. Per-connection state byte reader. |
 | `0x00026564` | `byte_range_all_equal` | renamed from `FUN_00026564`; static helper that checks if `len` bytes at `buf` all equal `byte_val`. Used by `runtime_permission_mask`. |
+| `0x00023CC8` | `task_queue_publish_envelope` | renamed from `FUN_00023cc8`. Allocates 8-byte envelope and posts to bluetoothtask queue. |
 
 ### `provisioning.c` — backoffice GATT message handler (`xs3_gatt_backoffice.c`)
 
