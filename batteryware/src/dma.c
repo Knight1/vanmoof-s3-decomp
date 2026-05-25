@@ -761,3 +761,39 @@ uint8_t dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *s
 
     return result;
 }
+
+/*
+ * memcpy_byte — byte-by-byte memory copy (ldrb/strb pattern).
+ */
+void memcpy_byte(void *dst, const void *src, uint32_t len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    uint32_t i;
+    for (i = 0; i < len; i++) {
+        d[i] = s[i];
+    }
+}
+
+/*
+ * DMA halfword handler v2 — reads from peripheral to memory.
+ */
+void dma_halfword_handler_v2(int *ctx)
+{
+    volatile uint16_t *dst = (volatile uint16_t *)ctx[0x0E];
+    *dst = (uint16_t)*(volatile uint32_t *)(*ctx + 0x0C);
+    ctx[0x0E] = (int)(dst + 1);
+    *(volatile int16_t *)((uintptr_t)ctx + 0x3E) -= 1;
+
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
+        if (ctx[10] == 0x2000) {
+            ctx[0x10] = (int)0x08016161;
+        } else {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[1] &= 0xFFFFFFBF;
+            if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+                dma_transfer_done(ctx);
+            }
+        }
+    }
+}

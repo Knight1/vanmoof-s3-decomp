@@ -429,3 +429,541 @@ void state_flags_handler_timer(void)
         }
     }
 }
+
+/* ---- State timer handlers (periodic ISR-driven dispatch) ----
+ * Each is registered as a periodic callback for a specific BMS state.
+ * Pattern: fg_scan() → check flags → dispatch state_handler → fault check → response chain → watchdog
+ */
+
+void state_timer_0b(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x200011C4;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x200011C8;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x200011CC;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x200011D0;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x200011D4;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 5) & 1) == 0) { state_handler_01(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor();
+        fg_discharge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_0c(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x200013B8;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x200013BC;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x200013C0;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x200013C4;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x200013C8;
+    volatile uint32_t *s_cnt   = (volatile uint32_t *)0x200013CC;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x200013D0;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x200013DC;
+    volatile uint8_t  *s_cell1 = (volatile uint8_t  *)0x200013D4;
+    volatile uint8_t  *s_cellv = (volatile uint8_t  *)0x200013D8;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor();
+        fg_discharge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_cnt <= *s_thr) { state_handler_01(); return; }
+        if ((s_cellv[0x72] < s_cell1[1]) || (s_cellv[0x72] < s_cell1[2])) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (((*(volatile uint16_t *)(s_cellv + 0x74) / 100) & 0xFFFF) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_12(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x200015C0;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x200015C4;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x200015C8;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x200015CC;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x200015D0;
+    volatile uint32_t *s_cnt   = (volatile uint32_t *)0x200015D4;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x200015D8;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x200015E4;
+    volatile uint8_t  *s_cell1 = (volatile uint8_t  *)0x200015DC;
+    volatile uint8_t  *s_cellv = (volatile uint8_t  *)0x200015E0;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor();
+        fg_discharge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_cnt <= *s_thr) { state_handler_01(); return; }
+        if ((s_cell1[1] < s_cellv[0x7A]) || (s_cell1[2] < s_cellv[0x7A])) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (((*(volatile uint16_t *)(s_cellv + 0x7C) / 100) & 0xFFFF) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_13(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20001870;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x20001874;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20001878;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x2000187C;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20001880;
+    volatile uint32_t *s_cnt   = (volatile uint32_t *)0x20001884;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x20001888;
+    volatile uint32_t *s_cur   = (volatile uint32_t *)0x2000188C;
+    volatile uint32_t *s_gpio  = (volatile uint32_t *)0x50000400;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 5) & 1) != 0) { state_handler_0c(); return; }
+            if (((*s_fault >> 4) & 1) != 0) { state_handler_0b(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_uvp1_check(); fg_uvp2_check(); fg_ovp1_check(); fg_ovp2_check();
+        fg_threshold_check(); fg_alert_monitor();
+
+        if (*s_aux != 0) {
+            if ((*s_aux & 1) != 0) { state_handler_12(); return; }
+            if (((*s_aux >> 1) & 1) != 0) { state_handler_13(); return; }
+            if (((*s_aux >> 2) & 1) != 0) { state_handler_14(); return; }
+            if (((*s_aux >> 3) & 1) != 0) { state_handler_15(); return; }
+            if (((*s_aux >> 4) & 1) != 0) { state_handler_16(); return; }
+            if ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1))) {
+                state_handler_17_19(); return;
+            }
+        }
+
+        if (*s_cnt <= *s_thr) {
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            state_handler_01(); return;
+        }
+
+        if (*s_cur < *(volatile uint16_t *)((uint8_t *)s_cur - 0x18 + 0x16)) {
+            if (((*s_cfg >> 6) & 1) != 0) { *s_cfg &= ~0x40U; gpio_bit_write((uint32_t)s_gpio, 0x200, 0); }
+        } else if (((*s_cfg >> 6) & 1) == 0) {
+            *s_cfg |= 0x40;
+            gpio_bit_write((uint32_t)s_gpio, 0x200, 1);
+        }
+
+        extern void veneer_11f68(void);
+        extern void veneer_11ee8(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11ee8(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(1);
+}
+
+void state_timer_15_a(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20001B24;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x20001B28;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20001B2C;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x20001B30;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20001B34;
+    volatile uint32_t *s_cur   = (volatile uint32_t *)0x20001B38;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x20001B3C;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x20001B40;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 6) & 1) == 0) { state_handler_01(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_thr < *s_cur) {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (cnt > 9) { *s_tmr = 0; state_handler_02(); return; }
+        } else { *s_tmr = 0; }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_0d(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20001D20;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x20001D24;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20001D28;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x20001D2C;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20001D30;
+    volatile uint32_t *s_cur   = (volatile uint32_t *)0x20001D34;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x20001D38;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x20001D3C;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 7) & 1) == 0) { state_handler_01(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_thr < *s_cur) {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (cnt > 9) { *s_tmr = 0; state_handler_02(); return; }
+        } else { *s_tmr = 0; }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_0e(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20001F30;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x20001F34;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20001F38;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x20001F3C;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20001F40;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x20001F4C;
+    volatile uint8_t  *s_cell  = (volatile uint8_t  *)0x20001F44;
+    volatile uint8_t  *s_cellv = (volatile uint8_t  *)0x20001F48;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if ((s_cellv[0x82] < s_cell[1]) || (s_cellv[0x82] < s_cell[2])) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (((*(volatile uint16_t *)(s_cellv + 0x84) / 100) & 0xFFFF) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+void state_timer_14(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20002120;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x20002124;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20002128;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x2000212C;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20002130;
+    volatile uint32_t *s_tmr   = (volatile uint32_t *)0x2000213C;
+    volatile uint8_t  *s_cell  = (volatile uint8_t  *)0x20002134;
+    volatile uint8_t  *s_cellv = (volatile uint8_t  *)0x20002138;
+
+    if (*s_state != 0) { state_handler_11(); return; }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_fault & 1) != 0) { state_handler_07(); return; }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_fault >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_aux != 0) &&
+            ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if ((s_cellv[0x8A] <= s_cell[1]) && (s_cellv[0x8A] <= s_cell[2])) {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if (((*(volatile uint16_t *)(s_cellv + 0x8C) / 100) & 0xFFFF) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        extern void veneer_11f68(void);
+        extern void veneer_11f88(void);
+        extern void veneer_11f18(void);
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    extern void veneer_11f08(int arg);
+    veneer_11f08(0);
+}
+
+/*
+ * Master BMS state machine — main periodic dispatch.
+ */
+void bms_state_machine(void)
+{
+    extern void fg_scan(void);
+    fg_scan();
+    volatile uint8_t *s_state = (volatile uint8_t *)0x20002488;
+    volatile uint32_t *s_flags = (volatile uint32_t *)0x2000248C;
+    volatile uint32_t *s_cfg   = (volatile uint32_t *)0x20002490;
+    volatile uint32_t *s_fault = (volatile uint32_t *)0x20002494;
+    volatile uint32_t *s_aux   = (volatile uint32_t *)0x20002498;
+
+    if (*s_state != 0) { state_handler_11(); nop_2bac(); }
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        if (((*s_cfg >> 5) & 1) != 0) {
+            *s_cfg &= ~0x20U;
+            if (((*s_fault >> 1) & 1) != 0) { state_handler_08(); nop_2bac(); }
+            if ((*s_fault & 1) != 0)      { state_handler_07(); nop_2bac(); }
+            if (((*s_fault >> 3) & 1) != 0) { state_handler_0a(); nop_2bac(); }
+            if (((*s_fault >> 2) & 1) != 0) { state_handler_09(); nop_2bac(); }
+            if (((*s_fault >> 7) & 1) != 0) { state_handler_0e(); nop_2bac(); }
+            if (((*s_fault >> 6) & 1) != 0) { state_handler_0d(); nop_2bac(); }
+            if (((*s_fault >> 11) & 1) != 0){ state_handler_17_19(); nop_2bac(); }
+        }
+        extern void cell_balance_update(void);
+        cell_balance_update();
+    }
+
+    if (((*s_flags >> 2) & 1) == 0) { nop_2ba6(); }
+    *s_flags &= ~4U;
+
+    fg_ovp1_check(); fg_ovp2_check(); fg_threshold_check();
+    fg_alert_monitor(); fg_discharge_oc_check();
+
+    if (*s_aux != 0) {
+        if (((*s_aux >> 2) & 1) != 0) { state_handler_14(); nop_2bac(); }
+        if (((*s_aux >> 3) & 1) != 0) { state_handler_15(); nop_2bac(); }
+        if (((*s_aux >> 4) & 1) != 0) { state_handler_16(); nop_2bac(); }
+        if ((((*s_aux >> 5) & 1) || ((*s_aux >> 6) & 1) || ((*s_aux >> 7) & 1))) {
+            state_handler_17_19(); nop_2bac();
+        }
+    }
+
+    /* response chain and charge/discharge MOSFET control */
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11ee8(void);
+    veneer_11f68(); veneer_11f88(); veneer_11ee8();
+
+    /* charge/discharge voltage threshold checks and MOSFET toggling */
+    volatile uint32_t *s_cur   = (volatile uint32_t *)0x2000249C;
+    volatile uint32_t *s_thr   = (volatile uint32_t *)0x200024A0;
+    volatile uint32_t *s_cell1 = (volatile uint32_t *)0x200024A8;
+    volatile uint32_t *s_cellv = (volatile uint32_t *)0x200024AC;
+    volatile uint32_t *s_tmr_a = (volatile uint32_t *)0x200024B0;
+    volatile uint32_t *s_tmr_b = (volatile uint32_t *)0x200024A4;
+    volatile uint32_t *s_gpio  = (volatile uint32_t *)0x50000400;
+
+    if ((*s_thr < *s_cur) && (((*s_cfg >> 8) & 1) != 0)) {
+        if ((*s_aux & 1) == 0) {
+            *s_tmr_b = 0;
+            if (*(volatile uint8_t *)(s_cell1 + 1/4) < *(volatile uint8_t *)((uint8_t *)s_cellv + 0x6E) &&
+                *(volatile uint8_t *)(s_cell1 + 2/4) < *(volatile uint8_t *)((uint8_t *)s_cellv + 0x6E)) {
+                *s_tmr_a = 0;
+            } else {
+                uint16_t cnt = *(volatile uint16_t *)s_tmr_a + 1;
+                *(volatile uint16_t *)s_tmr_a = cnt;
+                if (((*(volatile uint16_t *)((uint8_t *)s_cellv + 0x70) / 100) & 0xFFFF) <= cnt) {
+                    charge_mosfet_set(false); discharge_mosfet_set(false);
+                    bms_set_state(0x12);
+                    volatile uint32_t *s_cfg2 = (volatile uint32_t *)0x200024B8;
+                    *s_cfg2 = 3;
+                    *s_aux |= 1;
+                    gpio_bit_write((uint32_t)s_gpio, 1, 1);
+                    *s_cfg &= ~0x10U;
+                    *s_tmr_a = 0;
+                }
+            }
+        }
+    }
+
+    extern void veneer_11f18(void);
+    veneer_11f18();
+    fg_watchdog_kick();
+    extern void veneer_11f08(int arg);
+    veneer_11f08(1);
+}

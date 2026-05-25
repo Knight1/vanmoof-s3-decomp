@@ -164,8 +164,37 @@ uint32_t flash_timeout_check(uint32_t param)
     if (param < 4) {
         flash_opt_byte_op(0xFF, param);
         *s_output = param;
-        return 0;
-    }
+    return 0;
+}
+
+/*
+ * Flash firmware image header verification.
+ *
+ * Validates the VanMoof image header at 0x08000000:
+ *   - Magic: 0xAA55AA55
+ *   - Version format check
+ *   - CRC32 over header + image (MPEG-2 polynomial)
+ * Returns 0 on valid header, non-zero on mismatch.
+ */
+uint32_t flash_verify_header(void)
+{
+    volatile uint32_t * const s_header = (volatile uint32_t *)0x08000000;
+
+    if (s_header[0] != 0xAA55AA55) return 1;
+
+    uint32_t version = s_header[1];
+    uint32_t crc     = s_header[2];
+
+    /* Version field sanity check */
+    if ((version & 0xFF) != 0xB1) return 1;
+
+    /* CRC verification deferred — CRC32 MPEG-2 polynomial */
+    extern uint32_t crc32_mpeg2(uint8_t *, uint32_t);
+    uint32_t image_size = *(volatile uint32_t *)(0x08000000 + 0x10);
+    uint32_t computed = crc32_mpeg2((uint8_t *)0x08000000, image_size);
+
+    return (computed != crc) ? 1 : 0;
+}
 
     return 1;
 }

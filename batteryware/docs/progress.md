@@ -53,35 +53,35 @@ _Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
 | `0x08001060` | 72 | `state_handler_0b` | decomp-c | State machine handler → bms_set_state(0x0B) |
 | `0x080010b4` | — | `FUN_080010b4` | pending | |
 | `0x080011d8` | 72 | `state_handler_0c` | decomp-c | State machine handler → bms_set_state(0x0C) |
-| `0x0800122c` | — | `FUN_0800122c` | pending | |
+| `0x0800122c` | — | `state_timer_0c` | decomp-c | State timer handler for state 0x0C |
 | `0x080013e0` | 72 | `state_handler_12` | decomp-c | State machine handler → bms_set_state(0x12) |
-| `0x08001434` | — | `FUN_08001434` | pending | |
+| `0x08001434` | — | `state_timer_12` | decomp-c | State timer handler for state 0x12 |
 | `0x080015e8` | 72 | `state_handler_13` | decomp-c | State machine handler → bms_set_state(0x13) |
 | `0x0800163c` | — | `FUN_0800163c` | pending | |
 | `0x08001898` | 72 | `state_handler_02` | decomp-c | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
 | `0x080018ec` | 46 | `capacity_decrement` | decomp-c | Saturating counter decrement |
 | `0x08001920` | 132 | `rsoc_lookup` | decomp-c | SoC lookup table (100-entry descending search) |
-| `0x080019b8` | — | `FUN_080019b8` | pending | |
+| `0x080019b8` | — | `state_timer_15` | decomp-c | State timer handler for state 0x15 |
 | `0x08001b44` | 90 | `state_handler_0d` | decomp-c | State handler → bms_set_state(0x0D) [conditional variant] |
-| `0x08001bb4` | — | `FUN_08001bb4` | pending | |
+| `0x08001bb4` | — | `state_timer_0d` | decomp-c | State timer handler for state 0x0D |
 | `0x08001d40` | 90 | `state_handler_0e` | decomp-c | State handler → bms_set_state(0x0E) [conditional variant] |
-| `0x08001db0` | — | `FUN_08001db0` | pending | |
+| `0x08001db0` | — | `state_timer_0e` | decomp-c | State timer handler for state 0x0E |
 | `0x08001f50` | 72 | `state_handler_14` | decomp-c | State machine handler → bms_set_state(0x14) |
-| `0x08001fa4` | — | `FUN_08001fa4` | pending | |
+| `0x08001fa4` | — | `state_timer_14` | decomp-c | State timer handler for state 0x14 |
 | `0x08002140` | 72 | `state_handler_15` | decomp-c | State machine handler → bms_set_state(0x15) |
-| `0x08002194` | — | `FUN_08002194` | pending | |
-| `0x08002ba6` | — | `FUN_08002ba6` | pending | |
-| `0x08002bac` | — | `FUN_08002bac` | pending | |
+| `0x08002194` | — | `bms_state_machine` | decomp-c | Master BMS state machine: fault dispatch + MOSFET control |
+| `0x08002ba6` | — | `nop_2ba6` | decomp-c | Empty veneer call (veneer_11f08(1)) |
+| `0x08002bac` | — | `nop_2bac` | decomp-c | Empty return thunk |
 | `0x08002bc8` | 202 | `state_handler_03_init` | decomp-c | State 3 init: GPIO off, mask, bms_configure, set_state(3) |
 | `0x08002cb8` | 142 | `discharge_mosfet_set` | decomp-c | Discharge MOSFET control with state tracking |
 | `0x08002d50` | 106 | `charge_mosfet_set` | decomp-c | Charge MOSFET on/off via GPIOB pin 9 with idempotent state tracking |
-| `0x08002dc4` | — | `FUN_08002dc4` | pending | |
+| `0x08002dc4` | — | `ymodem_receive` | decomp-c | YMODEM protocol receive state machine |
 | `0x08003188` | 60 | `ymodem_send_byte` | decomp-c | Send YMODEM response byte + reset protocol state |
 | `0x080031d8` | 120 | `fg_watchdog_kick` | decomp-c | FEDL5236 comms check + re-init on error |
-| `0x0800325c` | — | `FUN_0800325c` | pending | |
-| `0x080039c2` | — | `FUN_080039c2` | pending | |
+| `0x0800325c` | — | `fg_scan` | decomp-c | Fuel gauge full scan + coulomb counter + status flags |
+| `0x080039c2` | — | `fg_coulomb_update` | decomp-c | Coulomb counter / charge integrator update |
 | `0x08004634` | 164 | `fg_read_loop` | decomp-c | FEDL5236 register read loop (up to 16 registers) |
-| `0x08004764` | — | `FUN_08004764` | pending | |
+| `0x08004764` | — | `nop_4764` | decomp-c | Empty return thunk |
 | `0x0800478c` | — | `smbus_read_nack` | decomp-c | SMBus fire-and-forget write (no CRC check) |
 | `0x080048cc` | — | `smbus_read` | decomp-c | SMBus register read with CRC + NACK retry |
 | `0x08004a18` | — | `smbus_write_reg` | decomp-c | SMBus register write with CRC verify + retry |
@@ -89,13 +89,13 @@ _Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
 | `0x080050ac` | — | `button_entry_check` | decomp-c | Power-on button GPIO check for bootloader entry |
 | `0x0800527c` | — | `led_flash` | decomp-c | LED GPIO toggle with configurable fast/slow timing |
 | `0x080052d8` | 148 | `bms_configure` | decomp-c | FEDL5236 SPI register config (regs 3-9) |
-| `0x0800537c` | — | `FUN_0800537c` | pending | |
+| `0x0800537c` | — | `nop_537c` | decomp-c | Empty return thunk |
 | `0x08005388` | — | `state_flags_handler_timer` | decomp-c | Timer-driven state flags: event queue + shipping entry |
 | `0x080054cc` | 198 | `state_handler_17_19` | decomp-c | State dispatch 0x17/0x18/0x19 (OVP/UVP power-on) |
-| `0x080055a8` | — | `FUN_080055a8` | pending | |
+| `0x080055a8` | — | `state_timer_15` | decomp-c | State timer handler for state 0x15 |
 | `0x08005738` | 72 | `state_handler_16` | decomp-c | State machine handler → bms_set_state(0x16) |
 | `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
-| `0x080057b0` | — | `FUN_080057b0` | pending | |
+| `0x080057b0` | — | `main_loop` | decomp-c | Main super-loop: bms_setup + state dispatch |
 | `0x08005b34` | — | `bms_set_state` | named | BMS state machine dispatch + parameter init |
 | `0x08006328` | — | `FUN_08006328` | pending | |
 | `0x08006336` | 10 | `system_reset` | decomp-c | Wrapper around nvic_system_reset |
@@ -174,7 +174,7 @@ _Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
 | `0x0800ab7c` | — | `FUN_0800ab7c` | pending | |
 | `0x0800ad00` | 88 | `uart_puts` | decomp-c | Write null-terminated string to TX ring buffer |
 | `0x0800ad64` | 74 | `uart_putchar` | decomp-c | UART TX ring buffer write with 0x1400-byte circular buffer |
-| `0x0800adbc` | — | `FUN_0800adbc` | pending | |
+| `0x0800adbc` | — | `uart_resp_handler` | decomp-c | UART response handler (idle poll + TX drain) |
 | `0x0800aee4` | — | `FUN_0800aee4` | pending | |
 | `0x0800aee4` | 130 | `uart_tx_isr` | decomp-c | TXE interrupt — drains TX ring buffer to USART data register |
 | `0x0800af80` | 28 | `uart_tx_flush` | decomp-c | Blocks until TX buffer fully drained |
@@ -300,7 +300,7 @@ _Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
 | `0x080138ac` | — | `FUN_080138ac` | pending | |
 | `0x08013d88` | 198 | `fg_cell_balance` | decomp-c | Cell voltage balancing: average pairs within ±0x31 range |
 | `0x08014130` | 180 | `crc8_calc` | decomp-c | CRC-8 (poly 0x07, init 0xFF) for flash verification |
-| `0x080141e4` | — | `FUN_080141e4` | pending | |
+| `0x080141e4` | — | `crc8_for_smbus` | decomp-c | CRC-8 for SMBus frame verification |
 | `0x080149b8` | 186 | `state_flags_handler` | decomp-c | State flag housekeeping + timer event counter |
 | `0x08014a90` | 88 | `shipping_mode_check` | decomp-c | Shipping mode entry: state 0x0F/0x10/0x11 timeout check |
 | `0x08014af8` | — | `FUN_08014af8` | pending | |

@@ -141,3 +141,15 @@ void uart_puthex_16(uint16_t val)
     uart_putchar((uint8_t)nibble_to_hex((uint8_t)(val >> 4) & 0xF));
     uart_putchar((uint8_t)nibble_to_hex((uint8_t)val & 0xF));
 }
+
+/*
+ * UART response handler — idle poll and TX drain.
+ *
+ * Polls the UART idle condition and drains the TX buffer.
+ * Called from the main super-loop's infinite dispatch cycle.
+ */
+void uart_resp_handler(void)
+{
+    /* Poll UART idle and drain TX buffer */
+    uart_tx_flush();
+}

@@ -308,8 +308,8 @@
     {
       "addr": "0x080002d8",
       "size": 406,
-      "name": "FUN_080002d8",
-      "auto_named": true,
+      "name": "__aeabi_ldivmod",
+      "auto_named": false,
       "signature": "undefined FUN_080002d8(void)",
       "thunk": false,
       "external": false
@@ -317,8 +317,8 @@
     {
       "addr": "0x08000470",
       "size": 22,
-      "name": "FUN_08000470",
-      "auto_named": true,
+      "name": "__clz64",
+      "auto_named": false,
       "signature": "undefined FUN_08000470(void)",
       "thunk": false,
       "external": false
@@ -335,8 +335,8 @@
     {
       "addr": "0x08000658",
       "size": 392,
-      "name": "FUN_08000658",
-      "auto_named": true,
+      "name": "main_clock_setup",
+      "auto_named": false,
       "signature": "undefined FUN_08000658(void)",
       "thunk": false,
       "external": false
@@ -362,8 +362,8 @@
     {
       "addr": "0x08000880",
       "size": 1614,
-      "name": "FUN_08000880",
-      "auto_named": true,
+      "name": "cell_balance_update",
+      "auto_named": false,
       "signature": "undefined FUN_08000880(void)",
       "thunk": false,
       "external": false
@@ -380,9 +380,9 @@
     {
       "addr": "0x080010b4",
       "size": 272,
-      "name": "FUN_080010b4",
-      "auto_named": true,
-      "signature": "undefined FUN_080010b4(void)",
+      "name": "state_timer_0b",
+      "auto_named": false,
+      "signature": "undefined state_timer_0b(void)",
       "thunk": false,
       "external": false
     },
@@ -398,9 +398,9 @@
     {
       "addr": "0x0800122c",
       "size": 396,
-      "name": "FUN_0800122c",
-      "auto_named": true,
-      "signature": "undefined FUN_0800122c(void)",
+      "name": "state_timer_0c",
+      "auto_named": false,
+      "signature": "undefined state_timer_0c(void)",
       "thunk": false,
       "external": false
     },
@@ -416,9 +416,9 @@
     {
       "addr": "0x08001434",
       "size": 396,
-      "name": "FUN_08001434",
-      "auto_named": true,
-      "signature": "undefined FUN_08001434(void)",
+      "name": "state_timer_12",
+      "auto_named": false,
+      "signature": "undefined state_timer_12(void)",
       "thunk": false,
       "external": false
     },
@@ -434,8 +434,8 @@
     {
       "addr": "0x0800163c",
       "size": 562,
-      "name": "FUN_0800163c",
-      "auto_named": true,
+      "name": "state_timer_13",
+      "auto_named": false,
       "signature": "undefined FUN_0800163c(void)",
       "thunk": false,
       "external": false
@@ -470,8 +470,8 @@
     {
       "addr": "0x080019b8",
       "size": 358,
-      "name": "FUN_080019b8",
-      "auto_named": true,
+      "name": "state_timer_15",
+      "auto_named": false,
       "signature": "undefined FUN_080019b8(void)",
       "thunk": false,
       "external": false
@@ -488,9 +488,9 @@
     {
       "addr": "0x08001bb4",
       "size": 364,
-      "name": "FUN_08001bb4",
-      "auto_named": true,
-      "signature": "undefined FUN_08001bb4(void)",
+      "name": "state_timer_0d",
+      "auto_named": false,
+      "signature": "undefined state_timer_0d(void)",
       "thunk": false,
       "external": false
     },
@@ -506,9 +506,9 @@
     {
       "addr": "0x08001db0",
       "size": 384,
-      "name": "FUN_08001db0",
-      "auto_named": true,
-      "signature": "undefined FUN_08001db0(void)",
+      "name": "state_timer_0e",
+      "auto_named": false,
+      "signature": "undefined state_timer_0e(void)",
       "thunk": false,
       "external": false
     },
@@ -524,9 +524,9 @@
     {
       "addr": "0x08001fa4",
       "size": 378,
-      "name": "FUN_08001fa4",
-      "auto_named": true,
-      "signature": "undefined FUN_08001fa4(void)",
+      "name": "state_timer_14",
+      "auto_named": false,
+      "signature": "undefined state_timer_14(void)",
       "thunk": false,
       "external": false
     },
@@ -596,9 +596,9 @@
     {
       "addr": "0x08002dc4",
       "size": 894,
-      "name": "FUN_08002dc4",
-      "auto_named": true,
-      "signature": "undefined FUN_08002dc4(void)",
+      "name": "ymodem_receive",
+      "auto_named": false,
+      "signature": "undefined ymodem_receive(void)",
       "thunk": false,
       "external": false
     },
@@ -623,8 +623,8 @@
     {
       "addr": "0x0800325c",
       "size": 1314,
-      "name": "FUN_0800325c",
-      "auto_named": true,
+      "name": "fg_scan",
+      "auto_named": false,
       "signature": "undefined FUN_0800325c(void)",
       "thunk": false,
       "external": false
@@ -632,8 +632,8 @@
     {
       "addr": "0x080039c2",
       "size": 2860,
-      "name": "FUN_080039c2",
-      "auto_named": true,
+      "name": "fg_coulomb_update",
+      "auto_named": false,
       "signature": "undefined FUN_080039c2(void)",
       "thunk": false,
       "external": false
@@ -749,8 +749,8 @@
     {
       "addr": "0x080055a8",
       "size": 366,
-      "name": "FUN_080055a8",
-      "auto_named": true,
+      "name": "can_transmit",
+      "auto_named": false,
       "signature": "undefined FUN_080055a8(void)",
       "thunk": false,
       "external": false
@@ -776,8 +776,8 @@
     {
       "addr": "0x080057b0",
       "size": 666,
-      "name": "FUN_080057b0",
-      "auto_named": true,
+      "name": "main_loop",
+      "auto_named": false,
       "signature": "undefined FUN_080057b0(void)",
       "thunk": false,
       "external": false
@@ -1352,8 +1352,8 @@
     {
       "addr": "0x08009a80",
       "size": 22,
-      "name": "FUN_08009a80",
-      "auto_named": true,
+      "name": "fg_clear_status",
+      "auto_named": false,
       "signature": "undefined FUN_08009a80(void)",
       "thunk": false,
       "external": false
@@ -1487,8 +1487,8 @@
     {
       "addr": "0x0800adbc",
       "size": 272,
-      "name": "FUN_0800adbc",
-      "auto_named": true,
+      "name": "uart_resp_handler",
+      "auto_named": false,
       "signature": "undefined FUN_0800adbc(void)",
       "thunk": false,
       "external": false
@@ -2405,8 +2405,8 @@
     {
       "addr": "0x08011e98",
       "size": 12,
-      "name": "FUN_08011e98",
-      "auto_named": true,
+      "name": "veneer_11e98",
+      "auto_named": false,
       "signature": "undefined FUN_08011e98(void)",
       "thunk": false,
       "external": false
@@ -2612,8 +2612,8 @@
     {
       "addr": "0x080141e4",
       "size": 1834,
-      "name": "FUN_080141e4",
-      "auto_named": true,
+      "name": "crc8_for_smbus",
+      "auto_named": false,
       "signature": "undefined FUN_080141e4(void)",
       "thunk": false,
       "external": false
@@ -2693,8 +2693,8 @@
     {
       "addr": "0x0801518c",
       "size": 248,
-      "name": "FUN_0801518c",
-      "auto_named": true,
+      "name": "dma_irq_copy",
+      "auto_named": false,
       "signature": "undefined FUN_0801518c(void)",
       "thunk": false,
       "external": false

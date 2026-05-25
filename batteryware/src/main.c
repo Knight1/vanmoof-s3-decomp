@@ -128,3 +128,105 @@ void peripheral_init(bool arg)
         system_reset();
     }
 }
+
+/*
+ * Main super-loop — post-boot dispatch.
+ *
+ * Called after batteryware_main. Runs bms_setup, prints startup
+ * message, checks startup state (0x17/0x18 for UVP/OVP power-on),
+ * or dispatches to charge/discharge states based on voltage levels.
+ * Enters infinite loop dispatching state timer callbacks via jump table.
+ */
+void main_loop(void)
+{
+    extern void bms_setup(void);
+
+    batteryware_main();
+    bms_setup();
+
+    volatile uint32_t * const s_timer   = (volatile uint32_t *)0x20002C00;
+    volatile uint32_t * const s_flags   = (volatile uint32_t *)0x20002C44;
+    volatile uint32_t * const s_state   = (volatile uint32_t *)0x20002B58;
+    volatile uint8_t  * const s_st      = (volatile uint8_t  *)0x20002B58;
+
+    *s_timer = 0;
+    extern void uart_printf(char*);
+    uart_printf((char*)0x08016FD0);
+    uart_tx_flush();
+
+    *s_flags = *(volatile uint32_t *)0x20002C50;
+
+    if (*s_st == 0x17 || *s_st == 0x18) {
+        if (*s_st == 0x17) {
+            volatile uint32_t *s = (volatile uint32_t *)0x20002C48;
+            *s |= 0x40;
+        }
+        volatile uint32_t *s2 = (volatile uint32_t *)0x20002C54;
+        *s2 |= 0x8000;
+        state_handler_17_19();
+        uart_printf((char*)0x08016FEC);
+    } else {
+        bool btn = gpio_bit_read(0x50000000, 0x800);
+        if (btn) {
+            volatile uint32_t *s = (volatile uint32_t *)0x20002C54;
+            *s |= 8;
+            uart_printf((char*)0x08017030);
+        } else {
+            volatile uint32_t *s = (volatile uint32_t *)0x20002C54;
+            *s &= ~8U;
+            uart_printf((char*)0x08017010);
+        }
+
+        extern void veneer_11f48(void);
+        veneer_11f48();
+
+        volatile uint32_t *s_vol  = (volatile uint32_t *)0x20002C58;
+        volatile uint32_t *s_cfg  = (volatile uint32_t *)0x20002C5C;
+        volatile uint16_t *s_cmp1 = (volatile uint16_t *)0x20002C60;
+        volatile uint16_t *s_cmp2 = (volatile uint16_t *)0x20002C64;
+        volatile uint16_t *s_cmp3 = (volatile uint16_t *)0x20002C68;
+
+        if (*s_st == 10 && *s_cmp1 < *(volatile uint16_t *)((uint8_t *)s_vol + 0x46)) {
+            uart_printf((char*)0x08017044);
+            *s_state = 10;
+            *s_cfg |= 8;
+            state_handler_0a();
+        } else if (*s_st == 9 && *s_cmp1 < *(volatile uint16_t *)((uint8_t *)s_vol + 0x3E)) {
+            uart_printf((char*)0x0801705C);
+            *s_state = 9;
+            *s_cfg |= 4;
+            state_handler_09();
+        } else if (*s_st == 8 && *(volatile uint16_t *)((uint8_t *)s_vol + 0x36) < *s_cmp2) {
+            uart_printf((char*)0x08017074);
+            *s_state = 8;
+            *s_cfg |= 2;
+            state_handler_08();
+        } else if (*s_st == 7 && *(volatile uint16_t *)((uint8_t *)s_vol + 0x2E) < *s_cmp2) {
+            uart_printf((char*)0x0801708C);
+            *s_state = 7;
+            *s_cfg |= 1;
+            state_handler_07();
+        } else {
+            /* default dispatch via state lookup */
+            state_handler_01();
+        }
+    }
+
+    uart_tx_flush();
+
+    /* Infinite dispatch loop */
+    void (* const * const s_jt)(void) = (void (* const * const)(void))0x08005B30;
+    while (1) {
+        if ((((*s_flags >> 1) & 1) == 0) && ((*s_flags & 1) == 0) &&
+            (((*s_flags >> 2) & 1) == 0)) {
+            if (*s_state < 0x1A) {
+                s_jt[*s_state]();
+                return;
+            }
+            state_handler_01();
+        }
+        extern void uart_resp_handler(void);
+        uart_resp_handler();
+        uart_tx_isr();
+    }
+}

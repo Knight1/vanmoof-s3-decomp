@@ -50,8 +50,9 @@ void charge_mosfet_off(void);
 void charge_mosfet_on(void);
 void discharge_mosfet_set(bool on);
 
-/* YMODEM protocol — send response byte and reset state */
+/* YMODEM protocol */
 void ymodem_send_byte(uint8_t b);
+void ymodem_receive(uint8_t data);
 
 /* UART TX ring buffer — write single byte */
 void uart_putchar(uint8_t c);
@@ -76,6 +77,7 @@ void uart_check_overrun_error(void);
 void uart_puthex_byte(uint8_t b);
 void uart_puthex_16(uint16_t val);
 void uart_puts(char *str);
+void uart_resp_handler(void);
 
 /* Flash controller operations */
 uint32_t flash_enable_prefetch(void);
@@ -84,6 +86,7 @@ uint32_t flash_lock_opt(void);
 uint32_t flash_wait_ready(void *ctx);
 uint32_t flash_timeout_check(uint32_t param);
 bool peripheral_reset(void);
+uint32_t flash_verify_header(void);
 
 /* Flash page erase + interrupt priority setup */
 bool flash_page_erase(uint32_t timeout_ticks);
@@ -132,6 +135,9 @@ void capacity_decrement(uint32_t amount);
 uint32_t fg_read_field_8(void);
 uint32_t fg_read_field_11(void);
 void fg_read_loop(void *ctx);
+void fg_scan(void);
+void fg_coulomb_update(void);
+void cell_balance_update(void);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -153,6 +159,7 @@ void bms_set_state(uint8_t state);
 void batteryware_main(void);
 void peripheral_init(bool arg);
 void main_clock_setup(void);
+void main_loop(void);
 
 /* State machine handlers */
 void state_handler_01(void);
@@ -160,6 +167,14 @@ void state_handler_03_init(void);
 void state_handler_17_19(void);
 void state_flags_handler(uint8_t arg);
 void state_flags_handler_timer(void);
+void state_timer_0b(void);
+void state_timer_0c(void);
+void state_timer_12(void);
+void state_timer_13(void);
+void state_timer_0d(void);
+void state_timer_0e(void);
+void state_timer_14(void);
+void bms_state_machine(void);
 
 /* DMA operations */
 uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);
@@ -186,6 +201,7 @@ uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
+void memcpy_byte(void *dst, const void *src, uint32_t len);
 void memset_byte_copy(int dst, int src, int count);
 void memset_byte_fill(uint8_t *dst, uint8_t val, int count);
 
