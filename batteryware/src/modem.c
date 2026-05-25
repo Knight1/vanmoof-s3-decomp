@@ -234,3 +234,83 @@ void modem_init(void)
 
     *s_dma_ctx_init = 0;
 }
+
+/*
+ * SMBus/I²C transmit engine.
+ *
+ * Sets up a DMA/USART transfer context for I²C/SMBus communication.
+ * Returns status codes: 0 = success, 1 = null parameter, 2 = busy.
+ *
+ * Flow:
+ *   1. If tx_active flag (ctx[0x14]) is set → busy (2)
+ *   2. Sets tx_active = 1
+ *   3. Checks bus ready (status byte 1) or special mode (ctx[1]==0x104
+ *      with ctx[2]==0 and status 4)
+ *   4. Null-check: tx_buf, rx_buf, or count zero → error (1)
+ *   5. Sets status = 5 (if not already 4)
+ *   6. Configures DMA pointers: ctx[0xC]=tx_buf, ctx[0xE]=rx_buf,
+ *      sets transfer counts at ctx+0x36 and ctx+0x3E
+ *   7. Picks callback pairs based on ctx[3]:
+ *        - 0: tx_done=0x08015FA1, tx_err=0x08016057
+ *        - other: tx_done=0x080160E9, tx_err=0x0801618F
+ *   8. If ctx[10]==0x2000: masks *ctx with 0xFFFFDFFF, ORs 0x2000
+ *   9. Sets SR bits 5-7 (0xE0) and enables USART (bit 6)
+ *  10. Clears tx_active flag
+ */
+uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count)
+{
+    if (((uint8_t)ctx[0x14]) == 1) {
+        return 2;
+    }
+
+    *(volatile uint8_t *)(ctx + 0x14) = 1;
+
+    uint8_t status = *(volatile uint8_t *)((uintptr_t)ctx + 0x51);
+
+    if ((status == 1) ||
+        ((ctx[1] == 0x104) && (ctx[2] == 0) &&
+         (*(volatile uint8_t *)((uintptr_t)ctx + 0x51) == 4))) {
+
+        if ((tx_buf == 0) || (rx_buf == 0) || (count == 0)) {
+            *(volatile uint8_t *)(ctx + 0x14) = 0;
+            return 1;
+        }
+
+        if (*(volatile uint8_t *)((uintptr_t)ctx + 0x51) != 4) {
+            *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 5;
+        }
+
+        ctx[0x15] = 0;
+        ctx[0xC] = tx_buf;
+        *(volatile int16_t *)(ctx + 0xD) = count;
+        *(volatile int16_t *)((uintptr_t)ctx + 0x36) = count;
+        ctx[0xE] = rx_buf;
+        *(volatile int16_t *)(ctx + 0xF) = count;
+        *(volatile int16_t *)((uintptr_t)ctx + 0x3E) = count;
+
+        if (ctx[3] == 0) {
+            ctx[0x10] = (int)0x08015FA1;
+            ctx[0x11] = (int)0x08016057;
+        } else {
+            ctx[0x10] = (int)0x080160E9;
+            ctx[0x11] = (int)0x0801618F;
+        }
+
+        volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+        if (ctx[10] == 0x2000) {
+            reg[0] &= 0xFFFFDFFF;
+            reg[0] |= 0x2000;
+        }
+
+        reg[1] |= 0xE0;
+        if ((reg[0] & 0x40) != 0x40) {
+            reg[0] |= 0x40;
+        }
+    } else {
+        *(volatile uint8_t *)(ctx + 0x14) = 0;
+        return 2;
+    }
+
+    *(volatile uint8_t *)(ctx + 0x14) = 0;
+    return 0;
+}

@@ -277,7 +277,6 @@ uint32_t flash_page_program(int *ctx)
     ctx[0x1E] = 0x24;
     *(volatile uint32_t *)*ctx &= ~1U;
 
-    extern uint32_t flash_prescaler_setup(int *);
     if (flash_prescaler_setup(ctx) == 1) {
         return 1;
     }
@@ -294,6 +293,137 @@ uint32_t flash_page_program(int *ctx)
 
     extern uint32_t dma_completion_handler(uint32_t *);
     return dma_completion_handler(ctx);
+}
+
+/*
+ * Flash prescaler setup — configure clock-dependent baud rate register.
+ *
+ * Merges ctx configuration fields (ctx[2]-ctx[8]) into the base
+ * register, SR, and CR. Based on the base address (*ctx), determines
+ * which USART peripheral is being configured:
+ *   - 0x40013800 (USART1): from RCC CFGR bits 0-1
+ *   - 0x40004400 (USART2): from RCC CFGR bits 2-3
+ *   - 0x40004C00 (TIM6/TIM7): always 0
+ *   - 0x40005000 (TIM3): always 0
+ *   - 0x40004800 (USART3): from RCC CFGR bits 10-11
+ *   - otherwise: 0x10 (error)
+ *
+ * Resolves prescaler divisor (0-8) with two jump tables:
+ *   - ctx[7]==0x8000: table at 0x080181A0 (for USART1/2/3)
+ *   - otherwise: table at 0x080181C4 (for USART1/2/3)
+ * For USART3 base: directly calls fg_read_field_8/11, clock_prescaler_val
+ * or uses fixed constants 0xF42400 (16MHz) / 0x003D0900 (~4MHz).
+ * Validates baud rate (BRR) via __aeabi_ldiv0 and range checks,
+ * writes result to *ctx+0x0C.
+ *
+ * Returns 0 on success, 1 on error (bad range, null, etc).
+ */
+uint32_t flash_prescaler_setup(int *ctx)
+{
+    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000;
+    void (* const * const s_jt1)(void) = (void (* const * const)(void))0x080181A0;
+    void (* const * const s_jt2)(void) = (void (* const * const)(void))0x080181C4;
+    const uint32_t USART1_BASE = 0x40013800;  /* DAT_080118AC */
+    const uint32_t USART2_BASE = 0x40004400;  /* DAT_080118B4 */
+    const uint32_t USART3_BASE = 0x40004800;  /* DAT_080118A4 */
+    const uint32_t TIM67_BASE  = 0x40004C00;  /* DAT_080118B8 */
+    const uint32_t TIM3_BASE   = 0x40005000;  /* DAT_080118BC */
+    const uint32_t MAGIC_4MHZ  = 0x003D0900;  /* DAT_080118C0 */
+    const uint32_t MAGIC_16MHZ = 0x00F42400;  /* DAT_080118C4 */
+
+    uint8_t  error = 0;
+    uint8_t  prescaler = 0x10;
+    uint32_t divisor = 0;
+
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+
+    reg[0] = ctx[7] | ctx[2] | ctx[4] | ctx[5] | (reg[0] & 0xEFFF69F3);
+    reg[1] = ctx[3] | (reg[1] & 0xFFFFCFFF);
+    uint32_t cr_val = ctx[6];
+    if (*ctx != USART3_BASE) {
+        cr_val |= ctx[8];
+    }
+    reg[2] = cr_val | (reg[2] & 0xFFFFF4FF);
+
+    /* Determine prescaler based on which USART */
+    if (*ctx == USART1_BASE) {
+        uint32_t rcc_val = RCC[0x13 / 4] & 3;
+        if (rcc_val == 3)       prescaler = 8;
+        else if (rcc_val == 2)  prescaler = 2;
+        else if (rcc_val == 1)  prescaler = 4;
+        else if (rcc_val == 0)  prescaler = 1;
+    } else if (*ctx == USART2_BASE) {
+        uint32_t rcc_val = RCC[0x13 / 4] & 0xC;
+        if (rcc_val == 0xC)      prescaler = 8;
+        else if (rcc_val == 0x8) prescaler = 2;
+        else if (rcc_val == 0x4) prescaler = 4;
+        else if (rcc_val == 0x0) prescaler = 0;
+    } else if (*ctx == TIM67_BASE) {
+        prescaler = 0;
+    } else if (*ctx == TIM3_BASE) {
+        prescaler = 0;
+    } else if (*ctx == USART3_BASE) {
+        uint32_t rcc_val = RCC[0x13 / 4] & 0xC00;
+        if (rcc_val == 0xC00)      prescaler = 8;
+        else if (rcc_val == 0x800) prescaler = 2;
+        else if (rcc_val == 0x400) prescaler = 4;
+        else if (rcc_val == 0)     prescaler = 0;
+    }
+
+    if (*ctx != USART3_BASE) {
+        if (ctx[7] == 0x8000) {
+            if (prescaler < 9) {
+                extern uint32_t s_jt_call(uint32_t);
+                return s_jt_call((uint32_t)prescaler);
+            }
+            error = 1;
+        } else {
+            if (prescaler < 9) {
+                extern uint32_t s_jt_call(uint32_t);
+                return s_jt_call((uint32_t)prescaler);
+            }
+            error = 1;
+        }
+        goto done;
+    }
+
+    /* USART3: compute divisor directly */
+    if (prescaler == 8) {
+        divisor = 0x8000;
+    } else if (prescaler == 4) {
+        divisor = (uint32_t)clock_prescaler_val();
+    } else if (prescaler == 2) {
+        if ((RCC[0] & 0x10) == 0) {
+            divisor = MAGIC_16MHZ;
+        } else {
+            divisor = MAGIC_4MHZ;
+        }
+    } else if (prescaler == 0) {
+        divisor = fg_read_field_8();
+    } else {
+        divisor = 0;
+        error = 1;
+    }
+
+    if (divisor != 0) {
+        if ((divisor < (uint32_t)(ctx[1] * 3)) ||
+            ((uint32_t)(ctx[1] * 0x1000) < divisor)) {
+            error = 1;
+        } else {
+            uint32_t baud = (uint32_t)((uint64_t)(((uint32_t)ctx[1] >> 1) + divisor * 0x100) /
+                                       (uint64_t)ctx[1]);
+            if ((baud < 0x300) || (baud > 0xFFFFF)) {
+                error = 1;
+            } else {
+                reg[3] = baud;
+            }
+        }
+    }
+
+done:
+    ctx[0x19] = 0;
+    ctx[0x1A] = 0;
+    return (uint32_t)error;
 }
 
 /*

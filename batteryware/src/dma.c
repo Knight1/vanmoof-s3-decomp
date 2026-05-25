@@ -361,6 +361,68 @@ void dma_channel_config(int *ctx)
 }
 
 /*
+ * DMA/USART peripheral initialization.
+ *
+ * NULL check → returns 1.
+ * If ctx[9] == 0: clears ctx[7] (unless ctx[1]==0x104)
+ * Otherwise: zeroes ctx[4] and ctx[5]
+ * If status byte (ctx+0x51) is 0: clears tx_active, calls ISR ack thunk.
+ * Sets status = 2, clears bit 6 in base, then merges all config fields
+ * (ctx[1]-ctx[10]) into the base register and SR register.
+ * If ctx[10]==0x2000: copies ctx[11] bits 0-15 to *ctx+0x10.
+ * Masks *ctx+0x1C with 0xFFFFF7FF, zeroes ctx[0x15], sets status=1.
+ * Returns 0 on success.
+ */
+uint32_t dma_usart_init(int *ctx)
+{
+    if (ctx == NULL) {
+        return 1;
+    }
+
+    if (ctx[9] == 0) {
+        if (ctx[1] != 0x104) {
+            ctx[7] = 0;
+        }
+    } else {
+        ctx[4] = 0;
+        ctx[5] = 0;
+    }
+
+    if (*(volatile uint8_t *)((uintptr_t)ctx + 0x51) == 0) {
+        *(volatile uint8_t *)(ctx + 0x14) = 0;
+        extern void modem_isr_ack_dup(void);
+        modem_isr_ack_dup();
+    }
+
+    *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 2;
+
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[0] &= ~0x40U;
+
+    reg[0] = (ctx[10] & 0x2000) |
+             (ctx[1]  & 0x104)  |
+             (ctx[2]  & 0x8400) |
+             (ctx[3]  & 0x800)  |
+             (ctx[4]  & 0x2)    |
+             (ctx[5]  & 0x1)    |
+             (ctx[6]  & 0x200)  |
+             (ctx[7]  & 0x38)   |
+             (ctx[8]  & 0x80);
+
+    reg[1] = (ctx[9] & 0x10) | ((uint32_t)(ctx[6] >> 16) & 4);
+
+    if (ctx[10] == 0x2000) {
+        reg[4] = ctx[11] & 0xFFFF;
+    }
+
+    reg[7] &= 0xFFFFF7FF;
+    ctx[0x15] = 0;
+    *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+
+    return 0;
+}
+
+/*
  * DMA byte transfer handler — reads from peripheral to memory.
  *
  * Called during a DMA byte-by-byte transfer: reads one byte from

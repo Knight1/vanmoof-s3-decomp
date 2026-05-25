@@ -63,6 +63,7 @@ void modem_init(void);
 void modem_send_2bytes(uint8_t b1, uint8_t b2);
 void temp_offset_send(uint8_t raw_temp);
 uint8_t bus_ready_check(int ctx);
+uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -93,6 +94,7 @@ uint32_t flash_page_program(int *ctx);
 void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
 void flash_program_init(void *ctx);
+uint32_t flash_prescaler_setup(int *ctx);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
@@ -169,6 +171,7 @@ void dma_transfer_done(int *ctx);
 void dma_channel_config(int *ctx);
 uint32_t dma_completion_handler(uint32_t *ctx);
 uint32_t dma_wait_done(int timeout);
+uint32_t dma_usart_init(int *ctx);
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
@@ -181,6 +184,7 @@ uint32_t get_tick_ms(uint32_t *out);
 uint32_t tick_get(void);
 uint32_t tick_counter_read(void);
 int32_t  clock_prescaler_val(void);
+uint32_t rcc_reconfigure(uint32_t *param);
 
 /* NVIC interrupt enable */
 void nvic_enable_irq(uint8_t irqn);

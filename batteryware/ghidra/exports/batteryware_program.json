@@ -2072,8 +2072,8 @@
     {
       "addr": "0x0800fae0",
       "size": 424,
-      "name": "FUN_0800fae0",
-      "auto_named": true,
+      "name": "gpio_pin_reset",
+      "auto_named": false,
       "signature": "undefined FUN_0800fae0(void)",
       "thunk": false,
       "external": false
@@ -2135,8 +2135,8 @@
     {
       "addr": "0x080107e4",
       "size": 312,
-      "name": "FUN_080107e4",
-      "auto_named": true,
+      "name": "clock_prescaler_val",
+      "auto_named": false,
       "signature": "undefined FUN_080107e4(void)",
       "thunk": false,
       "external": false
@@ -2171,8 +2171,8 @@
     {
       "addr": "0x0801099c",
       "size": 640,
-      "name": "FUN_0801099c",
-      "auto_named": true,
+      "name": "rcc_reconfigure",
+      "auto_named": false,
       "signature": "undefined FUN_0801099c(void)",
       "thunk": false,
       "external": false
@@ -2180,8 +2180,8 @@
     {
       "addr": "0x08010c48",
       "size": 310,
-      "name": "FUN_08010c48",
-      "auto_named": true,
+      "name": "dma_usart_init",
+      "auto_named": false,
       "signature": "undefined FUN_08010c48(void)",
       "thunk": false,
       "external": false

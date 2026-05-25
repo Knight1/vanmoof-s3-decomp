@@ -26,14 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 93 |
+| pending      | 85 |
 | in-progress  |   0 |
-| named        |  12 |
-| decomp-c     | 141 |
+| named        |   6 |
+| decomp-c     | 151 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
+_Total functions: 281. 151 decomp-c, 6 named, 85 pending (`FUN_*`).
 ## Functions
 
 | Addr | Size | Name | Status | Notes |
@@ -96,7 +96,7 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x08005738` | 72 | `state_handler_16` | decomp-c | State machine handler → bms_set_state(0x16) |
 | `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
 | `0x080057b0` | — | `FUN_080057b0` | pending | |
-| `0x08005b34` | — | `FUN_08005b34` | pending | |
+| `0x08005b34` | — | `bms_set_state` | named | BMS state machine dispatch + parameter init |
 | `0x08006328` | — | `FUN_08006328` | pending | |
 | `0x08006336` | 10 | `system_reset` | decomp-c | Wrapper around nvic_system_reset |
 | `0x08006340` | 142 | `flash_verify_header` | decomp-c | Firmware image header validation + CRC check |
@@ -121,7 +121,7 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x08007228` | 26 | `nvic_system_reset_dup` | decomp-c | Duplicate of nvic_system_reset from a different translation unit |
 | `0x0800724c` | 36 | `uart_check_parity_error` | decomp-c | USART1 parity error detection + flag set |
 | `0x08007278` | 40 | `uart_check_overrun_error` | decomp-c | USART1 overrun error detection |
-| `0x080072a8` | 156 | `batteryware_main` | named | Main entry — startup sequence after Reset_Handler |
+| `0x080072a8` | 156 | `batteryware_main` | decomp-c | Main entry — startup sequence after Reset_Handler |
 | `0x08007368` | — | `FUN_08007368` | pending | |
 | `0x080078c8` | — | `FUN_080078c8` | pending | |
 | `0x08007cf8` | 64 | `memcpy_byte` | decomp-c | Byte-by-byte memcpy (ldrb/strb) |
@@ -240,7 +240,7 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x0800f6f0` | 166 | `spi_register_write` | decomp-c | SPI byte/halfword/word write with mutex |
 | `0x0800f7a0` | 58 | `dma_channel_reset` | decomp-c | Reset single DMA channel (clear + reset bits) |
 | `0x0800f7e4` | — | `FUN_0800f7e4` | pending | |
-| `0x0800fae0` | — | `FUN_0800fae0` | pending | |
+| `0x0800fae0` | — | `gpio_pin_reset` | decomp-c | Multi-pin GPIO mode reset (MODER/AFR/OSPEEDR) |
 | `0x0800fca4` | — | `FUN_0800fca4` | pending | |
 | `0x0800fcde` | 58 | `gpio_bit_write` | decomp-c | Atomic GPIO bit set/clear via BSRR/BRR |
 | `0x0800fca4` | 36 | `gpio_bit_read` | decomp-c | GPIO input read via IDR register |
@@ -248,16 +248,16 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x0800fdac` | — | `FUN_0800fdac` | pending | |
 | `0x0801053e` | — | `FUN_0801053e` | pending | |
 | `0x08010554` | — | `FUN_08010554` | pending | |
-| `0x080107e4` | — | `FUN_080107e4` | pending | |
+| `0x080107e4` | — | `clock_prescaler_val` | decomp-c | APB clock prescaler value computation |
 | `0x08010930` | — | `tick_counter_read` | decomp-c | Raw tick counter reader (@ 0x200000C8) |
 | `0x08010944` | 34 | `fg_read_field_8` | decomp-c | Fuel gauge register field read (shift 8) |
 | `0x08010970` | 34 | `fg_read_field_11` | decomp-c | Fuel gauge register field read (shift 11) |
-| `0x0801099c` | — | `FUN_0801099c` | pending | |
-| `0x08010c48` | — | `FUN_08010c48` | pending | |
+| `0x0801099c` | — | `rcc_reconfigure` | decomp-c | RCC clock peripheral reconfiguration |
+| `0x08010c48` | — | `dma_usart_init` | decomp-c | DMA/USART peripheral init with clock config |
 | `0x08010d84` | 82 | `modem_deinit` | decomp-c | USART/modem deinit + register cleanup |
 | `0x08010dd6` | — | `modem_isr_ack_dup` | decomp-c | Empty ISR acknowledgment thunk (duplicate) |
 | `0x08010de6` | — | `modem_isr_ack` | decomp-c | Empty ISR acknowledgment thunk |
-| `0x08010df8` | — | `smbus_transmit` | named | SMBus transmit engine (param setup) |
+| `0x08010df8` | — | `smbus_transmit` | decomp-c | SMBus transmit engine (param setup) |
 | `0x08010f78` | — | `modem_restart_thunk` | decomp-c | Empty modem restart ROP call site |
 | `0x08010f88` | — | `bus_ready_check` | decomp-c | Bus status byte read (ctx+0x51) |
 | `0x08010fa0` | 120 | `dma_byte_handler` | decomp-c | DMA byte-by-byte transfer callback (periph→mem) |
@@ -271,7 +271,7 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x080113c4` | — | `dma_transfer_done` | decomp-c | DMA post-transfer completion handler |
 | `0x080114ec` | 164 | `flash_page_program` | decomp-c | Flash page program via DMA |
 | `0x08011594` | — | `flash_program_init` | decomp-c | Empty flash program init thunk |
-| `0x080115a4` | — | `flash_prescaler_setup` | named | Flash clock-prescaler config dispatch |
+| `0x080115a4` | — | `flash_prescaler_setup` | decomp-c | Flash clock-prescaler config dispatch |
 | `0x08011b20` | — | `dma_channel_config` | decomp-c | DMA channel register bit-set configuration |
 | `0x08011c88` | 140 | `dma_completion_handler` | decomp-c | DMA transfer completion + status flag check |
 | `0x08011d18` | — | `FUN_08011d18` | pending | |
@@ -295,7 +295,7 @@ _Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 | `0x08011f88` | — | `FUN_08011f88` | pending | |
 | `0x080131f8` | 128 | `Reset_Handler` | named | Vector reset entry — copies .data, zeroes .bss, calls main |
 | `0x0801324c` | 502 | `NMI_Handler` | named | Shared default handler (also NMI, PendSV, SVC, and most IRQ traps) |
-| `0x08013800` | 90 | `rsoc_set` | named | Relative SoC percentage setter |
+| `0x08013800` | 90 | `rsoc_set` | decomp-c | Relative SoC percentage setter |
 | `0x08013860` | — | `FUN_08013860` | pending | |
 | `0x080138ac` | — | `FUN_080138ac` | pending | |
 | `0x08013d88` | 198 | `fg_cell_balance` | decomp-c | Cell voltage balancing: average pairs within ±0x31 range |
