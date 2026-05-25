@@ -129,3 +129,59 @@ void fg_ovp2_check(void)
         }
     }
 }
+
+/* Over-current protection counters */
+static volatile uint16_t * const s_discharge_oc_counter = (volatile uint16_t *)0x20002800;
+static volatile uint16_t * const s_charge_oc_counter    = (volatile uint16_t *)0x200028A0;
+
+/* Fuel gauge status register */
+static volatile uint8_t * const s_fg_status_reg = (volatile uint8_t *)0x20002870;
+
+#define FAULT_DISCHARGE_OC  0x40
+#define FAULT_CHARGE_OC     0x80
+
+/*
+ * Discharge over-current check.
+ *
+ * Monitors a threshold from s_protection_cfg[0x98]. If the discharge
+ * current stays above threshold for the debounce period, sets
+ * FAULT_DISCHARGE_OC in g_fault_flags.
+ */
+void fg_discharge_oc_check(void)
+{
+    if ((*s_fg_status_reg & 2) == 2) {
+        *s_discharge_oc_counter = 0;
+    } else if (*s_discharge_oc_counter < *(volatile uint16_t *)(s_protection_cfg + 0x98)) {
+        *s_discharge_oc_counter = 0;
+    } else {
+        uint16_t count = *s_discharge_oc_counter + 1;
+        *s_discharge_oc_counter = count;
+        uint16_t debounce = *(volatile uint16_t *)(s_protection_cfg + 0x96) / DEBOUNCE_DIVISOR;
+        if (debounce <= count) {
+            *g_fault_flags |= FAULT_DISCHARGE_OC;
+        }
+    }
+}
+
+/*
+ * Charge over-current check.
+ *
+ * Monitors a threshold from s_protection_cfg[0x9A]. If the charge
+ * current stays above threshold for the debounce period, sets
+ * FAULT_CHARGE_OC in g_fault_flags.
+ */
+void fg_charge_oc_check(void)
+{
+    if ((*s_fg_status_reg & 1) == 1) {
+        *s_charge_oc_counter = 0;
+    } else if (*s_charge_oc_counter < *(volatile uint16_t *)(s_protection_cfg + 0x9A)) {
+        *s_charge_oc_counter = 0;
+    } else {
+        uint16_t count = *s_charge_oc_counter + 1;
+        *s_charge_oc_counter = count;
+        uint16_t debounce = *(volatile uint16_t *)(s_protection_cfg + 0x96) / DEBOUNCE_DIVISOR;
+        if (debounce <= count) {
+            *g_fault_flags |= FAULT_CHARGE_OC;
+        }
+    }
+}

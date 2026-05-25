@@ -57,12 +57,16 @@ extern volatile uint32_t * const g_fault_flags;
 #define FAULT_UVP2  0x02
 #define FAULT_OVP1  0x04
 #define FAULT_OVP2  0x08
+#define FAULT_DISCHARGE_OC  0x40
+#define FAULT_CHARGE_OC     0x80
 
 /* Under/over-voltage protection checks */
 void fg_uvp1_check(void);
 void fg_uvp2_check(void);
 void fg_ovp1_check(void);
 void fg_ovp2_check(void);
+void fg_discharge_oc_check(void);
+void fg_charge_oc_check(void);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);

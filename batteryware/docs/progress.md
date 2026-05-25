@@ -26,14 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 198 |
+| pending      | 188 |
 | in-progress  |   0 |
-| named        |  48 |
-| decomp-c     |  35 |
+| named        |  56 |
+| decomp-c     |  37 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
+_Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 
 ## Functions
 
@@ -138,8 +138,8 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x08008f6c` | 56 | `hex_to_nibble` | decomp-c | ASCII hex char → nibble (reverse of nibble_to_hex) |
 | `0x08008fa4` | — | `FUN_08008fa4` | pending | |
 | `0x08009084` | 64 | `dma_init` | named | DMA channel configuration + reset on fail |
-| `0x080090dc` | — | `FUN_080090dc` | pending | |
-| `0x0800915c` | — | `FUN_0800915c` | pending | |
+| `0x080090dc` | 110 | `flash_dma_start` | named | Flash DMA transfer start with retry + reset on fail |
+| `0x0800915c` | 106 | `dma_compare` | named | DMA transfer compare (0x40-byte chunks) |
 | `0x080091d4` | — | `FUN_080091d4` | pending | |
 | `0x080092b8` | — | `FUN_080092b8` | pending | |
 | `0x080093a6` | 108 | `memcmp_verify` | named | Byte-verify with per-byte spin-wait (I2C/config check) |
@@ -154,10 +154,10 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x080096cc` | 106 | `fg_ovp2_check` | decomp-c | Over-voltage protection 2 monitor |
 | `0x08009748` | 86 | `fg_threshold_check` | named | Fuel gauge threshold comparison + flag set |
 | `0x080097b0` | 76 | `fg_alert_monitor` | named | Fuel gauge alert pin monitor |
-| `0x0800980c` | — | `FUN_0800980c` | pending | |
-| `0x0800989c` | — | `FUN_0800989c` | pending | |
+| `0x0800980c` | 118 | `fg_discharge_oc_check` | decomp-c | Discharge over-current monitor |
+| `0x0800989c` | 118 | `fg_charge_oc_check` | decomp-c | Charge over-current monitor |
 | `0x0800992c` | 52 | `config_resend_all` | named | Re-send config data via memcpy-verify |
-| `0x0800997c` | — | `FUN_0800997c` | pending | |
+| `0x0800997c` | 128 | `fg_charge_status` | named | Charge/discharge status flags from fuel gauge |
 | `0x08009a10` | 46 | `fg_status_flag_get` | decomp-c | Fuel gauge status flag read |
 | `0x08009a44` | 54 | `fg_status_flag2_get` | decomp-c | Fuel gauge status flag 2 (bit 1) |
 | `0x08009a80` | — | `FUN_08009a80` | pending | |
@@ -214,7 +214,7 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x0800e878` | — | `FUN_0800e878` | pending | |
 | `0x0800e984` | — | `FUN_0800e984` | pending | |
 | `0x0800ea44` | — | `FUN_0800ea44` | pending | |
-| `0x0800eb04` | — | `FUN_0800eb04` | pending | |
+| `0x0800eb04` | 140 | `flash_wait_ready` | named | Flash operation wait-for-complete with timeout |
 | `0x0800eb90` | 54 | `delay_us` | decomp-c | Calibrated busy-wait microsecond delay |
 | `0x0800ebd0` | 48 | `nvic_enable_irq` | decomp-c | NVIC ISER bit set |
 | `0x0800ec04` | 60 | `nvic_enable_irq_dsb` | decomp-c | NVIC ISER bit set + DSB/ISB |
@@ -229,9 +229,9 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x0800eecc` | — | `FUN_0800eecc` | pending | |
 | `0x0800ef5a` | — | `FUN_0800ef5a` | pending | |
 | `0x0800eff8` | — | `FUN_0800eff8` | pending | |
-| `0x0800f11a` | — | `FUN_0800f11a` | pending | |
+| `0x0800f11a` | 110 | `memcpy_halfword` | named | Halfword-aligned memcpy with odd-byte tail |
 | `0x0800f188` | — | `FUN_0800f188` | pending | |
-| `0x0800f264` | — | `FUN_0800f264` | pending | |
+| `0x0800f264` | 110 | `flash_word_write` | named | Single 32-bit word flash write |
 | `0x0800f2dc` | — | `FUN_0800f2dc` | pending | |
 | `0x0800f384` | 36 | `flash_enable_prefetch` | decomp-c | FLASH_ACR prefetch + latency enable |
 | `0x0800f3ac` | — | `FUN_0800f3ac` | pending | |
@@ -245,7 +245,7 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x0800fca4` | — | `FUN_0800fca4` | pending | |
 | `0x0800fcde` | 58 | `gpio_bit_write` | decomp-c | Atomic GPIO bit set/clear via BSRR/BRR |
 | `0x0800fca4` | 36 | `gpio_bit_read` | decomp-c | GPIO input read via IDR register |
-| `0x0800fd18` | — | `FUN_0800fd18` | pending | |
+| `0x0800fd18` | 136 | `dma_flash_start` | named | DMA-based flash write with 0x2A timeout |
 | `0x0800fdac` | — | `FUN_0800fdac` | pending | |
 | `0x0801053e` | — | `FUN_0801053e` | pending | |
 | `0x08010554` | — | `FUN_08010554` | pending | |
@@ -261,7 +261,7 @@ _Total functions: 281. 83 decomp-c/named, 198 pending (`FUN_*`)._
 | `0x08010df8` | — | `FUN_08010df8` | pending | |
 | `0x08010f78` | — | `FUN_08010f78` | pending | |
 | `0x08010f88` | — | `FUN_08010f88` | pending | |
-| `0x08010fa0` | — | `FUN_08010fa0` | pending | |
+| `0x08010fa0` | 120 | `dma_byte_handler` | named | DMA byte-by-byte transfer callback |
 | `0x0801101c` | — | `FUN_0801101c` | pending | |
 | `0x08011056` | — | `FUN_08011056` | pending | |
 | `0x080110e8` | — | `FUN_080110e8` | pending | |
