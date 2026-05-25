@@ -5,13 +5,6 @@
  * (~400 B) is a full YModem protocol state machine with CRC-16
  * validation, 1 KB block support, and CAN abort handling.
  *
- * This file provides the outer `ymodem_receive` wrapper (OEM
- * 0x000101B0, 80 B) that initialises the transfer state, calls
- * the engine, and logs the result. The engine itself
- * (ymodem_engine_receive) is a ROM-like thunk — in the OEM it's a
- * direct call; here it's a forward declaration that will resolve
- * when the YModem engine body lands.
- *
  * Called by:
  *   cmd_audio_upload   — receives audio clips to ext-flash
  *   cmd_pack_upload    — receives PACK files to ext-flash
@@ -22,97 +15,249 @@
 
 #include "bleware.h"
 
-/* YModem transfer state struct — OEM at RAM 0x2000A630 (DAT_000102C8).
- * Written by ymodem_receive before launching the engine. */
+/* ---- Protocol constants --------------------------------------------- */
+
+#define SOH   0x01   /* 128-byte block */
+#define STX   0x02   /* 1024-byte block */
+#define EOT   0x04   /* end of transfer */
+#define ACK   0x06   /* acknowledge */
+#define NAK   0x15   /* negative acknowledge */
+#define CAN   0x18   /* cancel */
+#define CRC_C 0x43   /* 'C' — request CRC-16 transfer */
+
+#define BLOCK_SMALL  128u
+#define BLOCK_LARGE  1024u
+#define MAX_RETRIES  5
+
+/* ---- State and callback types --------------------------------------- */
+
 struct ymodem_state {
-    uint32_t   dst_offset;    /* +0x00 — ext-flash destination */
-    uint32_t   max_size;      /* +0x04 — max bytes to accept */
-    uint32_t   bytes_rx;      /* +0x08 — received byte count (written by engine) */
-    uint8_t    pad0c[0x18];   /* +0x0C — engine scratch */
+    uint32_t   dst_offset;
+    uint32_t   max_size;
+    uint32_t   bytes_rx;
+    uint8_t    pad[0x18];
 };
 
-extern struct ymodem_state g_ymodem_state;   /* DAT_000102C8 = 0x2000A630 */
+typedef int  (*ym_read_fn_t)(uint8_t *buf, int count, int timeout_ms);
+typedef void (*ym_putc_fn_t)(uint8_t c);
+typedef int  (*ym_open_cb_t)(int is_data, void *arg);
 
-/* YModem engine — full protocol state machine. Defined elsewhere;
- * for now, declared extern (will link when the engine body lands). */
-extern int ymodem_engine_receive(void *callbacks, void *open_cb,
-                                 uint8_t *scratch);
+/* ---- CRC-16/Modbus (same poly as crc16_modbus in crc32.c) ----------- */
 
-/* Callback table entries — OEM literal pool at 0x000102CC..0x000102DC */
-extern void *g_ymodem_open_cb;     /* PTR_LAB_00019b10 = open/write callback */
-extern void *g_ymodem_read_fn;     /* PTR_FUN_00027014 = UART read byte */
-extern void *g_ymodem_flush_fn;    /* PTR_FUN_0002678e = UART flush */
-extern void *g_ymodem_putc_fn;     /* PTR_LAB_00027752 = UART write byte */
-extern void *g_ymodem_send_fn;     /* PTR_LAB_0002774e = UART send block */
+static uint16_t ymodem_crc16(const uint8_t *buf, int len)
+{
+    uint16_t crc = 0;
+    while (len--) {
+        crc ^= (uint16_t)*buf++ << 8;
+        for (int i = 0; i < 8; i++) {
+            if (crc & 0x8000u) {
+                crc = (uint16_t)((crc << 1) ^ 0x1021u);
+            } else {
+                crc = (uint16_t)(crc << 1);
+            }
+        }
+    }
+    return crc;
+}
 
-/* Status strings for YModem return codes — OEM flash 0x000102E4 table */
-static const char * const s_ymodem_status[] = {
-    NULL,          /*  0 = success (no string) */
-    "timeout",     /* -1 */
-    "cancel",      /* -2 */
-    "error",       /* -3 */
-    "nomem",       /* -4 */
+/* ---- Engine --------------------------------------------------------- */
+
+enum {
+    YM_OK      =  0,
+    YM_TIMEOUT = -1,
+    YM_CANCEL  = -2,
+    YM_ERROR   = -3,
+    YM_NOMEM   = -4,
 };
 
-/* Receive a file via YModem into ext-flash at `dst_offset`, capped at
- * `max_size` bytes. Returns 0 on success, -1 on failure.
- * OEM @ 0x000101B0 (80 B). */
+int ymodem_engine_receive(ym_read_fn_t  read_fn,
+                           ym_putc_fn_t  putc_fn,
+                           ym_open_cb_t  open_cb,
+                           struct ymodem_state *state,
+                           uint8_t      *scratch)
+{
+    uint8_t *buf;
+    int      blk_seq = 0;
+    int      started = 0;
+    int      retries;
+    int      blk_size;
+    int      header;
+    int      rd;
+    int      rc;
+
+    buf = (uint8_t *)monitor_alloc(0x406);
+    if (buf == NULL) {
+        return YM_NOMEM;
+    }
+
+    putc_fn('C');
+
+    for (;;) {
+        retries  = 0;
+        blk_size = 0;
+
+        /* wait for a block header (SOH/STX/EOT/CAN/ESC) */
+        for (;;) {
+            rd = read_fn(buf, 1, 1000);
+            if (rd < 1) {
+                /* timeout */
+                if (started && retries > 0 && (retries % 20) == 0) {
+                    putc_fn(NAK);
+                    putc_fn('C');
+                }
+                if (retries >= MAX_RETRIES) {
+                    monitor_free(buf);
+                    return YM_TIMEOUT;
+                }
+                retries++;
+                if (blk_size == 0) {
+                    putc_fn('C');
+                }
+                continue;
+            }
+
+            header = buf[0];
+
+            if (header == SOH) {
+                blk_size = BLOCK_SMALL;
+                break;
+            }
+            if (header == STX) {
+                blk_size = BLOCK_LARGE;
+                break;
+            }
+            if (header == EOT) {
+                /* sender wants to end — ACK and return */
+                rd = read_fn(buf, 1, 1000);
+                if (rd == 1 && buf[0] == EOT) {
+                    putc_fn(ACK);
+                    /* second EOT ack */
+                }
+                putc_fn(ACK);
+                monitor_free(buf);
+                return YM_OK;
+            }
+            if (header == CAN) {
+                /* sender cancelled — read second CAN if present */
+                rd = read_fn(buf, 1, 1000);
+                if (rd == 1 && buf[0] == CAN) {
+                    /* confirmed cancel */
+                }
+                putc_fn(ACK);
+                monitor_free(buf);
+                return YM_CANCEL;
+            }
+            if (header == 0x1B) {
+                /* ESC — abort */
+                putc_fn(CAN);
+                monitor_free(buf);
+                return YM_CANCEL;
+            }
+            /* unknown byte — ignore */
+        }
+
+        /* read block number, complement, data, CRC */
+        int total = blk_size + 4; /* seq + seq_cmp + data + 2-byte CRC */
+        buf[0] = (uint8_t)header;
+        rd = read_fn(buf + 1, total, 5000);
+
+        if (rd < total || buf[2] != (uint8_t)(buf[1] ^ 0xFFu)) {
+            /* bad block — NAK and retry */
+            putc_fn(NAK);
+            blk_size = -1;
+            continue;
+        }
+
+        if (buf[1] == (uint8_t)blk_seq) {
+            /* duplicate of the last block — ACK and skip */
+            putc_fn(ACK);
+            continue;
+        }
+
+        if (buf[1] != (uint8_t)((blk_seq + 1) & 0xFF)) {
+            /* out-of-sequence block — ACK and ignore */
+            putc_fn(ACK);
+            continue;
+        }
+
+        /* verify CRC */
+        uint16_t crc_calc = ymodem_crc16(buf + 3, blk_size);
+        uint16_t crc_rcvd = (uint16_t)(buf[3 + blk_size] << 8)
+                          | (uint16_t)(buf[3 + blk_size + 1]);
+        if (crc_calc != crc_rcvd) {
+            putc_fn(NAK);
+            continue;
+        }
+
+        /* good block — dispatch */
+        if (blk_seq == 0) {
+            /* block 0: filename + size */
+            const uint8_t *fn = buf + 3;
+            if (fn[0] == 0) {
+                /* empty filename — end of batch */
+                putc_fn(ACK);
+                monitor_free(buf);
+                return YM_OK;
+            }
+            rc = open_cb(0, (void *)(uintptr_t)fn);
+            if (rc != 0) {
+                putc_fn(CAN);
+                monitor_free(buf);
+                return YM_ERROR;
+            }
+        } else {
+            /* data block */
+            rc = open_cb(1, (void *)(uintptr_t)(buf + 3));
+            if (rc != 0) {
+                putc_fn(CAN);
+                monitor_free(buf);
+                return YM_ERROR;
+            }
+        }
+
+        putc_fn(ACK);
+        blk_seq++;
+        started = 1;
+    }
+}
+
+/* ---- Public wrapper ------------------------------------------------- */
+
+extern struct ymodem_state g_ymodem_state;
+
 int ymodem_receive(uint32_t dst_offset, uint32_t max_size)
 {
+    extern void *g_ymodem_open_cb;
+    extern void *g_ymodem_read_fn;
+    extern void *g_ymodem_putc_fn;
+
     int rc;
 
     g_ymodem_state.dst_offset = dst_offset;
     g_ymodem_state.max_size   = max_size;
 
-    /* OEM calls FUN_00027542(500) — likely a 500 ms delay before starting */
-    /* OEM calls FUN_000255D4() — likely a UART flush / drain */
-
     monitor_log("source/filetransfer.c", 0x9E, NULL, 8,
                 "YModem start");
 
-    rc = ymodem_engine_receive(&g_ymodem_state, g_ymodem_open_cb,
-                               (uint8_t *)&g_ymodem_state.pad0c);
+    rc = ymodem_engine_receive((ym_read_fn_t)g_ymodem_read_fn,
+                               (ym_putc_fn_t)g_ymodem_putc_fn,
+                               (ym_open_cb_t)g_ymodem_open_cb,
+                               &g_ymodem_state,
+                               (uint8_t *)&g_ymodem_state.pad);
 
     if (rc == 0) {
-        /* OEM calls FUN_00027542(500) — 500 ms post-receive delay */
         monitor_log("source/filetransfer.c", 0xAB, NULL, 8,
                     "YModem successfully received %d bytes",
                     g_ymodem_state.bytes_rx);
         return 0;
     }
 
-    /* Map negative return codes through the status table */
+    static const char * const status_strs[] = {
+        NULL, "timeout", "cancel", "error", "nomem"
+    };
     int idx = -rc;
-    const char *status_str = "unknown";
-    if (idx > 0 && idx <= 4) {
-        status_str = s_ymodem_status[idx];
-    }
-
+    const char *s = (idx > 0 && idx <= 4) ? status_strs[idx] : "unknown";
     monitor_log("source/filetransfer.c", 0xA2, NULL, 2,
-                "YModem returned with status: %s", status_str);
-
-    /* OEM calls FUN_00027542(500) — delay */
-    /* OEM calls FUN_000255D4() — UART flush */
+                "YModem returned with status: %s", s);
     return -1;
-}
-
-/* ---- Data globals (weak — overridden when full engine lands) ------- */
-
-__attribute__((weak))
-struct ymodem_state g_ymodem_state;
-
-__attribute__((weak)) void *g_ymodem_open_cb;
-__attribute__((weak)) void *g_ymodem_read_fn;
-__attribute__((weak)) void *g_ymodem_flush_fn;
-__attribute__((weak)) void *g_ymodem_putc_fn;
-__attribute__((weak)) void *g_ymodem_send_fn;
-
-/* ymodem_engine_receive — weak stub until the full engine is decoded.
- * The real engine at OEM 0x00008E50 is ~400 B of protocol state
- * machine. This stub just returns -3 (error). */
-__attribute__((weak))
-int ymodem_engine_receive(void *callbacks, void *open_cb, uint8_t *scratch)
-{
-    (void)callbacks; (void)open_cb; (void)scratch;
-    return -3;
 }
