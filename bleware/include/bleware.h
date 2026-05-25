@@ -67,7 +67,7 @@ int      module_forward_sync(uint16_t cmd, const uint8_t *payload,
 int      ble_connection_is_active(uint32_t conn_idx);            /* FUN_00023D30 */
 void     ble_connection_touch(uint32_t conn_idx);                /* FUN_00023608 */
 void     backoffice_on_success_hook(void);                       /* FUN_00022BE8 */
-int      gatt_notify_channel(int channel, const void *buf, uint16_t len); /* FUN_0001B538 */
+int      gatt_notify_channel(int channel, const void *buf);      /* FUN_0001B538 */
 uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed); /* FUN_0002651C */
 
 /* OAD over-the-air firmware update (src/oad.c). Service 0x5510 write

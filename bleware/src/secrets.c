@@ -40,7 +40,7 @@
 extern int    extflash_read(uint32_t addr, uint32_t len, void *buf);
 extern int    extflash_sector_write(uint32_t addr, uint32_t len,
                                     const void *buf);
-extern uint32_t crc32_le(uint32_t seed, const uint8_t *buf, int len);
+/* crc32_le — declared in bleware.h */
 extern int    memcmp(const void *a, const void *b, unsigned int n);
 extern void  *memcpy(void *dst, const void *src, unsigned int n);
 extern void  *memset(void *dst, int c, unsigned int n);

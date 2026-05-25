@@ -166,7 +166,7 @@ uint8_t svc_5560_write_attr_cb(uint32_t  conn,
     }
     if (vt != NULL && vt->write_normal != NULL) {
         vt->write_normal(attr, conn, 0x5560, idx, value,
-                         (uint16_t)((uint32_t)len + offset));
+                         (uint16_t)len, (uint16_t)offset);
     }
     return 0;
 }

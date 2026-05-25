@@ -175,8 +175,7 @@ extern int      ble_connection_is_active(uint32_t conn_idx);              /* FUN
 extern void     ble_connection_touch(uint32_t conn_idx);                  /* FUN_00023608 */
 extern void     backoffice_on_success_hook(void);                         /* FUN_00022BE8 */
 
-/* GATT notify dispatch (channel 4 = backoffice reply, 0xF0 bytes). */
-extern int      gatt_notify_channel(int channel, const void *buf);        /* FUN_0001B538 */
+/* GATT notify dispatch — declared in bleware.h */
 extern void     monitor_log(const char *file, int line, uint32_t logger,
                             int level, const char *fmt, ...);
 

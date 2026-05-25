@@ -34,7 +34,7 @@ extern int   FUN_00016D1C(int conn, void *buf, uint32_t flag,
 #define CH3_BUF  ((void *)0x2000ACD0u)
 #define CH4_BUF  ((void *)0x20009F24u)
 
-int gatt_notify_channel(int channel, const void *buf, uint16_t len)
+int gatt_notify_channel(int channel, const void *buf)
 {
     extern uint32_t g_gatt_notify_state[5];  /* +0:pad, +4:ch2_conn, +8:ch0_conn,
                                                 +12:ch4_conn, +16:param_blk */
@@ -69,7 +69,6 @@ int gatt_notify_channel(int channel, const void *buf, uint16_t len)
         return 2;
     }
 
-    (void)len;  /* OEM ignores the caller's length, uses fixed copy_len */
     memcpy(chan_buf, buf, copy_len);
 
     if (do_notify && conn_handle != 0) {

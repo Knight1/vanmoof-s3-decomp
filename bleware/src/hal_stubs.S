@@ -518,21 +518,11 @@ g_tk_tick_modulus2:
 
 #define ROM_ALIAS2(alias, thunk_name) \
     .section .text.##alias, "ax", %progbits ; \
-    .weak    alias ; \
-    .type    alias, %function ; \
-    .thumb_func ; \
-alias: ; \
-    b.w     thunk_name ; \
-    .size   alias, .-alias
+    .weak    alias ; .type alias, %function ; .thumb_func ; \
+alias: ; b.w thunk_name ; .size alias, .-alias
 
-#define ROM_ALIAS0(alias, thunk_name) \
-    .section .text.##alias, "ax", %progbits ; \
-    .weak    alias ; \
-    .type    alias, %function ; \
-    .thumb_func ; \
-alias: ; \
-    b.w     thunk_name ; \
-    .size   alias, .-alias
+#define ROM_ALIAS1(alias, thunk_name) ROM_ALIAS2(alias, thunk_name)
+#define ROM_ALIAS0(alias, thunk_name) ROM_ALIAS2(alias, thunk_name)
 
 /* Semaphore_pend = ROM 0x1002BFB0, Semaphore_post = ROM 0x1002CD20 */
     ROM_ALIAS2(ti_semaphore_pend, thunk_EXT_FUN_1002bfb0)

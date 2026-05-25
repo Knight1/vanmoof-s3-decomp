@@ -63,7 +63,7 @@ extern void *ssp_frame_alloc(uint32_t size);
 extern void  gpio_write(void *gpio_ctx, int dio, int value);
 extern void *memcpy(void *dst, const void *src, unsigned int n);
 
-extern int  ble_connection_get_session_key(int conn_idx);
+/* ble_connection_get_session_key — declared in bleware.h */
 
 struct ssp_master_state {
     void    *tx_queue;
@@ -237,6 +237,11 @@ int module_publish_sync_with_timeout(uint32_t module_idx,
  *
  * OEM @ 0x00025B04.
  */
+/* Forward declare — defined below. */
+int ssp_publish_fetch_frame(struct ssp_master_state *master,
+                            uint16_t cmd_id, uint8_t *seq_out,
+                            uint32_t extra);
+
 void ssp_signal_fetch(uint16_t cmd_id)
 {
     if (ble_authenticated_connection_count() != 0) {

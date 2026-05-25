@@ -77,7 +77,7 @@ extern int     extflash_open(void *handle);
 extern void    extflash_close(void);
 
 extern int     extflash_retry_backoff(void);   /* returns 0 to keep retrying */
-extern void *  extflash_get_chip_info(void);   /* returns pointer to info struct */
+/* extflash_get_chip_info — declared in bleware.h */
 extern int     extflash_sw_wp_enabled(void);   /* SW status-register write-protect */
 extern int     extflash_block_wp_enabled(void); /* per-block write-protect */
 
