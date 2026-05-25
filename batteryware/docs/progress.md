@@ -179,6 +179,9 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x0800aee4` | — | `FUN_0800aee4` | pending | |
 | `0x0800af80` | — | `FUN_0800af80` | pending | |
 | `0x0800afa4` | — | `FUN_0800afa4` | pending | |
+| `0x0800b328` | 3690 | `HardFault_Handler` | named | Vector table slot 3 — real HardFault handler |
+| `0x0800c24c` | 44 | `EXTI0_1_IRQHandler` | named | Vector IRQ handler — EXTI lines 0 and 1 |
+| `0x0800c278` | 2970 | `EXTI4_15_IRQHandler` | named | Vector IRQ handler — EXTI lines 4-15 |
 | `0x0800ce9e` | — | `FUN_0800ce9e` | pending | |
 | `0x0800d75e` | — | `FUN_0800d75e` | pending | |
 | `0x0800d780` | — | `FUN_0800d780` | pending | |
@@ -289,7 +292,8 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x08011f58` | — | `FUN_08011f58` | pending | |
 | `0x08011f68` | — | `FUN_08011f68` | pending | |
 | `0x08011f88` | — | `FUN_08011f88` | pending | |
-| `0x08013228` | — | `FUN_08013228` | pending | |
+| `0x080131f8` | 128 | `Reset_Handler` | named | Vector reset entry — copies .data, zeroes .bss, calls main |
+| `0x0801324c` | 502 | `NMI_Handler` | named | Shared default handler (also NMI, PendSV, SVC, and most IRQ traps) |
 | `0x08013800` | — | `FUN_08013800` | pending | |
 | `0x08013860` | — | `FUN_08013860` | pending | |
 | `0x080138ac` | — | `FUN_080138ac` | pending | |
