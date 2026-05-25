@@ -28,8 +28,8 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 | --- | --- |
 | pending      | 131 |
 | in-progress  |   0 |
-| named        | 107 |
-| decomp-c     |  43 |
+| named        |  87 |
+| decomp-c     |  63 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
@@ -51,25 +51,25 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800080c` | 54 | `modem_init` | named | USART1 DMA/modem setup + GPIOA reset |
 | `0x08000850` | 34 | `dma_stop` | named | Disable DMA + call stop |
 | `0x08000880` | — | `FUN_08000880` | pending | |
-| `0x08001060` | 72 | `state_handler_0b` | named | State machine handler → bms_set_state(0x0B) |
+| `0x08001060` | 72 | `state_handler_0b` | decomp-c | State machine handler → bms_set_state(0x0B) |
 | `0x080010b4` | — | `FUN_080010b4` | pending | |
-| `0x080011d8` | 72 | `state_handler_0c` | named | State machine handler → bms_set_state(0x0C) |
+| `0x080011d8` | 72 | `state_handler_0c` | decomp-c | State machine handler → bms_set_state(0x0C) |
 | `0x0800122c` | — | `FUN_0800122c` | pending | |
-| `0x080013e0` | 72 | `state_handler_12` | named | State machine handler → bms_set_state(0x12) |
+| `0x080013e0` | 72 | `state_handler_12` | decomp-c | State machine handler → bms_set_state(0x12) |
 | `0x08001434` | — | `FUN_08001434` | pending | |
-| `0x080015e8` | 72 | `state_handler_13` | named | State machine handler → bms_set_state(0x13) |
+| `0x080015e8` | 72 | `state_handler_13` | decomp-c | State machine handler → bms_set_state(0x13) |
 | `0x0800163c` | — | `FUN_0800163c` | pending | |
-| `0x08001898` | 72 | `state_handler_02` | named | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
+| `0x08001898` | 72 | `state_handler_02` | decomp-c | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
 | `0x080018ec` | 46 | `capacity_decrement` | named | Saturating counter decrement |
 | `0x08001920` | 132 | `rsoc_lookup` | named | SoC lookup table (100-entry descending search) |
 | `0x080019b8` | — | `FUN_080019b8` | pending | |
-| `0x08001b44` | 90 | `state_handler_0d` | named | State handler → bms_set_state(0x0D) [conditional variant] |
+| `0x08001b44` | 90 | `state_handler_0d` | decomp-c | State handler → bms_set_state(0x0D) [conditional variant] |
 | `0x08001bb4` | — | `FUN_08001bb4` | pending | |
-| `0x08001d40` | 90 | `state_handler_0e` | named | State handler → bms_set_state(0x0E) [conditional variant] |
+| `0x08001d40` | 90 | `state_handler_0e` | decomp-c | State handler → bms_set_state(0x0E) [conditional variant] |
 | `0x08001db0` | — | `FUN_08001db0` | pending | |
-| `0x08001f50` | 72 | `state_handler_14` | named | State machine handler → bms_set_state(0x14) |
+| `0x08001f50` | 72 | `state_handler_14` | decomp-c | State machine handler → bms_set_state(0x14) |
 | `0x08001fa4` | — | `FUN_08001fa4` | pending | |
-| `0x08002140` | 72 | `state_handler_15` | named | State machine handler → bms_set_state(0x15) |
+| `0x08002140` | 72 | `state_handler_15` | decomp-c | State machine handler → bms_set_state(0x15) |
 | `0x08002194` | — | `FUN_08002194` | pending | |
 | `0x08002ba6` | — | `FUN_08002ba6` | pending | |
 | `0x08002bac` | — | `FUN_08002bac` | pending | |
@@ -94,7 +94,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08005388` | — | `FUN_08005388` | pending | |
 | `0x080054cc` | — | `FUN_080054cc` | pending | |
 | `0x080055a8` | — | `FUN_080055a8` | pending | |
-| `0x08005738` | 72 | `state_handler_16` | named | State machine handler → bms_set_state(0x16) |
+| `0x08005738` | 72 | `state_handler_16` | decomp-c | State machine handler → bms_set_state(0x16) |
 | `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
 | `0x080057b0` | — | `FUN_080057b0` | pending | |
 | `0x08005b34` | — | `FUN_08005b34` | pending | |
@@ -104,17 +104,17 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x080063e0` | — | `FUN_080063e0` | pending | |
 | `0x08006748` | — | `FUN_08006748` | pending | |
 | `0x08006810` | — | `FUN_08006810` | pending | |
-| `0x08006948` | 74 | `state_handler_07` | named | State handler → bms_set_state(0x07) [MOSFET on variant] |
+| `0x08006948` | 74 | `state_handler_07` | decomp-c | State handler → bms_set_state(0x07) [MOSFET on variant] |
 | `0x0800699c` | — | `FUN_0800699c` | pending | |
-| `0x08006ad4` | 74 | `state_handler_08` | named | State handler → bms_set_state(0x08) [MOSFET on variant] |
+| `0x08006ad4` | 74 | `state_handler_08` | decomp-c | State handler → bms_set_state(0x08) [MOSFET on variant] |
 | `0x08006b28` | — | `FUN_08006b28` | pending | |
-| `0x08006c60` | 72 | `state_handler_0f` | named | State machine handler → bms_set_state(0x0F) |
+| `0x08006c60` | 72 | `state_handler_0f` | decomp-c | State machine handler → bms_set_state(0x0F) |
 | `0x08006cb4` | — | `FUN_08006cb4` | pending | |
-| `0x08006dec` | 72 | `state_handler_10` | named | State handler → bms_set_state(0x10) |
+| `0x08006dec` | 72 | `state_handler_10` | decomp-c | State handler → bms_set_state(0x10) |
 | `0x08006e40` | — | `FUN_08006e40` | pending | |
-| `0x08006f68` | 72 | `state_handler_11` | named | State handler → bms_set_state(0x11) |
+| `0x08006f68` | 72 | `state_handler_11` | decomp-c | State handler → bms_set_state(0x11) |
 | `0x08006fbc` | — | `FUN_08006fbc` | pending | |
-| `0x080070f8` | 78 | `modem_reinit` | named | USART/modem reinit + GPIO reset |
+| `0x080070f8` | 78 | `modem_reinit` | decomp-c | USART/modem reinit + GPIO reset |
 | `0x08007158` | 20 | `system_reset_with_arg` | decomp-c | Wrapper — takes arg, calls system_reset |
 | `0x0800716c` | — | `FUN_0800716c` | pending | |
 | `0x08007178` | — | `FUN_08007178` | pending | |
@@ -169,9 +169,9 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800a6e0` | — | `FUN_0800a6e0` | pending | |
 | `0x0800a70c` | 134 | `atoi_hex_offset1` | decomp-c | Parse hex string (offset 1) as decimal int |
 | `0x0800a794` | — | `FUN_0800a794` | pending | |
-| `0x0800a934` | 72 | `state_handler_09` | named | State handler → bms_set_state(0x09) [dual-MOSFET variant] |
+| `0x0800a934` | 72 | `state_handler_09` | decomp-c | State handler → bms_set_state(0x09) [dual-MOSFET variant] |
 | `0x0800a988` | — | `FUN_0800a988` | pending | |
-| `0x0800ab28` | 72 | `state_handler_0a` | named | State handler → bms_set_state(0x0A) [dual-MOSFET variant] |
+| `0x0800ab28` | 72 | `state_handler_0a` | decomp-c | State handler → bms_set_state(0x0A) [dual-MOSFET variant] |
 | `0x0800ab7c` | — | `FUN_0800ab7c` | pending | |
 | `0x0800ad00` | 88 | `uart_puts` | decomp-c | Write null-terminated string to TX ring buffer |
 | `0x0800ad64` | 74 | `uart_putchar` | decomp-c | UART TX ring buffer write with 0x1400-byte circular buffer |
