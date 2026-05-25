@@ -173,6 +173,3 @@ int ymodem_receive(uint32_t target, uint32_t max_size)
     (void)target; (void)max_size;
     return -1;
 }
-
-/* ---- monitor_log stub — used by 26 callers, defer to real impl ---- */
-/* Declared in monitor.h as: void monitor_log(file, line, func, level, fmt, ...) */
