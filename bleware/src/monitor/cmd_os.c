@@ -36,8 +36,8 @@ extern void rtos_mem_get_stats(struct rtos_mem_stats *out);   /* OEM FUN_0002520
  *   - on construction, queues a 50 ms timer
  *   - returns 1 once any key arrives, ≤0 while still waiting
  * (Decoded shape; the underlying timer plumbing is in `task_sleep.c`.) */
-extern int  monitor_key_wait_with_timeout(void *timer_ctx, uint32_t period_us); /* OEM FUN_00024C40 */
-extern void monitor_yield_ticks(uint32_t ticks);              /* OEM FUN_000232B8 */
+/* monitor_key_wait_with_timeout — declared in header */
+/* monitor_yield_ticks — declared in header */
 
 /* ===== SNV (Simple Non-Volatile storage) compact.
  *  - `snv_compact(0)` performs the compaction; returns non-zero on failure.
@@ -51,9 +51,9 @@ extern int  snv_compact(int reserved);                        /* OEM FUN_0002590
  *    ext-flash before the chip stops.
  *  - `system_power_down(mode, flags)` is the actual sleep-deep path.
  *  - `system_software_reset()` is the NVIC SYSRESETREQ wrapper. */
-extern void system_state_save(void);                          /* OEM FUN_00026FF4 */
-extern void system_power_down(int mode, int flags);           /* OEM FUN_0001D404 */
-extern void system_software_reset(void);                      /* OEM FUN_0001F7F8 */
+/* system_state_save — declared in header */
+/* system_power_down — declared in header */
+/* system_software_reset — declared in header */
 
 int cmd_rtos_statistics(int verb, void *p2, void *p3, uint32_t p4)
 {

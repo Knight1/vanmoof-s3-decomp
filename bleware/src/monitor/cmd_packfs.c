@@ -16,7 +16,7 @@ static const char K_FILE[] = "source/monitor/cmd_packfs.c";
 extern void *packfs_open(uint32_t base);
 extern void *packfs_next(void *ctx);
 extern void  packfs_close(void *ctx);
-extern const char *format_size(uint32_t bytes, char *dst);
+/* format_size — declared in header */
 extern int   extflash_open(void *handle);
 extern void  extflash_close(void);
 extern void  extflash_erase(uint32_t address, uint32_t size);
@@ -34,11 +34,11 @@ extern int   module_forward_async(uint32_t cmd_id, uint8_t arg);
  * OEM FUN_00016F2C. Called both by cmd_pack_upload (after YModem
  * completion) and cmd_pack_process (directly, for an already-staged
  * payload). */
-extern void  pack_ingest_start(void);
+/* pack_ingest_start — declared in header */
 
 /* Late-stage commit hook called after a successful YModem PACK
  * upload — flushes any in-progress state. OEM FUN_00027478. */
-extern void  pack_upload_finalize(void);
+/* pack_upload_finalize — declared in header */
 
 int cmd_pack_list(int verb, void *p2, void *p3, uint32_t p4)
 {

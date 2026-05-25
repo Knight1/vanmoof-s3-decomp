@@ -57,38 +57,43 @@ ifeq ($(TI_SDK),)
   SDK_CFLAGS := -DBLEWARE_NO_SDK
   SDK_INC   :=
   SDK_SRCS  :=
-else ifeq ($(wildcard $(TI_SDK)/source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.h),)
-  $(error TI_SDK set to '$(TI_SDK)' but ble_rom_jt.h not found. Wrong SDK version? Expected SDK 3.40.00.02)
+else ifeq ($(wildcard $(TI_SDK)/source/ti/ble5stack/rom/rom_jt.h),)
+  $(error TI_SDK set to '$(TI_SDK)' but rom_jt.h not found. Wrong SDK version? Expected SDK 3.40.00.02)
 else
   $(info Using TI SDK: $(TI_SDK))
   SDK_CFLAGS :=
-  SDK_INC   := -I$(TI_SDK) \
-               -I$(TI_SDK)/source \
-               -I$(TI_SDK)/source/ti/blestack \
-               -I$(TI_SDK)/source/ti/blestack/inc \
-               -I$(TI_SDK)/source/ti/blestack/icall/inc \
-               -I$(TI_SDK)/source/ti/blestack/rom \
-               -I$(TI_SDK)/source/ti/blestack/hal/inc \
+  SDK_INC   := -I$(TI_SDK)/source \
+               -I$(TI_SDK)/source/ti/ble5stack \
+               -I$(TI_SDK)/source/ti/ble5stack/inc \
+               -I$(TI_SDK)/source/ti/ble5stack/icall/inc \
+               -I$(TI_SDK)/source/ti/ble5stack/rom \
+               -I$(TI_SDK)/source/ti/ble5stack/hal/src/common \
                -I$(TI_SDK)/source/ti/drivers \
                -I$(TI_SDK)/source/ti/devices/cc13x2_cc26x2 \
                -I$(TI_SDK)/source/ti/devices/cc13x2_cc26x2/inc \
                -I$(TI_SDK)/kernel/tirtos/packages
-  SDK_SRCS  := $(TI_SDK)/source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.c \
-               $(TI_SDK)/source/ti/blestack/icall/src/icall.c \
-               $(TI_SDK)/source/ti/blestack/icall/src/icall_lite.c \
-               $(wildcard $(TI_SDK)/source/ti/devices/cc13x2_cc26x2/driverlib/*.c) \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/family/arm/m3/Hwi.c \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Semaphore.c \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Queue.c \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Event.c \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Task.c \
-               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/heaps/HeapMem.c
+  SDK_SRCS  :=
+  # The TI SDK source (.c files) is NOT compiled by this Makefile.
+  # The SDK uses TI's XDCtools configuration system and Code Composer
+  # Studio project format. All SDK runtime functions called by bleware
+  # reside in the CC2642R1F mask ROM or are provided by the TI-RTOS
+  # kernel — these are resolved at link time through the ROM thunks
+  # in src/hal_stubs.S (thunk_EXT_FUN_1002xxxx entries) when a full
+  # TI toolchain build is available.
+  #
+  # This Makefile compiles ONLY the VanMoof-custom source files (62
+  # .c files in src/) and links them with the ROM thunk stubs. The
+  # result is a stub binary (1028 B) suitable for verifying that
+  # decompiled code compiles without warnings. A functional firmware
+  # image requires building inside TI Code Composer Studio or IAR
+  # with the full SimpleLink SDK project.
 endif
 
 C_SRCS       := $(shell find $(SRC_DIR) -name '*.c' 2>/dev/null) $(SDK_SRCS)
 S_SRCS       := $(shell find $(SRC_DIR) -name '*.S' 2>/dev/null)
-OBJS         := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS)) \
-                $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(S_SRCS))
+OBJS         := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(filter $(SRC_DIR)/%,$(C_SRCS))) \
+                $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(filter $(SRC_DIR)/%,$(S_SRCS))) \
+                $(patsubst $(TI_SDK)/%.c,$(BUILD_DIR)/$(TI_SDK)/%.o,$(filter $(TI_SDK)/%,$(C_SRCS)))
 DEPS         := $(OBJS:.o=.d)
 
 # CC2642R1F has hardware FPv4-SP. bleware exercises the FPU in places
@@ -132,8 +137,22 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) -c $< -o $@
 
+# SDK and vendor source files — use vpath so they resolve against
+# the absolute include paths in SDK_SRCS.
+vpath %.c $(dir $(SDK_SRCS))
+vpath %.S $(SRC_DIR)
+
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJS) $(LD_SCRIPT)
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
+
+# SDK objects — compile from absolute path to build/<absolute-path>.o
+$(BUILD_DIR)/$(TI_SDK)/%.o: $(TI_SDK)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Raw flash image — vector table at 0x90, post-OAD-header. The
 # `-R .data -R .bss -R ._user_heap_stack` strips SRAM-resident

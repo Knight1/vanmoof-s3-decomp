@@ -19,10 +19,10 @@ static const char K_FILE[] = "source/monitor/cmd_log.c";
 extern int   log_block_count(void);
 extern void  log_format_block(char *dst, int index);
 extern void *monitor_alloc(uint32_t size);
-extern int   monitor_strlen(const char *s);
+/* monitor_strlen — declared in header */
 extern void  log_submit(uint32_t channel, void *block, uint32_t len);
 extern void  monitor_free(void *ptr);
-extern int   monitor_snprintf(char *dst, const char *fmt, ...);
+/* monitor_snprintf — declared in header */
 extern void  log_region_erase(void);    /* OEM FUN_000230D8 — erases the 128 KB log region on ext-flash */
 extern void  log_writer_restart(void);  /* OEM FUN_00017B24 — rewinds the log writer cursor */
 

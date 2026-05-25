@@ -14,8 +14,9 @@
 
 static const char k_src_file[] = "source/filetransfer.c";
 
-int firmware_update_start(void)
+int firmware_update_start(void *params)
 {
+    (void)params;
     uint8_t  header[0x2C];
     int      rc;
 

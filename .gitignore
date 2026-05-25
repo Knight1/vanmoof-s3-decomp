@@ -40,3 +40,6 @@ bleboot*.bin
 *.pak
 SPI-Flash_*.rom
 *.rom
+
+# TI SDK vendor directory — user-downloaded, never committed
+bleware/vendor/ti-sdk-3.40/

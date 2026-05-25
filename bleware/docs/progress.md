@@ -25,7 +25,7 @@ peripheral wiring, anything that's specific to VanMoof.
 
 | Count | Status |
 | --- | --- |
-| 149 | decomp (asm or c) |
+| 159 | decomp (asm or c) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
 | 143 | decomp (asm or c) |
@@ -106,6 +106,15 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x000054D8  | `print_firmware_info`             | `src/print_firmware_info.c` (new) | Prints device name (ES3- + MAC), BLE MAC, firmware version, compile date, BIM bootloader info, reset reason, systick. ~220 B. |
 | 0x000145AC  | `reset_reason_string`             | `src/reset_reason.c` (new) | Returns static string for reset cause (power-on, pin-reset, VDDS loss, WDT, etc.) via ROM SysCtrlResetSourceGet. 58 B. |
 | 0x0000D444  | `firmware_update_start`           | `src/cmd_update.c` (new)  | YModem-receives firmware image, validates OAD-NVM1 header magic, CRC-checks, marks pending, triggers software reset. ~180 B. |
+| 0x00016F2C  | `pack_ingest_start`               | `src/pack_ingest.c` (new) | Stops audio, waits for daemon drain, parses pack header at ext-flash 0x80000, notifies modules via 0x10E. ~150 B. |
+| 0x00026FF4  | `system_state_save`               | `src/system.c` (new)      | Turns off LED on DIO 0xD via gpio_write. 10 B. |
+| 0x0001D404  | `system_power_down`               | `src/system.c`            | AON sleep-deep sequence (stub: infinite loop until full AON driver decoded). ~100 B OEM. |
+| —           | `system_software_reset`           | `src/system.c`            | Delegates to firmware_abort (same OEM body @ 0x0001F7F8). |
+| —           | `monitor_sleep` / `monitor_yield_ticks` / `monitor_strlen` / `monitor_snprintf` / `monitor_sscanf` / `monitor_key_wait_with_timeout` / `rtos_mem_get_stats` / `snv_*` | `src/monitor_helpers.c` | All moved from stubs.c. `monitor_sleep` wraps ROM Clock_sleep, `monitor_snprintf` delegates to TI _vsnprintf. |
+| —           | `audio_clip_dump_one` / `audio_player_play` / `audio_player_stop_or_pause` | `src/audio_stubs.c` (new) | Audio task stubs. |
+| —           | `packfs_open` / `packfs_next` / `packfs_close` | `src/packfs_stubs.c` (new) | PACK filesystem stubs. |
+| —           | `log_block_count` / `log_format_block` / `log_submit` | `src/log_stubs.c` (new) | Log injection/dump stubs. `log_block_count` delegates to `log_block_count_get`. |
+| —           | `stubs.c` now purely forward declarations (zero function bodies) | `src/stubs.c` | All 14 remaining stub bodies moved to proper module files. |
 | —           | `gatt_scratch_free`               | `src/gatt_read.c`        | Thin wrapper around monitor_free. |
 | —           | `nvs_open`                        | `src/gatt_read.c`        | TI-RTOS NVS driver open stub (vendor-stock). |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |

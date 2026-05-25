@@ -275,4 +275,35 @@ void print_firmware_info(void);
  * for the last reset cause. OEM @ 0x000145AC. */
 const char *reset_reason_string(void);
 
+/* System helpers (src/system.c). Called by cmd_shutdown / cmd_reset. */
+void system_state_save(void);
+int  system_power_down(int mode, int flags);
+void system_software_reset(void);
+
+/* Firmware update (src/cmd_update.c). OEM @ 0x0000D444. */
+int  firmware_update_start(void *params);
+
+/* PACK ingest (src/pack_ingest.c). Called by cmd_pack_upload. */
+void pack_ingest_start(void);
+void pack_upload_finalize(void);
+
+/* Utility helpers (src/monitor_helpers.c / src/log_stubs.c). */
+void     format_size(uint32_t bytes, char *buf, unsigned int bufsz);
+uint32_t rtos_mem_get_stats(void *stats_out);
+int      snv_compact(uint32_t arg);
+int      snv_free_space_query(void);
+uint32_t log_block_count(void);
+void     log_format_block(uint32_t index, void *out_16B);
+void     log_submit(const void *block_16B);
+
+/* Audio stubs (src/audio_stubs.c). */
+void audio_clip_dump_one(uint32_t index);
+void audio_player_play(uint32_t index);
+void audio_player_stop_or_pause(int action);
+
+/* PACK filesystem stubs (src/packfs_stubs.c). */
+void *packfs_open(void *params);
+int   packfs_next(void *handle, void *entry_out);
+void  packfs_close(void *handle);
+
 #endif /* BLEWARE_BLEWARE_H */

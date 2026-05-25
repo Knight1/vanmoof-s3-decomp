@@ -2287,7 +2287,7 @@
     {
       "addr": "0x00016f2c",
       "size": 118,
-      "name": "FUN_00016f2c",
+      "name": "pack_ingest_start",
       "auto_named": true,
       "signature": "undefined FUN_00016f2c(void)",
       "thunk": false,
@@ -3880,7 +3880,7 @@
     {
       "addr": "0x0001d404",
       "size": 90,
-      "name": "FUN_0001d404",
+      "name": "system_power_down",
       "auto_named": true,
       "signature": "undefined FUN_0001d404(void)",
       "thunk": false,
@@ -8776,7 +8776,7 @@
     {
       "addr": "0x000267ba",
       "size": 22,
-      "name": "FUN_000267ba",
+      "name": "strchr",
       "auto_named": true,
       "signature": "undefined FUN_000267ba(void)",
       "thunk": false,
@@ -9505,7 +9505,7 @@
     {
       "addr": "0x00026ff4",
       "size": 12,
-      "name": "FUN_00026ff4",
+      "name": "system_state_save",
       "auto_named": true,
       "signature": "undefined FUN_00026ff4(void)",
       "thunk": false,
@@ -9757,7 +9757,7 @@
     {
       "addr": "0x00027304",
       "size": 8,
-      "name": "FUN_00027304",
+      "name": "power_state_get_flags",
       "auto_named": true,
       "signature": "undefined FUN_00027304(void)",
       "thunk": false,
@@ -9955,7 +9955,7 @@
     {
       "addr": "0x00027478",
       "size": 8,
-      "name": "FUN_00027478",
+      "name": "monitor_yield_ticks",
       "auto_named": true,
       "signature": "undefined FUN_00027478(void)",
       "thunk": false,
@@ -10099,7 +10099,7 @@
     {
       "addr": "0x00027542",
       "size": 10,
-      "name": "FUN_00027542",
+      "name": "monitor_sleep",
       "auto_named": true,
       "signature": "undefined FUN_00027542(void)",
       "thunk": false,

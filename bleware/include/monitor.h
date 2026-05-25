@@ -20,5 +20,9 @@ int  monitor_command_matches(const char *input, const char *name);
 void *memcpy(void *dst, const void *src, unsigned int n);
 int   monitor_sscanf(const char *input, const char *fmt, ...);
 void  monitor_sleep(uint32_t ticks);
+int   monitor_strlen(const char *s);
+void     monitor_yield_ticks(uint32_t ticks);
+uint32_t monitor_key_wait_with_timeout(void *timer_ctx, uint32_t period_us);
+int   monitor_snprintf(char *buf, unsigned int size, const char *fmt, ...);
 
 #endif /* BLEWARE_MONITOR_H */
