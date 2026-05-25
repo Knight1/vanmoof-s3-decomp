@@ -130,3 +130,14 @@ void uart_puts(char *str)
         }
     }
 }
+
+/*
+ * Print a 16-bit value as 4 uppercase hex characters.
+ */
+void uart_puthex_16(uint16_t val)
+{
+    uart_putchar((uint8_t)nibble_to_hex((uint8_t)(val >> 12)));
+    uart_putchar((uint8_t)nibble_to_hex((uint8_t)(val >> 8) & 0xF));
+    uart_putchar((uint8_t)nibble_to_hex((uint8_t)(val >> 4) & 0xF));
+    uart_putchar((uint8_t)nibble_to_hex((uint8_t)val & 0xF));
+}

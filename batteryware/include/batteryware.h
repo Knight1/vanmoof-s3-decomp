@@ -9,6 +9,9 @@ char     nibble_to_hex(uint8_t nibble);
 uint8_t  hex_to_nibble(char c);
 uint32_t atoi_hex_offset1(char *str, uint8_t digits);
 
+/* Modbus CRC-16 */
+uint16_t crc16_calc(uint8_t *data, int16_t len);
+
 /* GPIO bit write: atomic set (BSRR) or clear (BRR) */
 void gpio_bit_write(uint32_t gpio_base, uint16_t pin_bit, uint8_t value);
 
@@ -50,6 +53,7 @@ void uart_tx_flush(void);
 void uart_check_parity_error(void);
 void uart_check_overrun_error(void);
 void uart_puthex_byte(uint8_t b);
+void uart_puthex_16(uint16_t val);
 void uart_puts(char *str);
 
 /* Flash controller operations */
@@ -88,6 +92,7 @@ void fg_charge_oc_check(void);
 void fg_alert_monitor(void);
 uint8_t fg_charge_status(void);
 void config_resend_all(void);
+void fg_watchdog_kick(void);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -99,6 +104,13 @@ void cmd_counter_inc_v2(uint16_t frame_word);
 void cmd_counter_inc_v3(uint16_t frame_word);
 void cmd_send_response(void);
 void cmd_send_8byte(void);
+
+/* BMS configuration */
+void bms_configure(uint8_t cfg);
+
+/* DMA operations */
+uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);
+uint8_t  atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);

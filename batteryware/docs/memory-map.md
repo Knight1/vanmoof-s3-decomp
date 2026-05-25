@@ -103,7 +103,7 @@ Real IRQ handlers identified so far:
 | TIM2 | `0x40000000` | General-purpose timer |
 | IWDG | `0x40003000` | Independent watchdog |
 | ADC | `0x40012400` | Analog-to-digital converter |
-| I2C1 | `0x40005400` | I²C bus 1 |
+|FEDL5236 (communicates via SPI)1 | `0x40005400` | I²C bus 1 |
 | Flash | `0x40022000` | Flash controller |
 
 ## Key observations

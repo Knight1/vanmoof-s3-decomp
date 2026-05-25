@@ -75,7 +75,7 @@ Addresses resolved from literal pool entries in the flash image.
 | USART1 | `0x40013800` | Serial comm with main module (IRQ 12 = USART1 at VT slot 28 → `0x080054C5`) |
 | TIM2 | `0x40000000` | IRQ 5 and 7 assigned (two TIM2 IRQs) |
 | SysTick | `0xE000E010` | 1 ms tick timer — polled by `delay_ms` |
-| I2C1 | `0x40005400` | Likely FEDL5236 fuel gauge communication |
+|FEDL5236 (communicates via SPI)1 | `0x40005400` | Likely FEDL5236 fuel gauge communication |
 
 ## Key observations
 

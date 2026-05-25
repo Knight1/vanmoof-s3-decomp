@@ -418,3 +418,38 @@ uint32_t dma_compare(uint32_t addr_a, uint16_t count, uint32_t addr_b)
 
     return 0;
 }
+
+/* FEDL5236 SPI comms data */
+static volatile uint32_t * const s_fg_i2c_ctx  = (volatile uint32_t *)0x20003250;
+static volatile uint8_t  * const s_fg_i2c_data = (volatile uint8_t  *)0x20003254;
+static volatile uint8_t  * const s_fg_watchdog  = (volatile uint8_t  *)0x20003258;
+
+/* SPI status checker — external */
+extern uint32_t i2c_check_ready(void *ctx);  /* FUN_08010f88 */
+/* SPI read 2 bytes — external */
+extern uint32_t i2c_read_2bytes(uint8_t addr, uint8_t count);  /* FUN_080048cc */
+
+/*
+ * Fuel gauge communication watchdog.
+ *
+ * Checks the SPI bus and reads two status bytes from the FEDL5236.
+ * If reading fails or the chip reports an error (both bits set),
+ * resets the config. Otherwise re-initializes the BMS with a delay.
+ */
+void fg_watchdog_kick(void)
+{
+    if (i2c_check_ready((void *)s_fg_i2c_ctx) == 1) {
+        if (i2c_read_2bytes(1, 2) == 0 ||
+            (((s_fg_i2c_data[2] & 0xF) == 0xF &&
+              (s_fg_i2c_data[3] & 2) == 2))) {
+            *s_fg_watchdog = 0;
+            /* Reset SPI config */
+            extern void i2c_write_reg(uint8_t addr, uint8_t val, uint8_t mask);
+            i2c_write_reg(8, 0x91, 0xFF);  /* FUN_08004a18 */
+        } else {
+            delay_ms(5);
+            bms_init();
+            delay_ms(5);
+        }
+    }
+}
