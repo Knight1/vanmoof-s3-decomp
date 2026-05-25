@@ -173,3 +173,135 @@ STATE_HANDLER_COND(state_handler_0d, 0x0D,
 STATE_HANDLER_COND(state_handler_0e, 0x0E,
     (volatile uint32_t *)0x20002000, (volatile uint32_t *)0x50000400, 0xFFFFFFEF,
     (volatile uint32_t *)0x20002000, (volatile uint32_t *)0x20002000)
+
+/* ===== Remaining state handlers with unique patterns ===== */
+
+/*
+ * State handler 01: entry state for normal boot.
+ *
+ * Turns off GPIO pin 0x01, turns on charge MOSFET, turns off GPIO 0x200.
+ * Selects bms_configure argument based on status register fields:
+ *   - bit 3 clear → arg=1 or 3 depending on bit 12
+ *   - bit 11 clear → arg=0 or 2 depending on bit 12
+ *   - otherwise → arg=1 or 3 depending on bit 12
+ */
+void state_handler_01(void)
+{
+    volatile uint32_t * const s_status = (volatile uint32_t *)0x20002C00;
+    uint8_t cfg;
+
+    gpio_bit_write(0x50000400, 1, 0);
+    charge_mosfet_on();
+    gpio_bit_write(0x50000400, 0x200, 0);
+
+    if (((*s_status >> 3) & 1) == 0) {
+        *s_status |= 0x800;
+        if (((*s_status >> 12) & 1) == 0) {
+            cfg = 1;
+        } else {
+            cfg = 3;
+        }
+    } else if (((*s_status >> 11) & 1) == 0) {
+        if (((*s_status >> 12) & 1) == 0) {
+            cfg = 0;
+        } else {
+            cfg = 2;
+        }
+    } else if (((*s_status >> 12) & 1) == 0) {
+        cfg = 1;
+    } else {
+        cfg = 3;
+    }
+
+    bms_configure(cfg);
+    bms_set_state(1);
+}
+
+/*
+ * State handler 03 init: initialization for charge state.
+ *
+ * Clears multiple GPIO pins (1, 0x200), masks out bit 6, bit 7,
+ * and bit 8 from the status register, zeroes two SRAM counters,
+ * sets a byte to 0xFF, then ORs 0x800 into status.
+ * Reads g_fault_flags to determine BMS config argument:
+ *   - if bits 0 and 1 are clear AND bit 12 == 0: arg = 1
+ *   - if bits 0 and 1 are clear AND bit 12 == 1: arg = 3
+ *   - otherwise: arg = 1
+ * Turns off charge MOSFET, transitions to state 3.
+ */
+void state_handler_03_init(void)
+{
+    volatile uint32_t * const s_status   = (volatile uint32_t *)0x20002C00;
+    volatile uint32_t * const s_counter1 = (volatile uint32_t *)0x20002C46;
+    volatile uint32_t * const s_counter2 = (volatile uint32_t *)0x20002C06;
+    volatile uint8_t  * const s_cfg_byte = (volatile uint8_t  *)0x20002BFE;
+    uint8_t cfg;
+
+    gpio_bit_write(0x50000400, 1, 0);
+    gpio_bit_write(0x50000400, 0x200, 0);
+    *s_status &= ~0x40U;
+    *s_status &= 0xFFFFFEFF;
+    *s_status &= ~0x80U;
+    *s_counter1 = 0;
+    *s_counter2 = 0;
+    *s_cfg_byte = 0xFF;
+    *s_status |= 0x800;
+
+    if (((*g_fault_flags & 1) == 0) && (((*g_fault_flags & 3) >> 1) == 0)) {
+        if (((*s_status >> 12) & 1) == 0) {
+            cfg = 1;
+        } else {
+            cfg = 3;
+        }
+    } else {
+        cfg = 1;
+    }
+
+    bms_configure(cfg);
+    charge_mosfet_off();
+    bms_set_state(3);
+}
+
+/*
+ * State handler 17/18/19: power-on OVP/UVP protection dispatch.
+ *
+ * If pre-discharge bit 11 is clear AND (bit 6 or bit 7 is set) AND
+ * bit 15 is clear: turns on GPIO pin 0x80 (OVP/UVP override).
+ * Clears bit 4 in status register.
+ * Turns on GPIO 1, turns off charge MOSFET, turns off GPIO 0x200.
+ * Masks out bit 11 (0x800) from status.
+ * Calls bms_configure(0), then dispatches:
+ *   - bit 11 clear AND bits 6+7 clear → state 0x18
+ *   - bit 11 clear AND (bit 6 or bit 7 set) → state 0x17
+ *   - bit 11 set → state 0x19
+ */
+void state_handler_17_19(void)
+{
+    volatile uint32_t * const s_status    = (volatile uint32_t *)0x20002C00;
+    volatile uint32_t * const s_precharge = (volatile uint32_t *)0x2000286C;
+
+    if (((*s_precharge >> 11) & 1) == 0) {
+        if ((((*g_fault_flags >> 6) & 1) != 0) || (((*g_fault_flags >> 7) & 1) != 0)) {
+            if (((*s_status >> 15) & 1) == 0) {
+                gpio_bit_write(0x50000400, 0x80, 1);
+            }
+        }
+    }
+
+    *s_status &= ~0x10U;
+    gpio_bit_write(0x50000400, 1, 1);
+    charge_mosfet_off();
+    gpio_bit_write(0x50000400, 0x200, 0);
+    *s_status &= 0xFFFFF7FF;
+    bms_configure(0);
+
+    if (((*s_precharge >> 11) & 1) == 0) {
+        if ((((*g_fault_flags >> 6) & 1) == 0) && (((*g_fault_flags >> 7) & 1) == 0)) {
+            bms_set_state(0x18);
+        } else {
+            bms_set_state(0x17);
+        }
+    } else {
+        bms_set_state(0x19);
+    }
+}

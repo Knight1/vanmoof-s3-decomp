@@ -38,6 +38,8 @@ void system_reset_with_arg(uint32_t arg);
 
 /* Charge MOSFET control via GPIOB pin 9 */
 void charge_mosfet_set(bool on);
+void charge_mosfet_off(void);
+void charge_mosfet_on(void);
 void discharge_mosfet_set(bool on);
 
 /* YMODEM protocol — send response byte and reset state */
@@ -80,6 +82,8 @@ uint8_t  flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val);
 uint32_t flash_unlock_both(void);
 void flash_op_cleanup(void *ctx);
 uint32_t flash_page_program(int *ctx);
+void flash_dma_start(uint32_t dst_addr);
+uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
@@ -108,6 +112,7 @@ void fg_watchdog_kick(void);
 void fg_cell_balance(uint8_t cell_idx);
 uint32_t fg_read_field_8(void);
 uint32_t fg_read_field_11(void);
+void fg_read_loop(void *ctx);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -122,6 +127,12 @@ void cmd_send_8byte(void);
 
 /* BMS configuration */
 void bms_configure(uint8_t cfg);
+void bms_set_state(uint8_t state);
+
+/* State machine handlers */
+void state_handler_01(void);
+void state_handler_03_init(void);
+void state_handler_17_19(void);
 
 /* DMA operations */
 uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);

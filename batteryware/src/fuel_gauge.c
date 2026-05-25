@@ -523,3 +523,55 @@ uint32_t fg_read_field_11(void)
     uint8_t shift = s_fg_shift_table[shift_idx];
     return val >> shift;
 }
+
+/*
+ * Fuel gauge register read loop.
+ *
+ * Reads 16 registers from the FEDL5236 via SMBus.
+ * For each register: reads 2 bytes, combines into 16-bit value,
+ * multiplies by 0x4C50, divides by 1000, stores result.
+ * Dispatches per-register callback from jump table at 0x08017470.
+ * After 16 registers: writes 0x91 to FEDL5236 register 8 (cleanup).
+ */
+void fg_read_loop(void *ctx)
+{
+    volatile uint8_t  * const s_data_buf    = (volatile uint8_t  *)0x20002B84;
+    volatile uint32_t * const s_index       = (volatile uint32_t *)0x2000287A;
+    volatile uint32_t * const s_result_last = (volatile uint32_t *)0x20002824;
+    volatile uint32_t * const s_result_base = (volatile uint32_t *)0x20002830;
+    void (* const * const s_callback_tbl)(uint32_t) = (void (* const * const)(uint32_t))0x08017470;
+
+    if ((*(volatile uint8_t *)((uintptr_t)ctx + 0x37) & 8) == 0) {
+        extern void fg_read_done(void);
+        fg_read_done();
+        return;
+    }
+
+    extern int smbus_read(uint8_t addr, uint8_t count);
+    if (smbus_read(0x34, 2) == 0) {
+        extern void fg_read_done(void);
+        fg_read_done();
+        return;
+    }
+
+    uint32_t val = (uint32_t)s_data_buf[2] | ((uint32_t)s_data_buf[3] << 8);
+    val = val * 0x4C50;
+    val = val / 1000;
+
+    if (*s_index == 9) {
+        *s_result_last = val;
+    } else {
+        s_result_base[*s_index] = val;
+    }
+
+    *s_index += 1;
+
+    if (*s_index < 0x10) {
+        s_callback_tbl[*s_index](val);
+    } else {
+        extern void smbus_write_reg(uint8_t addr, uint8_t val, uint8_t mask);
+        smbus_write_reg(8, 0x91, 0xFF);
+        extern void fg_read_done(void);
+        fg_read_done();
+    }
+}

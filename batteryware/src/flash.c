@@ -171,6 +171,84 @@ uint32_t flash_timeout_check(uint32_t param)
 }
 
 /*
+ * Flash DMA start — initialise DMA for flash programming.
+ *
+ * Unlocks both flash bank and option bytes, then configures a
+ * DMA context struct at 0x200024CC (4×32-bit fields):
+ *   [0] = 0 (counter)
+ *   [1] = param_1 (flash destination address)
+ *   [2] = 1 (transfer count)
+ *   [3] = 0 (timeout)
+ * Retries dma_channel_reset_all up to 50 times.
+ * Triggers system_reset if all retries fail.
+ */
+void flash_dma_start(uint32_t dst_addr)
+{
+    volatile uint32_t * const s_dma_ctx    = (volatile uint32_t *)0x200024CC;
+    volatile uint32_t * const s_retry_cnt  = (volatile uint32_t *)0x20002C72;
+    volatile uint32_t * const s_timeout    = (volatile uint32_t *)0x200047DC;
+    volatile uint32_t * const s_dma_params = (volatile uint32_t *)0x200024D8;
+
+    flash_unlock_both();
+
+    s_dma_ctx[0] = 0;
+    s_dma_ctx[1] = dst_addr;
+    s_dma_ctx[2] = 1;
+    *s_retry_cnt = 0;
+
+    do {
+        *s_timeout = 0;
+        extern int dma_channel_reset_all(void *, void *);
+        if (dma_channel_reset_all((void *)s_dma_ctx, (void *)s_dma_params) == 0) {
+            *s_retry_cnt = 0x32;
+        } else {
+            uint8_t retries = (uint8_t)(*s_retry_cnt + 1);
+            *s_retry_cnt = retries;
+            if (retries > 0x31) {
+                system_reset();
+            }
+        }
+    } while (*s_retry_cnt < 0x32);
+}
+
+/*
+ * Flash write-and-verify.
+ *
+ * Writes 'count' words from 'src' to 'dst' using flash_word_write.
+ * Before each word write, writes the magic 0xAAAA to a SRAM register.
+ * Each word is verified immediately after write. Returns 0 if all
+ * words written correctly, 1 on any failure.
+ */
+uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t len, int src_base)
+{
+    volatile uint32_t *d = dst;
+    const uint8_t *src = (const uint8_t *)src_base;
+    uint32_t word;
+    uint16_t offset = 0;
+
+    while (offset < len) {
+        word = (uint32_t)src[offset]
+             | ((uint32_t)src[offset + 1] << 8)
+             | ((uint32_t)src[offset + 2] << 16)
+             | ((uint32_t)src[offset + 3] << 24);
+        offset += 4;
+
+        *(volatile uint32_t *)0x20002C10 = 0xAAAA;
+        *(volatile uint32_t *)0x200047DC = 0;
+
+        if (flash_word_write(2, d, word) != 0) {
+            return 1;
+        }
+        if (*d != word) {
+            return 1;
+        }
+        d++;
+    }
+
+    return 0;
+}
+
+/*
  * Program a flash page via DMA.
  *
  * Handles the complete flash page programming sequence:

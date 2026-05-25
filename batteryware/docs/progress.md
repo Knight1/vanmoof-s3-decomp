@@ -26,14 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 124 |
+| pending      | 118 |
 | in-progress  |   0 |
 | named        |  24 |
-| decomp-c     | 110 |
+| decomp-c     | 116 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
+_Total functions: 281. 116 decomp-c, 24 named, 118 pending (`FUN_*`).  `discharge_mosfet_set` was already decomp-c in charge.c, now correctly tracked._
 
 ## Functions
 
@@ -73,15 +73,15 @@ _Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
 | `0x08002194` | — | `FUN_08002194` | pending | |
 | `0x08002ba6` | — | `FUN_08002ba6` | pending | |
 | `0x08002bac` | — | `FUN_08002bac` | pending | |
-| `0x08002bc8` | 202 | `state_handler_03_init` | named | State 3 init: GPIO off, mask, bms_configure, set_state(3) |
-| `0x08002cb8` | 142 | `discharge_mosfet_set` | named | Discharge MOSFET control with state tracking |
+| `0x08002bc8` | 202 | `state_handler_03_init` | decomp-c | State 3 init: GPIO off, mask, bms_configure, set_state(3) |
+| `0x08002cb8` | 142 | `discharge_mosfet_set` | decomp-c | Discharge MOSFET control with state tracking |
 | `0x08002d50` | 106 | `charge_mosfet_set` | decomp-c | Charge MOSFET on/off via GPIOB pin 9 with idempotent state tracking |
 | `0x08002dc4` | — | `FUN_08002dc4` | pending | |
 | `0x08003188` | 60 | `ymodem_send_byte` | decomp-c | Send YMODEM response byte + reset protocol state |
 | `0x080031d8` | 120 | `fg_watchdog_kick` | decomp-c | FEDL5236 comms check + re-init on error |
 | `0x0800325c` | — | `FUN_0800325c` | pending | |
 | `0x080039c2` | — | `FUN_080039c2` | pending | |
-| `0x08004634` | 164 | `fg_read_loop` | named | FEDL5236 register read loop (up to 16 registers) |
+| `0x08004634` | 164 | `fg_read_loop` | decomp-c | FEDL5236 register read loop (up to 16 registers) |
 | `0x08004764` | — | `FUN_08004764` | pending | |
 | `0x0800478c` | — | `FUN_0800478c` | pending | |
 | `0x080048cc` | — | `FUN_080048cc` | pending | |
@@ -92,7 +92,7 @@ _Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
 | `0x080052d8` | 148 | `bms_configure` | decomp-c | FEDL5236 SPI register config (regs 3-9) |
 | `0x0800537c` | — | `FUN_0800537c` | pending | |
 | `0x08005388` | — | `FUN_08005388` | pending | |
-| `0x080054cc` | 198 | `state_handler_17_19` | named | State dispatch 0x17/0x18/0x19 (OVP/UVP power-on) |
+| `0x080054cc` | 198 | `state_handler_17_19` | decomp-c | State dispatch 0x17/0x18/0x19 (OVP/UVP power-on) |
 | `0x080055a8` | — | `FUN_080055a8` | pending | |
 | `0x08005738` | 72 | `state_handler_16` | decomp-c | State machine handler → bms_set_state(0x16) |
 | `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
@@ -102,7 +102,7 @@ _Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
 | `0x08006336` | 10 | `system_reset` | decomp-c | Wrapper around nvic_system_reset |
 | `0x08006340` | 142 | `flash_verify_header` | decomp-c | Firmware image header validation + CRC check |
 | `0x080063e0` | — | `FUN_080063e0` | pending | |
-| `0x08006748` | 186 | `state_handler_01` | named | State 1 entry: gpio off, mosfet on, bms_configure, set_state(1) |
+| `0x08006748` | 186 | `state_handler_01` | decomp-c | State 1 entry: gpio off, mosfet on, bms_configure, set_state(1) |
 | `0x08006810` | — | `FUN_08006810` | pending | |
 | `0x08006948` | 74 | `state_handler_07` | decomp-c | State handler → bms_set_state(0x07) [MOSFET on variant] |
 | `0x0800699c` | — | `FUN_0800699c` | pending | |
@@ -138,9 +138,9 @@ _Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
 | `0x08008f6c` | 56 | `hex_to_nibble` | decomp-c | ASCII hex char → nibble (reverse of nibble_to_hex) |
 | `0x08008fa4` | 210 | `peripheral_init` | named | 3-phase USART/DMA/GPIO init with SR on failure |
 | `0x08009084` | 64 | `dma_init` | decomp-c | DMA channel config + reset on fail (via dma_flash_start) |
-| `0x080090dc` | 110 | `flash_dma_start` | named | Flash DMA transfer start with retry + reset on fail |
+| `0x080090dc` | 110 | `flash_dma_start` | decomp-c | Flash DMA transfer start with retry + reset on fail |
 | `0x0800915c` | 106 | `dma_compare` | decomp-c | DMA transfer compare (0x40B blocks) |
-| `0x080091d4` | 214 | `flash_write_verify` | named | Word-by-word flash write + readback compare |
+| `0x080091d4` | 214 | `flash_write_verify` | decomp-c | Word-by-word flash write + readback compare |
 | `0x080092b8` | — | `FUN_080092b8` | pending | |
 | `0x080093a6` | 108 | `memcmp_verify` | decomp-c | SPI byte-verify with per-byte spin-wait |
 | `0x08009412` | — | `FUN_08009412` | pending | |
