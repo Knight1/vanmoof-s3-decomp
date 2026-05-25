@@ -165,11 +165,3 @@ void log_submit(const void *block_16B)
 {
     (void)block_16B;
 }
-
-/* ---- YModem --------------------------------------------------------- */
-
-int ymodem_receive(uint32_t target, uint32_t max_size)
-{
-    (void)target; (void)max_size;
-    return -1;
-}
