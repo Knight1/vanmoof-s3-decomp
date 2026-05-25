@@ -274,7 +274,7 @@
       "size": 6,
       "name": "__aeabi_uidiv",
       "auto_named": false,
-      "signature": "undefined FUN_0800023c(void)",
+      "signature": "undefined __aeabi_uidiv(void)",
       "thunk": false,
       "external": false
     },
@@ -283,7 +283,7 @@
       "size": 2,
       "name": "trap_div0",
       "auto_named": false,
-      "signature": "undefined FUN_08000244(void)",
+      "signature": "undefined trap_div0(void)",
       "thunk": false,
       "external": false
     },
@@ -292,7 +292,7 @@
       "size": 56,
       "name": "__aeabi_ldiv0",
       "auto_named": false,
-      "signature": "undefined FUN_08000248(void)",
+      "signature": "undefined __aeabi_ldiv0(void)",
       "thunk": false,
       "external": false
     },
@@ -301,7 +301,7 @@
       "size": 80,
       "name": "__aeabi_lmul",
       "auto_named": false,
-      "signature": "undefined FUN_08000288(void)",
+      "signature": "undefined __aeabi_lmul(void)",
       "thunk": false,
       "external": false
     },
@@ -328,7 +328,7 @@
       "size": 42,
       "name": "__clzsi2",
       "auto_named": false,
-      "signature": "undefined FUN_08000488(void)",
+      "signature": "int __clzsi2(uint val)",
       "thunk": false,
       "external": false
     },
@@ -346,7 +346,7 @@
       "size": 54,
       "name": "modem_init",
       "auto_named": false,
-      "signature": "undefined FUN_0800080c(void)",
+      "signature": "void modem_init(void)",
       "thunk": false,
       "external": false
     },
@@ -355,7 +355,7 @@
       "size": 34,
       "name": "dma_stop",
       "auto_named": false,
-      "signature": "undefined FUN_08000850(void)",
+      "signature": "void dma_stop(void)",
       "thunk": false,
       "external": false
     },
@@ -373,7 +373,7 @@
       "size": 72,
       "name": "state_handler_0b",
       "auto_named": false,
-      "signature": "undefined FUN_08001060(void)",
+      "signature": "undefined state_handler_0b(void)",
       "thunk": false,
       "external": false
     },
@@ -391,7 +391,7 @@
       "size": 72,
       "name": "state_handler_0c",
       "auto_named": false,
-      "signature": "undefined FUN_080011d8(void)",
+      "signature": "undefined state_handler_0c(void)",
       "thunk": false,
       "external": false
     },
@@ -409,7 +409,7 @@
       "size": 72,
       "name": "state_handler_12",
       "auto_named": false,
-      "signature": "undefined FUN_080013e0(void)",
+      "signature": "undefined state_handler_12(void)",
       "thunk": false,
       "external": false
     },
@@ -427,7 +427,7 @@
       "size": 72,
       "name": "state_handler_13",
       "auto_named": false,
-      "signature": "undefined FUN_080015e8(void)",
+      "signature": "undefined state_handler_13(void)",
       "thunk": false,
       "external": false
     },
@@ -445,7 +445,7 @@
       "size": 72,
       "name": "state_handler_02",
       "auto_named": false,
-      "signature": "undefined FUN_08001898(void)",
+      "signature": "undefined state_handler_02(void)",
       "thunk": false,
       "external": false
     },
@@ -454,7 +454,7 @@
       "size": 46,
       "name": "capacity_decrement",
       "auto_named": false,
-      "signature": "undefined FUN_080018ec(void)",
+      "signature": "void capacity_decrement(uint amount)",
       "thunk": false,
       "external": false
     },
@@ -463,7 +463,7 @@
       "size": 132,
       "name": "rsoc_lookup",
       "auto_named": false,
-      "signature": "undefined FUN_08001920(void)",
+      "signature": "undefined rsoc_lookup(void)",
       "thunk": false,
       "external": false
     },
@@ -481,7 +481,7 @@
       "size": 90,
       "name": "state_handler_0d",
       "auto_named": false,
-      "signature": "undefined FUN_08001b44(void)",
+      "signature": "undefined state_handler_0d(void)",
       "thunk": false,
       "external": false
     },
@@ -499,7 +499,7 @@
       "size": 90,
       "name": "state_handler_0e",
       "auto_named": false,
-      "signature": "undefined FUN_08001d40(void)",
+      "signature": "undefined state_handler_0e(void)",
       "thunk": false,
       "external": false
     },
@@ -517,7 +517,7 @@
       "size": 72,
       "name": "state_handler_14",
       "auto_named": false,
-      "signature": "undefined FUN_08001f50(void)",
+      "signature": "undefined state_handler_14(void)",
       "thunk": false,
       "external": false
     },
@@ -535,7 +535,7 @@
       "size": 72,
       "name": "state_handler_15",
       "auto_named": false,
-      "signature": "undefined FUN_08002140(void)",
+      "signature": "undefined state_handler_15(void)",
       "thunk": false,
       "external": false
     },
@@ -544,7 +544,7 @@
       "size": 2406,
       "name": "bms_state_machine",
       "auto_named": false,
-      "signature": "undefined FUN_08002194(void)",
+      "signature": "void bms_state_machine(void)",
       "thunk": false,
       "external": false
     },
@@ -553,7 +553,7 @@
       "size": 6,
       "name": "nop_2ba6",
       "auto_named": false,
-      "signature": "undefined FUN_08002ba6(void)",
+      "signature": "undefined nop_2ba6(void)",
       "thunk": false,
       "external": false
     },
@@ -562,7 +562,7 @@
       "size": 6,
       "name": "nop_2bac",
       "auto_named": false,
-      "signature": "undefined FUN_08002bac(void)",
+      "signature": "undefined nop_2bac(void)",
       "thunk": false,
       "external": false
     },
@@ -571,7 +571,7 @@
       "size": 202,
       "name": "state_handler_03_init",
       "auto_named": false,
-      "signature": "undefined FUN_08002bc8(void)",
+      "signature": "undefined state_handler_03_init(void)",
       "thunk": false,
       "external": false
     },
@@ -580,7 +580,7 @@
       "size": 142,
       "name": "discharge_mosfet_set",
       "auto_named": false,
-      "signature": "undefined FUN_08002cb8(void)",
+      "signature": "void discharge_mosfet_set(char on)",
       "thunk": false,
       "external": false
     },
@@ -589,7 +589,7 @@
       "size": 106,
       "name": "charge_mosfet_set",
       "auto_named": false,
-      "signature": "undefined FUN_08002d50(void)",
+      "signature": "void charge_mosfet_set(bool on)",
       "thunk": false,
       "external": false
     },
@@ -607,7 +607,7 @@
       "size": 60,
       "name": "ymodem_send_byte",
       "auto_named": false,
-      "signature": "undefined FUN_08003188(void)",
+      "signature": "void ymodem_send_byte(byte b)",
       "thunk": false,
       "external": false
     },
@@ -616,7 +616,7 @@
       "size": 120,
       "name": "fg_watchdog_kick",
       "auto_named": false,
-      "signature": "undefined FUN_080031d8(void)",
+      "signature": "undefined fg_watchdog_kick(void)",
       "thunk": false,
       "external": false
     },
@@ -643,7 +643,7 @@
       "size": 164,
       "name": "fg_read_loop",
       "auto_named": false,
-      "signature": "undefined FUN_08004634(void)",
+      "signature": "undefined fg_read_loop(void)",
       "thunk": false,
       "external": false
     },
@@ -652,7 +652,7 @@
       "size": 6,
       "name": "nop_4764",
       "auto_named": false,
-      "signature": "undefined FUN_08004764(void)",
+      "signature": "undefined nop_4764(void)",
       "thunk": false,
       "external": false
     },
@@ -688,16 +688,16 @@
       "size": 864,
       "name": "bms_init",
       "auto_named": false,
-      "signature": "undefined FUN_08004d04(void)",
+      "signature": "void bms_init(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x080050ac",
       "size": 424,
-      "name": "FUN_080050ac",
-      "auto_named": true,
-      "signature": "undefined FUN_080050ac(void)",
+      "name": "button_entry_check",
+      "auto_named": false,
+      "signature": "bool button_entry_check(void)",
       "thunk": false,
       "external": false
     },
@@ -715,7 +715,7 @@
       "size": 148,
       "name": "bms_configure",
       "auto_named": false,
-      "signature": "undefined FUN_080052d8(void)",
+      "signature": "void bms_configure(byte cfg)",
       "thunk": false,
       "external": false
     },
@@ -724,7 +724,7 @@
       "size": 10,
       "name": "nop_537c",
       "auto_named": false,
-      "signature": "undefined FUN_0800537c(void)",
+      "signature": "undefined nop_537c(void)",
       "thunk": false,
       "external": false
     },
@@ -742,7 +742,7 @@
       "size": 198,
       "name": "state_handler_17_19",
       "auto_named": false,
-      "signature": "undefined FUN_080054cc(void)",
+      "signature": "undefined state_handler_17_19(void)",
       "thunk": false,
       "external": false
     },
@@ -760,7 +760,7 @@
       "size": 72,
       "name": "state_handler_16",
       "auto_named": false,
-      "signature": "undefined FUN_08005738(void)",
+      "signature": "undefined state_handler_16(void)",
       "thunk": false,
       "external": false
     },
@@ -769,7 +769,7 @@
       "size": 26,
       "name": "nvic_system_reset",
       "auto_named": false,
-      "signature": "undefined FUN_0800578c(void)",
+      "signature": "void nvic_system_reset(void)",
       "thunk": false,
       "external": false
     },
@@ -787,7 +787,7 @@
       "size": 818,
       "name": "bms_set_state",
       "auto_named": false,
-      "signature": "undefined FUN_08005b34(void)",
+      "signature": "void bms_set_state(byte state)",
       "thunk": false,
       "external": false
     },
@@ -805,7 +805,7 @@
       "size": 10,
       "name": "system_reset",
       "auto_named": false,
-      "signature": "undefined FUN_08006336(void)",
+      "signature": "void system_reset(void)",
       "thunk": false,
       "external": false
     },
@@ -814,7 +814,7 @@
       "size": 142,
       "name": "flash_verify_header",
       "auto_named": false,
-      "signature": "undefined FUN_08006340(void)",
+      "signature": "undefined flash_verify_header(void)",
       "thunk": false,
       "external": false
     },
@@ -832,7 +832,7 @@
       "size": 186,
       "name": "state_handler_01",
       "auto_named": false,
-      "signature": "undefined FUN_08006748(void)",
+      "signature": "undefined state_handler_01(void)",
       "thunk": false,
       "external": false
     },
@@ -850,7 +850,7 @@
       "size": 74,
       "name": "state_handler_07",
       "auto_named": false,
-      "signature": "undefined FUN_08006948(void)",
+      "signature": "undefined state_handler_07(void)",
       "thunk": false,
       "external": false
     },
@@ -868,7 +868,7 @@
       "size": 74,
       "name": "state_handler_08",
       "auto_named": false,
-      "signature": "undefined FUN_08006ad4(void)",
+      "signature": "undefined state_handler_08(void)",
       "thunk": false,
       "external": false
     },
@@ -886,7 +886,7 @@
       "size": 72,
       "name": "state_handler_0f",
       "auto_named": false,
-      "signature": "undefined FUN_08006c60(void)",
+      "signature": "undefined state_handler_0f(void)",
       "thunk": false,
       "external": false
     },
@@ -904,7 +904,7 @@
       "size": 72,
       "name": "state_handler_10",
       "auto_named": false,
-      "signature": "undefined FUN_08006dec(void)",
+      "signature": "undefined state_handler_10(void)",
       "thunk": false,
       "external": false
     },
@@ -922,7 +922,7 @@
       "size": 72,
       "name": "state_handler_11",
       "auto_named": false,
-      "signature": "undefined FUN_08006f68(void)",
+      "signature": "undefined state_handler_11(void)",
       "thunk": false,
       "external": false
     },
@@ -940,7 +940,7 @@
       "size": 78,
       "name": "modem_reinit",
       "auto_named": false,
-      "signature": "undefined FUN_080070f8(void)",
+      "signature": "undefined modem_reinit(void)",
       "thunk": false,
       "external": false
     },
@@ -949,7 +949,7 @@
       "size": 20,
       "name": "system_reset_with_arg",
       "auto_named": false,
-      "signature": "undefined FUN_08007158(void)",
+      "signature": "void system_reset_with_arg(uint arg)",
       "thunk": false,
       "external": false
     },
@@ -958,7 +958,7 @@
       "size": 10,
       "name": "nop_716c",
       "auto_named": false,
-      "signature": "undefined FUN_0800716c(void)",
+      "signature": "undefined nop_716c(void)",
       "thunk": false,
       "external": false
     },
@@ -967,7 +967,7 @@
       "size": 132,
       "name": "bootloader_entry",
       "auto_named": false,
-      "signature": "undefined FUN_08007178(void)",
+      "signature": "undefined bootloader_entry(void)",
       "thunk": false,
       "external": false
     },
@@ -976,7 +976,7 @@
       "size": 10,
       "name": "nop_721c",
       "auto_named": false,
-      "signature": "undefined FUN_0800721c(void)",
+      "signature": "undefined nop_721c(void)",
       "thunk": false,
       "external": false
     },
@@ -985,7 +985,7 @@
       "size": 26,
       "name": "nvic_system_reset_dup",
       "auto_named": false,
-      "signature": "undefined FUN_08007228(void)",
+      "signature": "undefined nvic_system_reset_dup(void)",
       "thunk": false,
       "external": false
     },
@@ -994,7 +994,7 @@
       "size": 36,
       "name": "uart_check_parity_error",
       "auto_named": false,
-      "signature": "undefined FUN_0800724c(void)",
+      "signature": "void uart_check_parity_error(void)",
       "thunk": false,
       "external": false
     },
@@ -1003,7 +1003,7 @@
       "size": 40,
       "name": "uart_check_overrun_error",
       "auto_named": false,
-      "signature": "undefined FUN_08007278(void)",
+      "signature": "void uart_check_overrun_error(void)",
       "thunk": false,
       "external": false
     },
@@ -1012,7 +1012,7 @@
       "size": 156,
       "name": "batteryware_main",
       "auto_named": false,
-      "signature": "undefined FUN_080072a8(void)",
+      "signature": "undefined batteryware_main(void)",
       "thunk": false,
       "external": false
     },
@@ -1030,7 +1030,7 @@
       "size": 924,
       "name": "bms_setup",
       "auto_named": false,
-      "signature": "undefined FUN_080078c8(void)",
+      "signature": "void bms_setup(void)",
       "thunk": false,
       "external": false
     },
@@ -1039,7 +1039,7 @@
       "size": 64,
       "name": "memcpy_byte",
       "auto_named": false,
-      "signature": "undefined FUN_08007cf8(void)",
+      "signature": "void memcpy_byte(void * dst, void * src, short count)",
       "thunk": false,
       "external": false
     },
@@ -1048,7 +1048,7 @@
       "size": 62,
       "name": "system_init",
       "auto_named": false,
-      "signature": "undefined FUN_08007d38(void)",
+      "signature": "void system_init(void)",
       "thunk": false,
       "external": false
     },
@@ -1066,7 +1066,7 @@
       "size": 100,
       "name": "modem_config",
       "auto_named": false,
-      "signature": "undefined FUN_08007f50(void)",
+      "signature": "undefined modem_config(void)",
       "thunk": false,
       "external": false
     },
@@ -1075,7 +1075,7 @@
       "size": 80,
       "name": "uart_puthex_byte",
       "auto_named": false,
-      "signature": "undefined FUN_08007fc4(void)",
+      "signature": "void uart_puthex_byte(byte b)",
       "thunk": false,
       "external": false
     },
@@ -1084,7 +1084,7 @@
       "size": 148,
       "name": "uart_puthex_16",
       "auto_named": false,
-      "signature": "undefined FUN_08008014(void)",
+      "signature": "void uart_puthex_16(ushort val)",
       "thunk": false,
       "external": false
     },
@@ -1111,7 +1111,7 @@
       "size": 148,
       "name": "uart_printf",
       "auto_named": false,
-      "signature": "undefined FUN_08008998(void)",
+      "signature": "void uart_printf(char * fmt)",
       "thunk": false,
       "external": false
     },
@@ -1120,7 +1120,7 @@
       "size": 68,
       "name": "nibble_to_hex",
       "auto_named": false,
-      "signature": "undefined FUN_08008f28(void)",
+      "signature": "char nibble_to_hex(byte nibble)",
       "thunk": false,
       "external": false
     },
@@ -1129,7 +1129,7 @@
       "size": 56,
       "name": "hex_to_nibble",
       "auto_named": false,
-      "signature": "undefined FUN_08008f6c(void)",
+      "signature": "byte hex_to_nibble(char c)",
       "thunk": false,
       "external": false
     },
@@ -1138,7 +1138,7 @@
       "size": 210,
       "name": "peripheral_init",
       "auto_named": false,
-      "signature": "undefined FUN_08008fa4(void)",
+      "signature": "undefined peripheral_init(void)",
       "thunk": false,
       "external": false
     },
@@ -1147,7 +1147,7 @@
       "size": 64,
       "name": "dma_init",
       "auto_named": false,
-      "signature": "undefined FUN_08009084(void)",
+      "signature": "void dma_init(void)",
       "thunk": false,
       "external": false
     },
@@ -1156,7 +1156,7 @@
       "size": 110,
       "name": "flash_dma_start",
       "auto_named": false,
-      "signature": "undefined FUN_080090dc(void)",
+      "signature": "undefined flash_dma_start(void)",
       "thunk": false,
       "external": false
     },
@@ -1165,7 +1165,7 @@
       "size": 106,
       "name": "dma_compare",
       "auto_named": false,
-      "signature": "undefined FUN_0800915c(void)",
+      "signature": "undefined dma_compare(void)",
       "thunk": false,
       "external": false
     },
@@ -1174,7 +1174,7 @@
       "size": 214,
       "name": "flash_write_verify",
       "auto_named": false,
-      "signature": "undefined FUN_080091d4(void)",
+      "signature": "undefined flash_write_verify(void)",
       "thunk": false,
       "external": false
     },
@@ -1192,7 +1192,7 @@
       "size": 108,
       "name": "memcmp_verify",
       "auto_named": false,
-      "signature": "undefined FUN_080093a6(void)",
+      "signature": "void memcmp_verify(char * expected, ushort len, char * actual)",
       "thunk": false,
       "external": false
     },
@@ -1201,7 +1201,7 @@
       "size": 88,
       "name": "memcpy",
       "auto_named": false,
-      "signature": "undefined FUN_08009412(void)",
+      "signature": "void * memcpy(void * dst, ushort len, void * src)",
       "thunk": false,
       "external": false
     },
@@ -1228,7 +1228,7 @@
       "size": 40,
       "name": "charge_mosfet_on",
       "auto_named": false,
-      "signature": "undefined FUN_080094ec(void)",
+      "signature": "void charge_mosfet_on(void)",
       "thunk": false,
       "external": false
     },
@@ -1237,7 +1237,7 @@
       "size": 38,
       "name": "charge_mosfet_off",
       "auto_named": false,
-      "signature": "undefined FUN_08009520(void)",
+      "signature": "void charge_mosfet_off(void)",
       "thunk": false,
       "external": false
     },
@@ -1246,7 +1246,7 @@
       "size": 106,
       "name": "fg_uvp1_check",
       "auto_named": false,
-      "signature": "undefined FUN_08009558(void)",
+      "signature": "undefined fg_uvp1_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1255,7 +1255,7 @@
       "size": 106,
       "name": "fg_uvp2_check",
       "auto_named": false,
-      "signature": "undefined FUN_080095d4(void)",
+      "signature": "undefined fg_uvp2_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1264,7 +1264,7 @@
       "size": 106,
       "name": "fg_ovp1_check",
       "auto_named": false,
-      "signature": "undefined FUN_08009650(void)",
+      "signature": "undefined fg_ovp1_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1273,7 +1273,7 @@
       "size": 106,
       "name": "fg_ovp2_check",
       "auto_named": false,
-      "signature": "undefined FUN_080096cc(void)",
+      "signature": "undefined fg_ovp2_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1282,7 +1282,7 @@
       "size": 86,
       "name": "fg_threshold_check",
       "auto_named": false,
-      "signature": "undefined FUN_08009748(void)",
+      "signature": "void fg_threshold_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1291,7 +1291,7 @@
       "size": 76,
       "name": "fg_alert_monitor",
       "auto_named": false,
-      "signature": "undefined FUN_080097b0(void)",
+      "signature": "void fg_alert_monitor(void)",
       "thunk": false,
       "external": false
     },
@@ -1300,7 +1300,7 @@
       "size": 118,
       "name": "fg_discharge_oc_check",
       "auto_named": false,
-      "signature": "undefined FUN_0800980c(void)",
+      "signature": "undefined fg_discharge_oc_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1309,7 +1309,7 @@
       "size": 118,
       "name": "fg_charge_oc_check",
       "auto_named": false,
-      "signature": "undefined FUN_0800989c(void)",
+      "signature": "undefined fg_charge_oc_check(void)",
       "thunk": false,
       "external": false
     },
@@ -1318,7 +1318,7 @@
       "size": 52,
       "name": "config_resend_all",
       "auto_named": false,
-      "signature": "undefined FUN_0800992c(void)",
+      "signature": "void config_resend_all(void)",
       "thunk": false,
       "external": false
     },
@@ -1327,7 +1327,7 @@
       "size": 128,
       "name": "fg_charge_status",
       "auto_named": false,
-      "signature": "undefined FUN_0800997c(void)",
+      "signature": "undefined fg_charge_status(void)",
       "thunk": false,
       "external": false
     },
@@ -1336,7 +1336,7 @@
       "size": 46,
       "name": "fg_status_flag_get",
       "auto_named": false,
-      "signature": "undefined FUN_08009a10(void)",
+      "signature": "bool fg_status_flag_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1345,7 +1345,7 @@
       "size": 54,
       "name": "fg_status_flag2_get",
       "auto_named": false,
-      "signature": "undefined FUN_08009a44(void)",
+      "signature": "bool fg_status_flag2_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1363,7 +1363,7 @@
       "size": 26,
       "name": "nvic_system_reset_v3",
       "auto_named": false,
-      "signature": "undefined FUN_08009aa0(void)",
+      "signature": "undefined nvic_system_reset_v3(void)",
       "thunk": false,
       "external": false
     },
@@ -1381,7 +1381,7 @@
       "size": 4,
       "name": "veneer_a6aa",
       "auto_named": false,
-      "signature": "undefined thunk_FUN_0800a6e0(void)",
+      "signature": "undefined veneer_a6aa(void)",
       "thunk": true,
       "external": false
     },
@@ -1390,7 +1390,7 @@
       "size": 4,
       "name": "veneer_a6ba",
       "auto_named": false,
-      "signature": "undefined thunk_FUN_0800a6e0(void)",
+      "signature": "undefined veneer_a6ba(void)",
       "thunk": true,
       "external": false
     },
@@ -1399,7 +1399,7 @@
       "size": 4,
       "name": "veneer_a6be",
       "auto_named": false,
-      "signature": "undefined thunk_FUN_0800a6e0(void)",
+      "signature": "undefined veneer_a6be(void)",
       "thunk": true,
       "external": false
     },
@@ -1417,7 +1417,7 @@
       "size": 134,
       "name": "atoi_hex_offset1",
       "auto_named": false,
-      "signature": "undefined FUN_0800a70c(void)",
+      "signature": "uint atoi_hex_offset1(char * str, byte digits)",
       "thunk": false,
       "external": false
     },
@@ -1435,7 +1435,7 @@
       "size": 72,
       "name": "state_handler_09",
       "auto_named": false,
-      "signature": "undefined FUN_0800a934(void)",
+      "signature": "undefined state_handler_09(void)",
       "thunk": false,
       "external": false
     },
@@ -1453,7 +1453,7 @@
       "size": 72,
       "name": "state_handler_0a",
       "auto_named": false,
-      "signature": "undefined FUN_0800ab28(void)",
+      "signature": "undefined state_handler_0a(void)",
       "thunk": false,
       "external": false
     },
@@ -1471,7 +1471,7 @@
       "size": 88,
       "name": "uart_puts",
       "auto_named": false,
-      "signature": "undefined FUN_0800ad00(void)",
+      "signature": "void uart_puts(char * str)",
       "thunk": false,
       "external": false
     },
@@ -1480,7 +1480,7 @@
       "size": 76,
       "name": "uart_putchar",
       "auto_named": false,
-      "signature": "undefined FUN_0800ad64(void)",
+      "signature": "void uart_putchar(byte c)",
       "thunk": false,
       "external": false
     },
@@ -1498,7 +1498,7 @@
       "size": 138,
       "name": "uart_tx_isr",
       "auto_named": false,
-      "signature": "undefined FUN_0800aee4(void)",
+      "signature": "void uart_tx_isr(void)",
       "thunk": false,
       "external": false
     },
@@ -1507,7 +1507,7 @@
       "size": 32,
       "name": "uart_tx_flush",
       "auto_named": false,
-      "signature": "undefined FUN_0800af80(void)",
+      "signature": "void uart_tx_flush(void)",
       "thunk": false,
       "external": false
     },
@@ -1561,7 +1561,7 @@
       "size": 34,
       "name": "cmd_counter_inc",
       "auto_named": false,
-      "signature": "undefined FUN_0800d75e(void)",
+      "signature": "void cmd_counter_inc(void)",
       "thunk": false,
       "external": false
     },
@@ -1570,7 +1570,7 @@
       "size": 34,
       "name": "cmd_counter_inc_v2",
       "auto_named": false,
-      "signature": "undefined FUN_0800d780(void)",
+      "signature": "undefined cmd_counter_inc_v2(void)",
       "thunk": false,
       "external": false
     },
@@ -1579,7 +1579,7 @@
       "size": 34,
       "name": "cmd_counter_inc_v3",
       "auto_named": false,
-      "signature": "undefined FUN_0800d7fc(void)",
+      "signature": "undefined cmd_counter_inc_v3(void)",
       "thunk": false,
       "external": false
     },
@@ -1588,7 +1588,7 @@
       "size": 40,
       "name": "cmd_write_and_inc",
       "auto_named": false,
-      "signature": "undefined FUN_0800d81e(void)",
+      "signature": "undefined cmd_write_and_inc(void)",
       "thunk": false,
       "external": false
     },
@@ -1615,7 +1615,7 @@
       "size": 70,
       "name": "cmd_send_response",
       "auto_named": false,
-      "signature": "undefined FUN_0800d850(void)",
+      "signature": "void cmd_send_response(void)",
       "thunk": false,
       "external": false
     },
@@ -1624,7 +1624,7 @@
       "size": 48,
       "name": "cmd_send_8byte",
       "auto_named": false,
-      "signature": "undefined FUN_0800d896(void)",
+      "signature": "void cmd_send_8byte(void)",
       "thunk": false,
       "external": false
     },
@@ -1651,7 +1651,7 @@
       "size": 8,
       "name": "thunk_e1b4",
       "auto_named": false,
-      "signature": "undefined FUN_0800e1b4(void)",
+      "signature": "undefined thunk_e1b4(void)",
       "thunk": false,
       "external": false
     },
@@ -1660,7 +1660,7 @@
       "size": 8,
       "name": "thunk_e1bc",
       "auto_named": false,
-      "signature": "undefined FUN_0800e1bc(void)",
+      "signature": "undefined thunk_e1bc(void)",
       "thunk": false,
       "external": false
     },
@@ -1669,7 +1669,7 @@
       "size": 4,
       "name": "thunk_e1c4",
       "auto_named": false,
-      "signature": "undefined FUN_0800e1c4(void)",
+      "signature": "undefined thunk_e1c4(void)",
       "thunk": false,
       "external": false
     },
@@ -1678,7 +1678,7 @@
       "size": 2,
       "name": "nop_e1c8",
       "auto_named": false,
-      "signature": "undefined FUN_0800e1c8(void)",
+      "signature": "undefined nop_e1c8(void)",
       "thunk": false,
       "external": false
     },
@@ -1687,7 +1687,7 @@
       "size": 14,
       "name": "epilogue_e1ca",
       "auto_named": false,
-      "signature": "undefined FUN_0800e1ca(void)",
+      "signature": "undefined epilogue_e1ca(void)",
       "thunk": false,
       "external": false
     },
@@ -1696,7 +1696,7 @@
       "size": 58,
       "name": "peripheral_reset",
       "auto_named": false,
-      "signature": "undefined FUN_0800e250(void)",
+      "signature": "bool peripheral_reset(void)",
       "thunk": false,
       "external": false
     },
@@ -1714,16 +1714,16 @@
       "size": 92,
       "name": "flash_timeout_check",
       "auto_named": false,
-      "signature": "undefined FUN_0800e29c(void)",
+      "signature": "undefined flash_timeout_check(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x0800e304",
       "size": 14,
-      "name": "FUN_0800e304",
-      "auto_named": true,
-      "signature": "undefined FUN_0800e304(void)",
+      "name": "tick_get",
+      "auto_named": false,
+      "signature": "uint tick_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1813,7 +1813,7 @@
       "size": 188,
       "name": "flash_program_start",
       "auto_named": false,
-      "signature": "undefined FUN_0800e984(void)",
+      "signature": "undefined flash_program_start(void)",
       "thunk": false,
       "external": false
     },
@@ -1822,7 +1822,7 @@
       "size": 192,
       "name": "flash_erase_start",
       "auto_named": false,
-      "signature": "undefined FUN_0800ea44(void)",
+      "signature": "undefined flash_erase_start(void)",
       "thunk": false,
       "external": false
     },
@@ -1831,7 +1831,7 @@
       "size": 140,
       "name": "flash_wait_ready",
       "auto_named": false,
-      "signature": "undefined FUN_0800eb04(void)",
+      "signature": "undefined flash_wait_ready(void)",
       "thunk": false,
       "external": false
     },
@@ -1840,7 +1840,7 @@
       "size": 54,
       "name": "delay_us",
       "auto_named": false,
-      "signature": "undefined FUN_0800eb90(void)",
+      "signature": "void delay_us(uint us)",
       "thunk": false,
       "external": false
     },
@@ -1849,7 +1849,7 @@
       "size": 48,
       "name": "nvic_enable_irq",
       "auto_named": false,
-      "signature": "undefined FUN_0800ebd0(void)",
+      "signature": "void nvic_enable_irq(byte irqn)",
       "thunk": false,
       "external": false
     },
@@ -1858,7 +1858,7 @@
       "size": 62,
       "name": "nvic_enable_irq_dsb",
       "auto_named": false,
-      "signature": "undefined FUN_0800ec04(void)",
+      "signature": "void nvic_enable_irq_dsb(byte irqn)",
       "thunk": false,
       "external": false
     },
@@ -1867,7 +1867,7 @@
       "size": 212,
       "name": "interrupt_set_priority",
       "auto_named": false,
-      "signature": "undefined FUN_0800ec48(void)",
+      "signature": "void interrupt_set_priority(byte irqn, uint priority)",
       "thunk": false,
       "external": false
     },
@@ -1876,7 +1876,7 @@
       "size": 66,
       "name": "flash_page_erase",
       "auto_named": false,
-      "signature": "undefined FUN_0800ed24(void)",
+      "signature": "bool flash_page_erase(uint timeout_ticks)",
       "thunk": false,
       "external": false
     },
@@ -1885,7 +1885,7 @@
       "size": 42,
       "name": "flash_opt_byte_op",
       "auto_named": false,
-      "signature": "undefined FUN_0800ed6c(void)",
+      "signature": "void flash_opt_byte_op(byte op, uint val)",
       "thunk": false,
       "external": false
     },
@@ -1894,7 +1894,7 @@
       "size": 32,
       "name": "nvic_enable_irq_s",
       "auto_named": false,
-      "signature": "undefined FUN_0800ed96(void)",
+      "signature": "void nvic_enable_irq_s(char irqn)",
       "thunk": false,
       "external": false
     },
@@ -1903,7 +1903,7 @@
       "size": 32,
       "name": "nvic_enable_irq_s_dsb",
       "auto_named": false,
-      "signature": "undefined FUN_0800edb6(void)",
+      "signature": "void nvic_enable_irq_s_dsb(char irqn)",
       "thunk": false,
       "external": false
     },
@@ -1930,7 +1930,7 @@
       "size": 16,
       "name": "nop_eebc",
       "auto_named": false,
-      "signature": "undefined FUN_0800eebc(void)",
+      "signature": "undefined nop_eebc(void)",
       "thunk": false,
       "external": false
     },
@@ -1939,7 +1939,7 @@
       "size": 142,
       "name": "dma_transfer",
       "auto_named": false,
-      "signature": "undefined FUN_0800eecc(void)",
+      "signature": "uint dma_transfer(void * ctx, void * src, uint count)",
       "thunk": false,
       "external": false
     },
@@ -1948,7 +1948,7 @@
       "size": 158,
       "name": "dma_transfer_irq",
       "auto_named": false,
-      "signature": "undefined FUN_0800ef5a(void)",
+      "signature": "undefined dma_transfer_irq(void)",
       "thunk": false,
       "external": false
     },
@@ -1966,7 +1966,7 @@
       "size": 110,
       "name": "memcpy_halfword",
       "auto_named": false,
-      "signature": "undefined FUN_0800f11a(void)",
+      "signature": "undefined memcpy_halfword(void)",
       "thunk": false,
       "external": false
     },
@@ -1984,7 +1984,7 @@
       "size": 110,
       "name": "flash_word_write",
       "auto_named": false,
-      "signature": "undefined FUN_0800f264(void)",
+      "signature": "undefined flash_word_write(void)",
       "thunk": false,
       "external": false
     },
@@ -1993,7 +1993,7 @@
       "size": 148,
       "name": "flash_unlock_both",
       "auto_named": false,
-      "signature": "undefined FUN_0800f2dc(void)",
+      "signature": "undefined flash_unlock_both(void)",
       "thunk": false,
       "external": false
     },
@@ -2002,7 +2002,7 @@
       "size": 36,
       "name": "flash_enable_prefetch",
       "auto_named": false,
-      "signature": "undefined FUN_0800f384(void)",
+      "signature": "uint flash_enable_prefetch(void)",
       "thunk": false,
       "external": false
     },
@@ -2029,7 +2029,7 @@
       "size": 188,
       "name": "dma_channel_reset_all",
       "auto_named": false,
-      "signature": "undefined FUN_0800f5c8(void)",
+      "signature": "undefined dma_channel_reset_all(void)",
       "thunk": false,
       "external": false
     },
@@ -2038,7 +2038,7 @@
       "size": 78,
       "name": "flash_unlock",
       "auto_named": false,
-      "signature": "undefined FUN_0800f694(void)",
+      "signature": "uint flash_unlock(void)",
       "thunk": false,
       "external": false
     },
@@ -2047,7 +2047,7 @@
       "size": 166,
       "name": "spi_register_write",
       "auto_named": false,
-      "signature": "undefined FUN_0800f6f0(void)",
+      "signature": "undefined spi_register_write(void)",
       "thunk": false,
       "external": false
     },
@@ -2056,7 +2056,7 @@
       "size": 58,
       "name": "dma_channel_reset",
       "auto_named": false,
-      "signature": "undefined FUN_0800f7a0(void)",
+      "signature": "void dma_channel_reset(uint dma_base)",
       "thunk": false,
       "external": false
     },
@@ -2083,7 +2083,7 @@
       "size": 58,
       "name": "gpio_bit_read",
       "auto_named": false,
-      "signature": "undefined FUN_0800fca4(void)",
+      "signature": "bool gpio_bit_read(uint gpio_base, ushort pin_bit)",
       "thunk": false,
       "external": false
     },
@@ -2101,7 +2101,7 @@
       "size": 136,
       "name": "dma_flash_start",
       "auto_named": false,
-      "signature": "undefined FUN_0800fd18(void)",
+      "signature": "undefined dma_flash_start(void)",
       "thunk": false,
       "external": false
     },
@@ -2144,9 +2144,9 @@
     {
       "addr": "0x08010930",
       "size": 14,
-      "name": "FUN_08010930",
-      "auto_named": true,
-      "signature": "undefined FUN_08010930(void)",
+      "name": "tick_counter_read",
+      "auto_named": false,
+      "signature": "uint tick_counter_read(void)",
       "thunk": false,
       "external": false
     },
@@ -2155,7 +2155,7 @@
       "size": 34,
       "name": "fg_read_field_8",
       "auto_named": false,
-      "signature": "undefined FUN_08010944(void)",
+      "signature": "uint fg_read_field_8(void)",
       "thunk": false,
       "external": false
     },
@@ -2164,7 +2164,7 @@
       "size": 34,
       "name": "fg_read_field_11",
       "auto_named": false,
-      "signature": "undefined FUN_08010970(void)",
+      "signature": "uint fg_read_field_11(void)",
       "thunk": false,
       "external": false
     },
@@ -2191,52 +2191,52 @@
       "size": 82,
       "name": "modem_deinit",
       "auto_named": false,
-      "signature": "undefined FUN_08010d84(void)",
+      "signature": "undefined modem_deinit(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08010dd6",
       "size": 16,
-      "name": "FUN_08010dd6",
-      "auto_named": true,
-      "signature": "undefined FUN_08010dd6(void)",
+      "name": "modem_isr_ack_dup",
+      "auto_named": false,
+      "signature": "void modem_isr_ack_dup(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08010de6",
       "size": 16,
-      "name": "FUN_08010de6",
-      "auto_named": true,
-      "signature": "undefined FUN_08010de6(void)",
+      "name": "modem_isr_ack",
+      "auto_named": false,
+      "signature": "void modem_isr_ack(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08010df8",
       "size": 364,
-      "name": "FUN_08010df8",
-      "auto_named": true,
-      "signature": "undefined FUN_08010df8(void)",
+      "name": "smbus_transmit",
+      "auto_named": false,
+      "signature": "byte smbus_transmit(int * ctx, int tx_buf, int rx_buf, short count)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08010f78",
       "size": 16,
-      "name": "FUN_08010f78",
-      "auto_named": true,
-      "signature": "undefined FUN_08010f78(void)",
+      "name": "modem_restart_thunk",
+      "auto_named": false,
+      "signature": "void modem_restart_thunk(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08010f88",
       "size": 24,
-      "name": "FUN_08010f88",
-      "auto_named": true,
-      "signature": "undefined FUN_08010f88(void)",
+      "name": "bus_ready_check",
+      "auto_named": false,
+      "signature": "byte bus_ready_check(int ctx)",
       "thunk": false,
       "external": false
     },
@@ -2245,7 +2245,7 @@
       "size": 120,
       "name": "dma_byte_handler",
       "auto_named": false,
-      "signature": "undefined FUN_08010fa0(void)",
+      "signature": "undefined dma_byte_handler(void)",
       "thunk": false,
       "external": false
     },
@@ -2263,7 +2263,7 @@
       "size": 144,
       "name": "dma_byte_handler_v2",
       "auto_named": false,
-      "signature": "undefined FUN_08011056(void)",
+      "signature": "undefined dma_byte_handler_v2(void)",
       "thunk": false,
       "external": false
     },
@@ -2272,7 +2272,7 @@
       "size": 116,
       "name": "dma_halfword_handler_v2",
       "auto_named": false,
-      "signature": "undefined FUN_080110e8(void)",
+      "signature": "undefined dma_halfword_handler_v2(void)",
       "thunk": false,
       "external": false
     },
@@ -2281,7 +2281,7 @@
       "size": 46,
       "name": "flash_op_cleanup",
       "auto_named": false,
-      "signature": "undefined FUN_08011160(void)",
+      "signature": "void flash_op_cleanup(void * ctx)",
       "thunk": false,
       "external": false
     },
@@ -2290,16 +2290,16 @@
       "size": 142,
       "name": "dma_halfword_handler",
       "auto_named": false,
-      "signature": "undefined FUN_0801118e(void)",
+      "signature": "undefined dma_halfword_handler(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x0801121c",
       "size": 274,
-      "name": "FUN_0801121c",
-      "auto_named": true,
-      "signature": "undefined FUN_0801121c(void)",
+      "name": "timeout_poll",
+      "auto_named": false,
+      "signature": "uint timeout_poll(int * ctx, uint mask, char expected, int deadline, uint max_time)",
       "thunk": false,
       "external": false
     },
@@ -2308,16 +2308,16 @@
       "size": 132,
       "name": "dma_timeout_copy",
       "auto_named": false,
-      "signature": "undefined FUN_08011338(void)",
+      "signature": "undefined dma_timeout_copy(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x080113c4",
       "size": 282,
-      "name": "FUN_080113c4",
-      "auto_named": true,
-      "signature": "undefined FUN_080113c4(void)",
+      "name": "dma_transfer_done",
+      "auto_named": false,
+      "signature": "void dma_transfer_done(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -2326,34 +2326,34 @@
       "size": 164,
       "name": "flash_page_program",
       "auto_named": false,
-      "signature": "undefined FUN_080114ec(void)",
+      "signature": "undefined flash_page_program(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08011594",
       "size": 16,
-      "name": "FUN_08011594",
-      "auto_named": true,
-      "signature": "undefined FUN_08011594(void)",
+      "name": "flash_program_init",
+      "auto_named": false,
+      "signature": "void flash_program_init(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x080115a4",
       "size": 1218,
-      "name": "FUN_080115a4",
-      "auto_named": true,
-      "signature": "undefined FUN_080115a4(void)",
+      "name": "flash_prescaler_setup",
+      "auto_named": false,
+      "signature": "uint flash_prescaler_setup(int * ctx)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08011b20",
       "size": 324,
-      "name": "FUN_08011b20",
-      "auto_named": true,
-      "signature": "undefined FUN_08011b20(void)",
+      "name": "dma_channel_config",
+      "auto_named": false,
+      "signature": "void dma_channel_config(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -2362,7 +2362,7 @@
       "size": 140,
       "name": "dma_completion_handler",
       "auto_named": false,
-      "signature": "undefined FUN_08011c88(void)",
+      "signature": "undefined dma_completion_handler(void)",
       "thunk": false,
       "external": false
     },
@@ -2380,7 +2380,7 @@
       "size": 10,
       "name": "veneer_11e14",
       "auto_named": false,
-      "signature": "undefined FUN_08011e14(void)",
+      "signature": "undefined veneer_11e14(void)",
       "thunk": false,
       "external": false
     },
@@ -2416,7 +2416,7 @@
       "size": 10,
       "name": "veneer_11ea8",
       "auto_named": false,
-      "signature": "undefined FUN_08011ea8(void)",
+      "signature": "undefined veneer_11ea8(void)",
       "thunk": false,
       "external": false
     },
@@ -2425,7 +2425,7 @@
       "size": 10,
       "name": "veneer_11eb8",
       "auto_named": false,
-      "signature": "undefined FUN_08011eb8(void)",
+      "signature": "undefined veneer_11eb8(void)",
       "thunk": false,
       "external": false
     },
@@ -2434,7 +2434,7 @@
       "size": 10,
       "name": "veneer_11ec8",
       "auto_named": false,
-      "signature": "undefined FUN_08011ec8(void)",
+      "signature": "undefined veneer_11ec8(void)",
       "thunk": false,
       "external": false
     },
@@ -2443,7 +2443,7 @@
       "size": 10,
       "name": "veneer_11ed8",
       "auto_named": false,
-      "signature": "undefined FUN_08011ed8(void)",
+      "signature": "undefined veneer_11ed8(void)",
       "thunk": false,
       "external": false
     },
@@ -2452,7 +2452,7 @@
       "size": 10,
       "name": "veneer_11ee8",
       "auto_named": false,
-      "signature": "undefined FUN_08011ee8(void)",
+      "signature": "undefined veneer_11ee8(void)",
       "thunk": false,
       "external": false
     },
@@ -2461,7 +2461,7 @@
       "size": 10,
       "name": "veneer_11ef8",
       "auto_named": false,
-      "signature": "undefined FUN_08011ef8(void)",
+      "signature": "undefined veneer_11ef8(void)",
       "thunk": false,
       "external": false
     },
@@ -2470,7 +2470,7 @@
       "size": 10,
       "name": "veneer_11f08",
       "auto_named": false,
-      "signature": "undefined FUN_08011f08(void)",
+      "signature": "undefined veneer_11f08(void)",
       "thunk": false,
       "external": false
     },
@@ -2479,7 +2479,7 @@
       "size": 10,
       "name": "veneer_11f18",
       "auto_named": false,
-      "signature": "undefined FUN_08011f18(void)",
+      "signature": "undefined veneer_11f18(void)",
       "thunk": false,
       "external": false
     },
@@ -2488,7 +2488,7 @@
       "size": 10,
       "name": "veneer_11f28",
       "auto_named": false,
-      "signature": "undefined FUN_08011f28(void)",
+      "signature": "undefined veneer_11f28(void)",
       "thunk": false,
       "external": false
     },
@@ -2497,7 +2497,7 @@
       "size": 10,
       "name": "veneer_11f38",
       "auto_named": false,
-      "signature": "undefined FUN_08011f38(void)",
+      "signature": "undefined veneer_11f38(void)",
       "thunk": false,
       "external": false
     },
@@ -2506,7 +2506,7 @@
       "size": 10,
       "name": "veneer_11f48",
       "auto_named": false,
-      "signature": "undefined FUN_08011f48(void)",
+      "signature": "undefined veneer_11f48(void)",
       "thunk": false,
       "external": false
     },
@@ -2515,7 +2515,7 @@
       "size": 10,
       "name": "veneer_11f58",
       "auto_named": false,
-      "signature": "undefined FUN_08011f58(void)",
+      "signature": "undefined veneer_11f58(void)",
       "thunk": false,
       "external": false
     },
@@ -2524,7 +2524,7 @@
       "size": 10,
       "name": "veneer_11f68",
       "auto_named": false,
-      "signature": "undefined FUN_08011f68(void)",
+      "signature": "undefined veneer_11f68(void)",
       "thunk": false,
       "external": false
     },
@@ -2533,7 +2533,7 @@
       "size": 10,
       "name": "veneer_11f88",
       "auto_named": false,
-      "signature": "undefined FUN_08011f88(void)",
+      "signature": "undefined veneer_11f88(void)",
       "thunk": false,
       "external": false
     },
@@ -2569,7 +2569,7 @@
       "size": 90,
       "name": "rsoc_set",
       "auto_named": false,
-      "signature": "undefined FUN_08013800(void)",
+      "signature": "undefined rsoc_set(void)",
       "thunk": false,
       "external": false
     },
@@ -2596,7 +2596,7 @@
       "size": 198,
       "name": "fg_cell_balance",
       "auto_named": false,
-      "signature": "undefined FUN_08013d88(void)",
+      "signature": "undefined fg_cell_balance(void)",
       "thunk": false,
       "external": false
     },
@@ -2605,7 +2605,7 @@
       "size": 180,
       "name": "crc8_calc",
       "auto_named": false,
-      "signature": "undefined FUN_08014130(void)",
+      "signature": "byte crc8_calc(byte * data, char len)",
       "thunk": false,
       "external": false
     },
@@ -2623,7 +2623,7 @@
       "size": 186,
       "name": "state_flags_handler",
       "auto_named": false,
-      "signature": "undefined FUN_080149b8(void)",
+      "signature": "void state_flags_handler(char arg)",
       "thunk": false,
       "external": false
     },
@@ -2632,7 +2632,7 @@
       "size": 88,
       "name": "shipping_mode_check",
       "auto_named": false,
-      "signature": "undefined FUN_08014a90(void)",
+      "signature": "undefined shipping_mode_check(void)",
       "thunk": false,
       "external": false
     },
@@ -2650,7 +2650,7 @@
       "size": 150,
       "name": "crc16_calc",
       "auto_named": false,
-      "signature": "undefined FUN_08014ea4(void)",
+      "signature": "ushort crc16_calc(byte * data, short len)",
       "thunk": false,
       "external": false
     },
@@ -2659,7 +2659,7 @@
       "size": 128,
       "name": "modem_send_2bytes",
       "auto_named": false,
-      "signature": "undefined FUN_08014f40(void)",
+      "signature": "void modem_send_2bytes(byte b1, byte b2)",
       "thunk": false,
       "external": false
     },
@@ -2668,7 +2668,7 @@
       "size": 168,
       "name": "temp_offset_send",
       "auto_named": false,
-      "signature": "undefined FUN_08014fd0(void)",
+      "signature": "undefined temp_offset_send(void)",
       "thunk": false,
       "external": false
     },
@@ -2677,7 +2677,7 @@
       "size": 36,
       "name": "flash_unlock_opt",
       "auto_named": false,
-      "signature": "undefined FUN_0801507c(void)",
+      "signature": "uint flash_unlock_opt(void)",
       "thunk": false,
       "external": false
     },
@@ -2686,7 +2686,7 @@
       "size": 36,
       "name": "flash_lock_opt",
       "auto_named": false,
-      "signature": "undefined FUN_080150ac(void)",
+      "signature": "uint flash_lock_opt(void)",
       "thunk": false,
       "external": false
     },
@@ -2704,7 +2704,7 @@
       "size": 160,
       "name": "atomic_copy_16words",
       "auto_named": false,
-      "signature": "undefined FUN_08015294(void)",
+      "signature": "undefined atomic_copy_16words(void)",
       "thunk": false,
       "external": false
     },
@@ -2713,7 +2713,7 @@
       "size": 26,
       "name": "get_tick_ms",
       "auto_named": false,
-      "signature": "undefined FUN_08015340(void)",
+      "signature": "uint get_tick_ms(uint * out)",
       "thunk": false,
       "external": false
     },
@@ -2722,7 +2722,7 @@
       "size": 206,
       "name": "dma_wait_done",
       "auto_named": false,
-      "signature": "undefined FUN_08015360(void)",
+      "signature": "undefined dma_wait_done(void)",
       "thunk": false,
       "external": false
     },
@@ -2740,7 +2740,7 @@
       "size": 10,
       "name": "veneer_1556c",
       "auto_named": false,
-      "signature": "undefined FUN_0801556c(void)",
+      "signature": "undefined veneer_1556c(void)",
       "thunk": false,
       "external": false
     },
@@ -2749,7 +2749,7 @@
       "size": 10,
       "name": "veneer_1557c",
       "auto_named": false,
-      "signature": "undefined FUN_0801557c(void)",
+      "signature": "undefined veneer_1557c(void)",
       "thunk": false,
       "external": false
     },
@@ -2758,7 +2758,7 @@
       "size": 10,
       "name": "veneer_1558c",
       "auto_named": false,
-      "signature": "undefined FUN_0801558c(void)",
+      "signature": "undefined veneer_1558c(void)",
       "thunk": false,
       "external": false
     },
@@ -2767,7 +2767,7 @@
       "size": 10,
       "name": "veneer_1559c",
       "auto_named": false,
-      "signature": "undefined FUN_0801559c(void)",
+      "signature": "undefined veneer_1559c(void)",
       "thunk": false,
       "external": false
     },
@@ -2776,7 +2776,7 @@
       "size": 10,
       "name": "veneer_155cc",
       "auto_named": false,
-      "signature": "undefined FUN_080155cc(void)",
+      "signature": "undefined veneer_155cc(void)",
       "thunk": false,
       "external": false
     },
@@ -2785,7 +2785,7 @@
       "size": 10,
       "name": "veneer_155ec",
       "auto_named": false,
-      "signature": "undefined FUN_080155ec(void)",
+      "signature": "undefined veneer_155ec(void)",
       "thunk": false,
       "external": false
     }

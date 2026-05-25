@@ -26,15 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 118 |
+| pending      | 93 |
 | in-progress  |   0 |
-| named        |  24 |
-| decomp-c     | 116 |
+| named        |  12 |
+| decomp-c     | 141 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
-
+_Total functions: 281. 141 decomp-c, 12 named, 93 pending (`FUN_*`).
 ## Functions
 
 | Addr | Size | Name | Status | Notes |
@@ -48,8 +47,8 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x08000470` | — | `FUN_08000470` | pending | |
 | `0x08000488` | 42 | `__clzsi2` | named | Compiler built-in count-leading-zeros |
 | `0x08000658` | — | `FUN_08000658` | pending | |
-| `0x0800080c` | 54 | `modem_init` | named | USART1 DMA/modem setup + GPIOA reset |
-| `0x08000850` | 34 | `dma_stop` | named | Disable DMA + call stop |
+| `0x0800080c` | 54 | `modem_init` | decomp-c | USART1 DMA/modem setup + GPIOA reset |
+| `0x08000850` | 34 | `dma_stop` | decomp-c | Disable DMA + call stop |
 | `0x08000880` | — | `FUN_08000880` | pending | |
 | `0x08001060` | 72 | `state_handler_0b` | decomp-c | State machine handler → bms_set_state(0x0B) |
 | `0x080010b4` | — | `FUN_080010b4` | pending | |
@@ -60,8 +59,8 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x080015e8` | 72 | `state_handler_13` | decomp-c | State machine handler → bms_set_state(0x13) |
 | `0x0800163c` | — | `FUN_0800163c` | pending | |
 | `0x08001898` | 72 | `state_handler_02` | decomp-c | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
-| `0x080018ec` | 46 | `capacity_decrement` | named | Saturating counter decrement |
-| `0x08001920` | 132 | `rsoc_lookup` | named | SoC lookup table (100-entry descending search) |
+| `0x080018ec` | 46 | `capacity_decrement` | decomp-c | Saturating counter decrement |
+| `0x08001920` | 132 | `rsoc_lookup` | decomp-c | SoC lookup table (100-entry descending search) |
 | `0x080019b8` | — | `FUN_080019b8` | pending | |
 | `0x08001b44` | 90 | `state_handler_0d` | decomp-c | State handler → bms_set_state(0x0D) [conditional variant] |
 | `0x08001bb4` | — | `FUN_08001bb4` | pending | |
@@ -87,7 +86,7 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x080048cc` | — | `FUN_080048cc` | pending | |
 | `0x08004a18` | — | `FUN_08004a18` | pending | |
 | `0x08004d04` | — | `FUN_08004d04` | pending | |
-| `0x080050ac` | — | `FUN_080050ac` | pending | |
+| `0x080050ac` | — | `button_entry_check` | decomp-c | Power-on button GPIO check for bootloader entry |
 | `0x0800527c` | — | `led_flash` | decomp-c | LED GPIO toggle with configurable fast/slow timing |
 | `0x080052d8` | 148 | `bms_configure` | decomp-c | FEDL5236 SPI register config (regs 3-9) |
 | `0x0800537c` | — | `FUN_0800537c` | pending | |
@@ -126,7 +125,7 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x08007368` | — | `FUN_08007368` | pending | |
 | `0x080078c8` | — | `FUN_080078c8` | pending | |
 | `0x08007cf8` | 64 | `memcpy_byte` | decomp-c | Byte-by-byte memcpy (ldrb/strb) |
-| `0x08007d38` | 62 | `system_init` | named | System startup: GPIO + modem + flash + NVIC |
+| `0x08007d38` | 62 | `system_init` | decomp-c | System startup: GPIO + modem + flash + NVIC |
 | `0x08007d78` | — | `FUN_08007d78` | pending | |
 | `0x08007f50` | 100 | `modem_config` | decomp-c | USART2/modem struct init + peripheral enable |
 | `0x08007fc4` | 80 | `uart_puthex_byte` | decomp-c | Print byte as 2 hex chars via uart_putchar |
@@ -202,7 +201,7 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x0800e250` | 58 | `peripheral_reset` | decomp-c | FLASH ACR set + timeout check |
 | `0x0800e290` | — | `FUN_0800e290` | pending | |
 | `0x0800e29c` | 92 | `flash_timeout_check` | decomp-c | Flash timeout + opt byte fallback |
-| `0x0800e304` | — | `FUN_0800e304` | pending | |
+| `0x0800e304` | — | `tick_get` | decomp-c | System tick counter reader (@ 0x200047DC) |
 | `0x0800e318` | — | `FUN_0800e318` | pending | |
 | `0x0800e32c` | — | `FUN_0800e32c` | pending | |
 | `0x0800e340` | — | `FUN_0800e340` | pending | |
@@ -250,31 +249,31 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x0801053e` | — | `FUN_0801053e` | pending | |
 | `0x08010554` | — | `FUN_08010554` | pending | |
 | `0x080107e4` | — | `FUN_080107e4` | pending | |
-| `0x08010930` | — | `FUN_08010930` | pending | |
+| `0x08010930` | — | `tick_counter_read` | decomp-c | Raw tick counter reader (@ 0x200000C8) |
 | `0x08010944` | 34 | `fg_read_field_8` | decomp-c | Fuel gauge register field read (shift 8) |
 | `0x08010970` | 34 | `fg_read_field_11` | decomp-c | Fuel gauge register field read (shift 11) |
 | `0x0801099c` | — | `FUN_0801099c` | pending | |
 | `0x08010c48` | — | `FUN_08010c48` | pending | |
 | `0x08010d84` | 82 | `modem_deinit` | decomp-c | USART/modem deinit + register cleanup |
-| `0x08010dd6` | — | `FUN_08010dd6` | pending | |
-| `0x08010de6` | — | `FUN_08010de6` | pending | |
-| `0x08010df8` | — | `FUN_08010df8` | pending | |
-| `0x08010f78` | — | `FUN_08010f78` | pending | |
-| `0x08010f88` | — | `FUN_08010f88` | pending | |
+| `0x08010dd6` | — | `modem_isr_ack_dup` | decomp-c | Empty ISR acknowledgment thunk (duplicate) |
+| `0x08010de6` | — | `modem_isr_ack` | decomp-c | Empty ISR acknowledgment thunk |
+| `0x08010df8` | — | `smbus_transmit` | named | SMBus transmit engine (param setup) |
+| `0x08010f78` | — | `modem_restart_thunk` | decomp-c | Empty modem restart ROP call site |
+| `0x08010f88` | — | `bus_ready_check` | decomp-c | Bus status byte read (ctx+0x51) |
 | `0x08010fa0` | 120 | `dma_byte_handler` | decomp-c | DMA byte-by-byte transfer callback (periph→mem) |
 | `0x0801101c` | — | `FUN_0801101c` | pending | |
 | `0x08011056` | 144 | `dma_byte_handler_v2` | decomp-c | DMA byte handler variant 2 (mem→periph) |
 | `0x080110e8` | 116 | `dma_halfword_handler_v2` | decomp-c | DMA halfword handler variant 2 (periph→mem) |
 | `0x08011160` | 46 | `flash_op_cleanup` | decomp-c | Flash operation cleanup (clear CR bit + DMA done) |
 | `0x0801118e` | 142 | `dma_halfword_handler` | decomp-c | DMA halfword transfer completion handler (mem→periph) |
-| `0x0801121c` | — | `FUN_0801121c` | pending | |
+| `0x0801121c` | — | `timeout_poll` | decomp-c | Timeout-poll for status condition with deadline |
 | `0x08011338` | 132 | `dma_timeout_copy` | decomp-c | DMA copy with calibrated timeout |
-| `0x080113c4` | — | `FUN_080113c4` | pending | |
+| `0x080113c4` | — | `dma_transfer_done` | decomp-c | DMA post-transfer completion handler |
 | `0x080114ec` | 164 | `flash_page_program` | decomp-c | Flash page program via DMA |
-| `0x08011594` | — | `FUN_08011594` | pending | |
-| `0x080115a4` | — | `FUN_080115a4` | pending | |
-| `0x08011b20` | — | `FUN_08011b20` | pending | |
-| `0x08011c88` | 140 | `dma_completion_handler` | named | DMA transfer completion + status flag check |
+| `0x08011594` | — | `flash_program_init` | decomp-c | Empty flash program init thunk |
+| `0x080115a4` | — | `flash_prescaler_setup` | named | Flash clock-prescaler config dispatch |
+| `0x08011b20` | — | `dma_channel_config` | decomp-c | DMA channel register bit-set configuration |
+| `0x08011c88` | 140 | `dma_completion_handler` | decomp-c | DMA transfer completion + status flag check |
 | `0x08011d18` | — | `FUN_08011d18` | pending | |
 | `0x08011e14` | — | `FUN_08011e14` | pending | |
 | `0x08011e68` | — | `FUN_08011e68` | pending | |
@@ -302,18 +301,18 @@ _Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 | `0x08013d88` | 198 | `fg_cell_balance` | decomp-c | Cell voltage balancing: average pairs within ±0x31 range |
 | `0x08014130` | 180 | `crc8_calc` | decomp-c | CRC-8 (poly 0x07, init 0xFF) for flash verification |
 | `0x080141e4` | — | `FUN_080141e4` | pending | |
-| `0x080149b8` | 186 | `state_flags_handler` | named | State flag housekeeping + timer event counter |
+| `0x080149b8` | 186 | `state_flags_handler` | decomp-c | State flag housekeeping + timer event counter |
 | `0x08014a90` | 88 | `shipping_mode_check` | decomp-c | Shipping mode entry: state 0x0F/0x10/0x11 timeout check |
 | `0x08014af8` | — | `FUN_08014af8` | pending | |
 | `0x08014ea4` | 150 | `crc16_calc` | decomp-c | Modbus CRC-16 (polynomial 0xA001) |
-| `0x08014f40` | 128 | `modem_send_2bytes` | named | Append 2 bytes to response buffer + dec counter |
-| `0x08014fd0` | 168 | `temp_offset_send` | named | Temperature offset calc + send 2 bytes |
+| `0x08014f40` | 128 | `modem_send_2bytes` | decomp-c | Append 2 bytes to response buffer + dec counter |
+| `0x08014fd0` | 168 | `temp_offset_send` | decomp-c | Temperature offset calc + send 2 bytes |
 | `0x0801507c` | 36 | `flash_unlock_opt` | decomp-c | Flash option byte unlock (OPTKEYR write) |
 | `0x080150ac` | 36 | `flash_lock_opt` | decomp-c | Flash option byte lock |
 | `0x0801518c` | — | `FUN_0801518c` | pending | |
 | `0x08015294` | 160 | `atomic_copy_16words` | decomp-c | Atomic 64B copy (16 words) with IRQ disable |
 | `0x08015340` | 26 | `get_tick_ms` | decomp-c | Read system tick counter (ms since boot) from SRAM |
-| `0x08015360` | 206 | `dma_wait_done` | named | DMA completion poll with timeout + error flags |
+| `0x08015360` | 206 | `dma_wait_done` | decomp-c | DMA completion poll with timeout + error flags |
 | `0x08015434` | — | `FUN_08015434` | pending | |
 | `0x0801556c` | — | `FUN_0801556c` | pending | |
 | `0x0801557c` | — | `FUN_0801557c` | pending | |
