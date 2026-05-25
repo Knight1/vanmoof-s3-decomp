@@ -56,6 +56,9 @@ void uart_puts(char *str);
 uint32_t flash_enable_prefetch(void);
 uint32_t flash_unlock_opt(void);
 uint32_t flash_lock_opt(void);
+uint32_t flash_wait_ready(void *ctx);
+uint32_t flash_timeout_check(uint32_t param);
+bool peripheral_reset(void);
 
 /* Flash page erase + interrupt priority setup */
 bool flash_page_erase(uint32_t timeout_ticks);

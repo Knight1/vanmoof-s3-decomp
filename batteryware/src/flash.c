@@ -100,3 +100,90 @@ void flash_opt_byte_op(uint8_t op, uint32_t val)
 {
     interrupt_set_priority(op, val);
 }
+
+/*
+ * Wait for flash operation to complete.
+ *
+ * Takes a flash context pointer. If the status register bit 2 (BUSY)
+ * is not set, returns 0 (already done). Otherwise:
+ *   - Sets bit 4 (error flag) if bit 1 (EOP) not set and bit 2 set
+ *   - Polls with up to 0xB (11) ticks timeout via FUN_0800e304 (tick counter)
+ *   - On timeout: sets bit 0x10 in field[0x15] and bit 1 in field[0x16]
+ * Returns 0 on success, 1 on timeout.
+ */
+uint32_t flash_wait_ready(void *ctx)
+{
+    volatile uint32_t *c = (volatile uint32_t *)ctx;
+    volatile uint32_t *reg = (volatile uint32_t *)*c;  /* base register pointer */
+
+    if ((reg[8 / 4] & 4) == 0) {
+        return 0;  /* not busy */
+    }
+
+    /* Error flag: if bit 1 clear and bit 2 set */
+    if ((reg[8 / 4] & 4) == 4 && (reg[8 / 4] & 2) == 0) {
+        reg[8 / 4] |= 0x10;
+    }
+
+    extern uint32_t tick_get(void);  /* FUN_0800e304 */
+    uint32_t start = tick_get();
+
+    do {
+        if ((reg[8 / 4] & 4) == 0) {
+            return 0;  /* done */
+        }
+    } while ((tick_get() - start) < 0xB);
+
+    /* Timeout */
+    c[0x15] |= 0x10;
+    c[0x16] |= 1;
+    return 1;
+}
+
+/*
+ * Flash timeout check.
+ *
+ * Reads a counter and divider from SRAM, computes (counter / (1000 / divider)),
+ * calls flash_page_erase with the result. If erase succeeds and param < 4,
+ * configures the option byte. Returns 0 on success, 1 on failure.
+ */
+uint32_t flash_timeout_check(uint32_t param)
+{
+    volatile uint32_t * const s_counter  = (volatile uint32_t *)0x200000C8;
+    volatile uint32_t * const s_divider  = (volatile uint32_t *)0x200000C4;
+    volatile uint32_t * const s_output   = (volatile uint32_t *)0x200000C0;
+
+    uint32_t num = *s_counter;
+    uint32_t div = 1000 / *s_divider;
+    uint32_t count = num / div;
+
+    if (flash_page_erase(count) != 0) {
+        return 1;
+    }
+
+    if (param < 4) {
+        flash_opt_byte_op(0xFF, param);
+        *s_output = param;
+        return 0;
+    }
+
+    return 1;
+}
+
+/*
+ * Peripheral reset.
+ *
+ * Sets bit 1 in FLASH_ACR, calls flash_timeout_check(3), and if
+ * successful calls epilogue thunk. Returns true if reset succeeded.
+ */
+bool peripheral_reset(void)
+{
+    extern void epilogue(void);  /* FUN_0800e290 */
+    FLASH[0x04 / 4] |= 2;       /* FLASH_ACR |= PRFTEN */
+
+    if (flash_timeout_check(3) == 0) {
+        epilogue();
+    }
+
+    return flash_timeout_check(3) != 0;
+}

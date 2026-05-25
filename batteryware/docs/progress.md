@@ -28,8 +28,8 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 | --- | --- |
 | pending      | 131 |
 | in-progress  |   0 |
-| named        |  78 |
-| decomp-c     |  72 |
+| named        |  75 |
+| decomp-c     |  75 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
@@ -199,9 +199,9 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800e1c4` | — | `FUN_0800e1c4` | pending | |
 | `0x0800e1c8` | — | `FUN_0800e1c8` | pending | |
 | `0x0800e1ca` | — | `FUN_0800e1ca` | pending | |
-| `0x0800e250` | 58 | `peripheral_reset` | named | Set reset bit, poll for completion |
+| `0x0800e250` | 58 | `peripheral_reset` | decomp-c | FLASH ACR set + timeout check |
 | `0x0800e290` | — | `FUN_0800e290` | pending | |
-| `0x0800e29c` | 92 | `flash_timeout_check` | named | Flash operation timeout + opt byte fallback |
+| `0x0800e29c` | 92 | `flash_timeout_check` | decomp-c | Flash timeout + opt byte fallback |
 | `0x0800e304` | — | `FUN_0800e304` | pending | |
 | `0x0800e318` | — | `FUN_0800e318` | pending | |
 | `0x0800e32c` | — | `FUN_0800e32c` | pending | |
@@ -214,7 +214,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800e878` | — | `FUN_0800e878` | pending | |
 | `0x0800e984` | — | `FUN_0800e984` | pending | |
 | `0x0800ea44` | — | `FUN_0800ea44` | pending | |
-| `0x0800eb04` | 140 | `flash_wait_ready` | named | Flash operation wait-for-complete with timeout |
+| `0x0800eb04` | 140 | `flash_wait_ready` | decomp-c | Flash busy-wait with 0xB tick timeout |
 | `0x0800eb90` | 54 | `delay_us` | decomp-c | Calibrated busy-wait microsecond delay |
 | `0x0800ebd0` | 48 | `nvic_enable_irq` | decomp-c | NVIC ISER bit set |
 | `0x0800ec04` | 60 | `nvic_enable_irq_dsb` | decomp-c | NVIC ISER bit set + DSB/ISB |
