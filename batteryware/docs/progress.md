@@ -1,0 +1,317 @@
+# Decompilation progress — batteryware
+
+Per-function tracker. Source of truth for "what's left to do."
+
+> Companion docs: **`memory-map.md`** for the MCU memory layout,
+> header format, and vector table.
+
+Populate the **Functions** table by:
+
+1. In Ghidra, run *Script Manager → VanMoof → DumpBatterywareProgram*.
+   This writes `ghidra/exports/batteryware_program.json`.
+2. Append a row per function from the JSON, sorted by address.
+
+Status legend:
+- **pending** — not started
+- **in-progress** — claimed by a contributor (note who in Notes)
+- **named** — renamed in Ghidra, prototype set, but no C yet
+- **decomp-c** — translated to C, builds, but bytes diverge from OEM
+- **byte-eq** — translated to C and `make compare` reports zero diff
+- **deferred** — intentionally skipped (e.g. unreachable, encrypted blob)
+
+_Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
+(image base `0x08000000`, **281 functions**, 59 strings)._
+
+## Summary
+
+| Status | Count |
+| --- | --- |
+| pending      | 272 |
+| in-progress  |   0 |
+| named        |   9 |
+| decomp-c     |   0 |
+| byte-eq      |   0 |
+| deferred     |   0 |
+
+_Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
+
+## Functions
+
+| Addr | Size | Name | Status | Notes |
+| --- | --- | --- | --- | --- |
+| `0x08000130` | — | `__aeabi_uidivmod` | named | ARM runtime unsigned division + modulo (binary long division) |
+| `0x0800023c` | — | `FUN_0800023c` | pending | Division wrapper with zero-check (→ `__aeabi_uidiv`) |
+| `0x08000244` | — | `FUN_08000244` | pending | Null subroutine (trap redirect) |
+| `0x08000248` | — | `FUN_08000248` | pending | 64-bit div-by-zero handler (`__aeabi_ldiv0`) |
+| `0x08000288` | — | `FUN_08000288` | pending | |
+| `0x080002d8` | — | `FUN_080002d8` | pending | |
+| `0x08000470` | — | `FUN_08000470` | pending | |
+| `0x08000488` | — | `FUN_08000488` | pending | |
+| `0x08000658` | — | `FUN_08000658` | pending | |
+| `0x0800080c` | — | `FUN_0800080c` | pending | |
+| `0x08000850` | — | `FUN_08000850` | pending | |
+| `0x08000880` | — | `FUN_08000880` | pending | |
+| `0x08001060` | — | `FUN_08001060` | pending | |
+| `0x080010b4` | — | `FUN_080010b4` | pending | |
+| `0x080011d8` | — | `FUN_080011d8` | pending | |
+| `0x0800122c` | — | `FUN_0800122c` | pending | |
+| `0x080013e0` | — | `FUN_080013e0` | pending | |
+| `0x08001434` | — | `FUN_08001434` | pending | |
+| `0x080015e8` | — | `FUN_080015e8` | pending | |
+| `0x0800163c` | — | `FUN_0800163c` | pending | |
+| `0x08001898` | — | `FUN_08001898` | pending | |
+| `0x080018ec` | — | `FUN_080018ec` | pending | |
+| `0x08001920` | — | `FUN_08001920` | pending | |
+| `0x080019b8` | — | `FUN_080019b8` | pending | |
+| `0x08001b44` | — | `FUN_08001b44` | pending | |
+| `0x08001bb4` | — | `FUN_08001bb4` | pending | |
+| `0x08001d40` | — | `FUN_08001d40` | pending | |
+| `0x08001db0` | — | `FUN_08001db0` | pending | |
+| `0x08001f50` | — | `FUN_08001f50` | pending | |
+| `0x08001fa4` | — | `FUN_08001fa4` | pending | |
+| `0x08002140` | — | `FUN_08002140` | pending | |
+| `0x08002194` | — | `FUN_08002194` | pending | |
+| `0x08002ba6` | — | `FUN_08002ba6` | pending | |
+| `0x08002bac` | — | `FUN_08002bac` | pending | |
+| `0x08002bc8` | — | `FUN_08002bc8` | pending | |
+| `0x08002cb8` | — | `FUN_08002cb8` | pending | |
+| `0x08002d50` | — | `FUN_08002d50` | pending | |
+| `0x08002dc4` | — | `FUN_08002dc4` | pending | |
+| `0x08003188` | — | `FUN_08003188` | pending | |
+| `0x080031d8` | — | `FUN_080031d8` | pending | |
+| `0x0800325c` | — | `FUN_0800325c` | pending | |
+| `0x080039c2` | — | `FUN_080039c2` | pending | |
+| `0x08004634` | — | `FUN_08004634` | pending | |
+| `0x08004764` | — | `FUN_08004764` | pending | |
+| `0x0800478c` | — | `FUN_0800478c` | pending | |
+| `0x080048cc` | — | `FUN_080048cc` | pending | |
+| `0x08004a18` | — | `FUN_08004a18` | pending | |
+| `0x08004d04` | — | `FUN_08004d04` | pending | |
+| `0x080050ac` | — | `FUN_080050ac` | pending | |
+| `0x0800527c` | — | `led_flash` | named | LED GPIO toggle with configurable fast/slow timing |
+| `0x080052d8` | — | `FUN_080052d8` | pending | |
+| `0x0800537c` | — | `FUN_0800537c` | pending | |
+| `0x08005388` | — | `FUN_08005388` | pending | |
+| `0x080054cc` | — | `FUN_080054cc` | pending | |
+| `0x080055a8` | — | `FUN_080055a8` | pending | |
+| `0x08005738` | — | `FUN_08005738` | pending | |
+| `0x0800578c` | — | `FUN_0800578c` | pending | |
+| `0x080057b0` | — | `FUN_080057b0` | pending | |
+| `0x08005b34` | — | `FUN_08005b34` | pending | |
+| `0x08006328` | — | `FUN_08006328` | pending | |
+| `0x08006336` | — | `FUN_08006336` | pending | |
+| `0x08006340` | — | `FUN_08006340` | pending | |
+| `0x080063e0` | — | `FUN_080063e0` | pending | |
+| `0x08006748` | — | `FUN_08006748` | pending | |
+| `0x08006810` | — | `FUN_08006810` | pending | |
+| `0x08006948` | — | `FUN_08006948` | pending | |
+| `0x0800699c` | — | `FUN_0800699c` | pending | |
+| `0x08006ad4` | — | `FUN_08006ad4` | pending | |
+| `0x08006b28` | — | `FUN_08006b28` | pending | |
+| `0x08006c60` | — | `FUN_08006c60` | pending | |
+| `0x08006cb4` | — | `FUN_08006cb4` | pending | |
+| `0x08006dec` | — | `FUN_08006dec` | pending | |
+| `0x08006e40` | — | `FUN_08006e40` | pending | |
+| `0x08006f68` | — | `FUN_08006f68` | pending | |
+| `0x08006fbc` | — | `FUN_08006fbc` | pending | |
+| `0x080070f8` | — | `FUN_080070f8` | pending | |
+| `0x08007158` | — | `FUN_08007158` | pending | |
+| `0x0800716c` | — | `FUN_0800716c` | pending | |
+| `0x08007178` | — | `FUN_08007178` | pending | |
+| `0x0800721c` | — | `FUN_0800721c` | pending | |
+| `0x08007228` | — | `FUN_08007228` | pending | |
+| `0x0800724c` | — | `FUN_0800724c` | pending | |
+| `0x08007278` | — | `FUN_08007278` | pending | |
+| `0x080072a8` | — | `FUN_080072a8` | pending | |
+| `0x08007368` | — | `FUN_08007368` | pending | |
+| `0x080078c8` | — | `FUN_080078c8` | pending | |
+| `0x08007cf8` | — | `FUN_08007cf8` | pending | |
+| `0x08007d38` | — | `FUN_08007d38` | pending | |
+| `0x08007d78` | — | `FUN_08007d78` | pending | |
+| `0x08007f50` | — | `FUN_08007f50` | pending | |
+| `0x08007fc4` | — | `FUN_08007fc4` | pending | |
+| `0x08008014` | — | `FUN_08008014` | pending | |
+| `0x080080a8` | — | `FUN_080080a8` | pending | |
+| `0x080081a8` | — | `FUN_080081a8` | pending | |
+| `0x08008998` | — | `FUN_08008998` | pending | |
+| `0x08008f28` | — | `FUN_08008f28` | pending | |
+| `0x08008f6c` | — | `FUN_08008f6c` | pending | |
+| `0x08008fa4` | — | `FUN_08008fa4` | pending | |
+| `0x08009084` | — | `FUN_08009084` | pending | |
+| `0x080090dc` | — | `FUN_080090dc` | pending | |
+| `0x0800915c` | — | `FUN_0800915c` | pending | |
+| `0x080091d4` | — | `FUN_080091d4` | pending | |
+| `0x080092b8` | — | `FUN_080092b8` | pending | |
+| `0x080093a6` | — | `FUN_080093a6` | pending | |
+| `0x08009412` | — | `FUN_08009412` | pending | |
+| `0x0800946c` | — | `delay_ms` | named | Busy-wait SysTick-polling millisecond delay |
+| `0x080094d4` | — | `FUN_080094d4` | pending | |
+| `0x080094ec` | — | `FUN_080094ec` | pending | |
+| `0x08009520` | — | `FUN_08009520` | pending | |
+| `0x08009558` | — | `FUN_08009558` | pending | |
+| `0x080095d4` | — | `FUN_080095d4` | pending | |
+| `0x08009650` | — | `FUN_08009650` | pending | |
+| `0x080096cc` | — | `FUN_080096cc` | pending | |
+| `0x08009748` | — | `FUN_08009748` | pending | |
+| `0x080097b0` | — | `FUN_080097b0` | pending | |
+| `0x0800980c` | — | `FUN_0800980c` | pending | |
+| `0x0800989c` | — | `FUN_0800989c` | pending | |
+| `0x0800992c` | — | `FUN_0800992c` | pending | |
+| `0x0800997c` | — | `FUN_0800997c` | pending | |
+| `0x08009a10` | — | `FUN_08009a10` | pending | |
+| `0x08009a44` | — | `FUN_08009a44` | pending | |
+| `0x08009a80` | — | `FUN_08009a80` | pending | |
+| `0x08009aa0` | — | `FUN_08009aa0` | pending | |
+| `0x08009ac4` | — | `FUN_08009ac4` | pending | |
+| `0x0800a6aa` | — | `thunk_FUN_0800a6e0` | pending | Thunk |
+| `0x0800a6ba` | — | `thunk_FUN_0800a6e0` | pending | Thunk |
+| `0x0800a6be` | — | `thunk_FUN_0800a6e0` | pending | Thunk |
+| `0x0800a6e0` | — | `FUN_0800a6e0` | pending | |
+| `0x0800a70c` | — | `FUN_0800a70c` | pending | |
+| `0x0800a794` | — | `FUN_0800a794` | pending | |
+| `0x0800a934` | — | `FUN_0800a934` | pending | |
+| `0x0800a988` | — | `FUN_0800a988` | pending | |
+| `0x0800ab28` | — | `FUN_0800ab28` | pending | |
+| `0x0800ab7c` | — | `FUN_0800ab7c` | pending | |
+| `0x0800ad00` | — | `FUN_0800ad00` | pending | |
+| `0x0800ad64` | — | `FUN_0800ad64` | pending | |
+| `0x0800adbc` | — | `FUN_0800adbc` | pending | |
+| `0x0800aee4` | — | `FUN_0800aee4` | pending | |
+| `0x0800af80` | — | `FUN_0800af80` | pending | |
+| `0x0800afa4` | — | `FUN_0800afa4` | pending | |
+| `0x0800ce9e` | — | `FUN_0800ce9e` | pending | |
+| `0x0800d75e` | — | `FUN_0800d75e` | pending | |
+| `0x0800d780` | — | `FUN_0800d780` | pending | |
+| `0x0800d7fc` | — | `FUN_0800d7fc` | pending | |
+| `0x0800d81e` | — | `FUN_0800d81e` | pending | |
+| `0x0800d846` | — | `FUN_0800d846` | pending | |
+| `0x0800d84a` | — | `FUN_0800d84a` | pending | |
+| `0x0800d850` | — | `FUN_0800d850` | pending | |
+| `0x0800d896` | — | `FUN_0800d896` | pending | |
+| `0x0800d8c6` | — | `FUN_0800d8c6` | pending | |
+| `0x0800d8f0` | — | `FUN_0800d8f0` | pending | |
+| `0x0800e1b4` | — | `FUN_0800e1b4` | pending | |
+| `0x0800e1bc` | — | `FUN_0800e1bc` | pending | |
+| `0x0800e1c4` | — | `FUN_0800e1c4` | pending | |
+| `0x0800e1c8` | — | `FUN_0800e1c8` | pending | |
+| `0x0800e1ca` | — | `FUN_0800e1ca` | pending | |
+| `0x0800e250` | — | `FUN_0800e250` | pending | |
+| `0x0800e290` | — | `FUN_0800e290` | pending | |
+| `0x0800e29c` | — | `FUN_0800e29c` | pending | |
+| `0x0800e304` | — | `FUN_0800e304` | pending | |
+| `0x0800e318` | — | `FUN_0800e318` | pending | |
+| `0x0800e32c` | — | `FUN_0800e32c` | pending | |
+| `0x0800e340` | — | `FUN_0800e340` | pending | |
+| `0x0800e354` | — | `FUN_0800e354` | pending | |
+| `0x0800e63c` | — | `FUN_0800e63c` | pending | |
+| `0x0800e774` | — | `FUN_0800e774` | pending | |
+| `0x0800e784` | — | `FUN_0800e784` | pending | |
+| `0x0800e794` | — | `FUN_0800e794` | pending | |
+| `0x0800e878` | — | `FUN_0800e878` | pending | |
+| `0x0800e984` | — | `FUN_0800e984` | pending | |
+| `0x0800ea44` | — | `FUN_0800ea44` | pending | |
+| `0x0800eb04` | — | `FUN_0800eb04` | pending | |
+| `0x0800eb90` | — | `FUN_0800eb90` | pending | |
+| `0x0800ebd0` | — | `FUN_0800ebd0` | pending | |
+| `0x0800ec04` | — | `FUN_0800ec04` | pending | |
+| `0x0800ec48` | — | `FUN_0800ec48` | pending | |
+| `0x0800ed24` | — | `FUN_0800ed24` | pending | |
+| `0x0800ed6c` | — | `FUN_0800ed6c` | pending | |
+| `0x0800ed96` | — | `FUN_0800ed96` | pending | |
+| `0x0800edb6` | — | `FUN_0800edb6` | pending | |
+| `0x0800edd6` | — | `FUN_0800edd6` | pending | |
+| `0x0800edf0` | — | `FUN_0800edf0` | pending | |
+| `0x0800eebc` | — | `FUN_0800eebc` | pending | |
+| `0x0800eecc` | — | `FUN_0800eecc` | pending | |
+| `0x0800ef5a` | — | `FUN_0800ef5a` | pending | |
+| `0x0800eff8` | — | `FUN_0800eff8` | pending | |
+| `0x0800f11a` | — | `FUN_0800f11a` | pending | |
+| `0x0800f188` | — | `FUN_0800f188` | pending | |
+| `0x0800f264` | — | `FUN_0800f264` | pending | |
+| `0x0800f2dc` | — | `FUN_0800f2dc` | pending | |
+| `0x0800f384` | — | `FUN_0800f384` | pending | |
+| `0x0800f3ac` | — | `FUN_0800f3ac` | pending | |
+| `0x0800f490` | — | `FUN_0800f490` | pending | |
+| `0x0800f5c8` | — | `FUN_0800f5c8` | pending | |
+| `0x0800f694` | — | `FUN_0800f694` | pending | |
+| `0x0800f6f0` | — | `FUN_0800f6f0` | pending | |
+| `0x0800f7a0` | — | `FUN_0800f7a0` | pending | |
+| `0x0800f7e4` | — | `FUN_0800f7e4` | pending | |
+| `0x0800fae0` | — | `FUN_0800fae0` | pending | |
+| `0x0800fca4` | — | `FUN_0800fca4` | pending | |
+| `0x0800fcde` | — | `gpio_bit_write` | named | Atomic GPIO bit set/clear via BSRR/BRR registers |
+| `0x0800fd18` | — | `FUN_0800fd18` | pending | |
+| `0x0800fdac` | — | `FUN_0800fdac` | pending | |
+| `0x0801053e` | — | `FUN_0801053e` | pending | |
+| `0x08010554` | — | `FUN_08010554` | pending | |
+| `0x080107e4` | — | `FUN_080107e4` | pending | |
+| `0x08010930` | — | `FUN_08010930` | pending | |
+| `0x08010944` | — | `FUN_08010944` | pending | |
+| `0x08010970` | — | `FUN_08010970` | pending | |
+| `0x0801099c` | — | `FUN_0801099c` | pending | |
+| `0x08010c48` | — | `FUN_08010c48` | pending | |
+| `0x08010d84` | — | `FUN_08010d84` | pending | |
+| `0x08010dd6` | — | `FUN_08010dd6` | pending | |
+| `0x08010de6` | — | `FUN_08010de6` | pending | |
+| `0x08010df8` | — | `FUN_08010df8` | pending | |
+| `0x08010f78` | — | `FUN_08010f78` | pending | |
+| `0x08010f88` | — | `FUN_08010f88` | pending | |
+| `0x08010fa0` | — | `FUN_08010fa0` | pending | |
+| `0x0801101c` | — | `FUN_0801101c` | pending | |
+| `0x08011056` | — | `FUN_08011056` | pending | |
+| `0x080110e8` | — | `FUN_080110e8` | pending | |
+| `0x08011160` | — | `FUN_08011160` | pending | |
+| `0x0801118e` | — | `FUN_0801118e` | pending | |
+| `0x0801121c` | — | `FUN_0801121c` | pending | |
+| `0x08011338` | — | `FUN_08011338` | pending | |
+| `0x080113c4` | — | `FUN_080113c4` | pending | |
+| `0x080114ec` | — | `FUN_080114ec` | pending | |
+| `0x08011594` | — | `FUN_08011594` | pending | |
+| `0x080115a4` | — | `FUN_080115a4` | pending | |
+| `0x08011b20` | — | `FUN_08011b20` | pending | |
+| `0x08011c88` | — | `FUN_08011c88` | pending | |
+| `0x08011d18` | — | `FUN_08011d18` | pending | |
+| `0x08011e14` | — | `FUN_08011e14` | pending | |
+| `0x08011e68` | — | `FUN_08011e68` | pending | |
+| `0x08011e7a` | — | `FUN_08011e7a` | pending | |
+| `0x08011e98` | — | `FUN_08011e98` | pending | |
+| `0x08011ea8` | — | `FUN_08011ea8` | pending | |
+| `0x08011eb8` | — | `FUN_08011eb8` | pending | |
+| `0x08011ec8` | — | `FUN_08011ec8` | pending | |
+| `0x08011ed8` | — | `FUN_08011ed8` | pending | |
+| `0x08011ee8` | — | `FUN_08011ee8` | pending | |
+| `0x08011ef8` | — | `FUN_08011ef8` | pending | |
+| `0x08011f08` | — | `FUN_08011f08` | pending | |
+| `0x08011f18` | — | `FUN_08011f18` | pending | |
+| `0x08011f28` | — | `FUN_08011f28` | pending | |
+| `0x08011f38` | — | `FUN_08011f38` | pending | |
+| `0x08011f48` | — | `FUN_08011f48` | pending | |
+| `0x08011f58` | — | `FUN_08011f58` | pending | |
+| `0x08011f68` | — | `FUN_08011f68` | pending | |
+| `0x08011f88` | — | `FUN_08011f88` | pending | |
+| `0x08013228` | — | `FUN_08013228` | pending | |
+| `0x08013800` | — | `FUN_08013800` | pending | |
+| `0x08013860` | — | `FUN_08013860` | pending | |
+| `0x080138ac` | — | `FUN_080138ac` | pending | |
+| `0x08013d88` | — | `FUN_08013d88` | pending | |
+| `0x08014130` | — | `FUN_08014130` | pending | |
+| `0x080141e4` | — | `FUN_080141e4` | pending | |
+| `0x080149b8` | — | `FUN_080149b8` | pending | |
+| `0x08014a90` | — | `FUN_08014a90` | pending | |
+| `0x08014af8` | — | `FUN_08014af8` | pending | |
+| `0x08014ea4` | — | `FUN_08014ea4` | pending | |
+| `0x08014f40` | — | `FUN_08014f40` | pending | |
+| `0x08014fd0` | — | `FUN_08014fd0` | pending | |
+| `0x0801507c` | — | `FUN_0801507c` | pending | |
+| `0x080150ac` | — | `FUN_080150ac` | pending | |
+| `0x0801518c` | — | `FUN_0801518c` | pending | |
+| `0x08015294` | — | `FUN_08015294` | pending | |
+| `0x08015340` | — | `FUN_08015340` | pending | |
+| `0x08015360` | — | `FUN_08015360` | pending | |
+| `0x08015434` | — | `FUN_08015434` | pending | |
+| `0x0801556c` | — | `FUN_0801556c` | pending | |
+| `0x0801557c` | — | `FUN_0801557c` | pending | |
+| `0x0801558c` | — | `FUN_0801558c` | pending | |
+| `0x0801559c` | — | `FUN_0801559c` | pending | |
+| `0x080155cc` | — | `FUN_080155cc` | pending | |
+| `0x080155ec` | — | `FUN_080155ec` | pending | |
