@@ -26,10 +26,10 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 20 |
+| pending      |  0 |
 | in-progress  |   0 |
 | named        |   6 |
-| decomp-c     | 176 |
+| decomp-c     | 195 |
 | byte-eq      |   0 |
 | deferred     |  30 |
 
