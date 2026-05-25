@@ -197,11 +197,167 @@ uint32_t dma_flash_start(void *ctx)
             } else {
                 c[0x10 / 4] = c[3];
             }
-            return 0;
         }
     } while ((tick_get() - start) < 0x2A);
 
     return 3;  /* timeout */
+}
+
+/*
+ * Timeout poll — wait for status condition with deadline.
+ *
+ * Spins checking (*ctx + 8) & mask == expected. If deadline is -1,
+ * continues checking indefinitely (inner do-while). Otherwise
+ * computes a deadline window: deadline + (max_time - tick_now).
+ * Breaks when time exceeds the window or when the step counter
+ * (derived from tick_counter[0x200000C8] bit-shifted) reaches zero.
+ *
+ * On exit (timeout):
+ *   - Clears bits 0-4 in (*ctx + 4) (SR register cleanup)
+ *   - If ctx[1] == 0x104 and ctx[2] in {0x8000, 0x400}: clears bit 6 in *ctx
+ *   - If ctx[10] == 0x2000: sets *ctx = (*ctx & 0xFFFFDFFF) | 0x2000
+ *   - Sets status byte to 1, clears tx_active flag
+ *   - Returns 3
+ *
+ * Returns 0 when the expected status condition is met.
+ */
+uint32_t timeout_poll(int *ctx, uint32_t mask, uint8_t expected, int deadline, uint32_t max_time)
+{
+    volatile uint32_t *tick_ptr = (volatile uint32_t *)0x200000C8;
+    uint32_t tick_now = tick_get();
+    uint32_t window = (uint32_t)(deadline + ((int)max_time - (int)tick_now));
+    tick_now = tick_get();
+    int step = (int)(window * (((*tick_ptr & 0x7FFFFFF) >> 15)));
+
+    while (1) {
+        do {
+            if ((mask == (*(volatile uint32_t *)(*ctx + 8) & mask)) == (expected != 0)) {
+                return 0;
+            }
+        } while (deadline == -1);
+
+        uint32_t now = tick_get();
+        if ((window <= (now - tick_now)) || (window == 0)) break;
+        if (step == 0) {
+            window = 0;
+        }
+        step--;
+    }
+
+    /* timeout: cleanup */
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[1] &= 0xFFFFFF1F;
+
+    if ((ctx[1] == 0x104) && ((ctx[2] == 0x8000) || (ctx[2] == 0x400))) {
+        reg[0] &= ~0x40U;
+    }
+    if (ctx[10] == 0x2000) {
+        reg[0] = (reg[0] & 0xFFFFDFFF) | 0x2000;
+    }
+
+    *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+    *(volatile uint8_t *)(ctx + 0x14) = 0;
+    return 3;
+}
+
+/*
+ * DMA transfer done — post-transfer completion handler.
+ *
+ * Computes a timeout from tick_counter / 24000 * 100, clears bit 5 (0x20)
+ * in the SR, then countdown-polls until bit 1 (0x02) is set in the status
+ * register. If timeout expires, sets ctx[0x15] |= 0x20.
+ * Then calls dma_timeout_copy. After that:
+ *   - If SR bit 4 (error): status byte = 1, ctx[0x15] |= 2, system_reset_with_arg
+ *   - If ctx[0x15] == 0:
+ *       status 4: restart thunk
+ *       otherwise: veneer_11ec8(ctx) (next-step callback)
+ *   - Otherwise: system_reset_with_arg
+ */
+void dma_transfer_done(int *ctx)
+{
+    volatile uint32_t *tick_ptr = (volatile uint32_t *)0x200000C8;
+    uint32_t divisor = 0x5DC0;  /* 24000 */
+    uint32_t timeout = (*tick_ptr / divisor) * 100;
+
+    uint32_t tick_now = tick_get();
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[1] &= 0xFFFFFFDF;
+
+    do {
+        if (timeout == 0) {
+            ctx[0x15] |= 0x20;
+            break;
+        }
+        timeout--;
+    } while ((reg[2] & 2) == 0);
+
+    extern uint32_t dma_timeout_copy(int *, uint32_t, uint32_t);
+    if (dma_timeout_copy(ctx, 100, tick_now) != 0) {
+        ctx[0x15] |= 0x20;
+    }
+
+    if ((reg[2] & 0x10) == 0x10) {
+        *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+        ctx[0x15] |= 2;
+        reg[2] = 0xFFEF;
+        system_reset_with_arg((uint32_t)ctx);
+    } else if (ctx[0x15] == 0) {
+        if (*(volatile uint8_t *)((uintptr_t)ctx + 0x51) == 4) {
+            *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+            extern void modem_restart_thunk(void);
+            modem_restart_thunk();
+        } else {
+            *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+            extern void veneer_11ec8(void *);
+            /* FUN_08011ec8 — next-step transition callback */
+            (void)ctx;
+            veneer_11ec8(ctx);
+        }
+    } else {
+        *(volatile uint8_t *)((uintptr_t)ctx + 0x51) = 1;
+        system_reset_with_arg((uint32_t)ctx);
+    }
+}
+
+/*
+ * DMA channel configuration — apply configuration bits from ctx.
+ *
+ * Walks ctx[9] bitmask (bits 0-7) and applies each enabled configuration
+ * field (ctx[10]-ctx[18]) to the peripheral registers at *ctx + 4 and
+ * *ctx + 8, using the corresponding clear masks from the literal pool.
+ * Special case: if bit 6 is set and ctx[10] == 0x100000, ORs ctx[11] too.
+ */
+void dma_channel_config(int *ctx)
+{
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+
+    if ((ctx[9] & 1) != 0) {
+        reg[1] = ctx[10] | (reg[1] & 0xFFFDFFFF);
+    }
+    if ((ctx[9] & 2) != 0) {
+        reg[1] = ctx[11] | (reg[1] & 0xFFFEFFFF);
+    }
+    if ((ctx[9] & 4) != 0) {
+        reg[1] = ctx[12] | (reg[1] & 0xFFFBFFFF);
+    }
+    if ((ctx[9] & 8) != 0) {
+        reg[1] = ctx[13] | (reg[1] & 0xFFFF7FFF);
+    }
+    if ((ctx[9] & 0x10) != 0) {
+        reg[2] = ctx[14] | (reg[2] & 0xFFFFEFFF);
+    }
+    if ((ctx[9] & 0x20) != 0) {
+        reg[2] = ctx[15] | (reg[2] & 0xFFFFDFFF);
+    }
+    if ((ctx[9] & 0x40) != 0) {
+        reg[1] = ctx[16] | (reg[1] & 0xFFEFFFFF);
+        if (ctx[16] == 0x100000) {
+            reg[1] = ctx[17] | (reg[1] & 0xFF9FFFFF);
+        }
+    }
+    if ((ctx[9] & 0x80) != 0) {
+        reg[1] = ctx[18] | (reg[1] & 0xFFF7FFFF);
+    }
 }
 
 /*
@@ -229,7 +385,6 @@ void dma_byte_handler(int *ctx)
             volatile uint32_t *reg = (volatile uint32_t *)*ctx;
             reg[1] &= 0xFFFFFF9F;
             if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
-                extern void dma_transfer_done(void *);
                 dma_transfer_done(ctx);
             }
         }
@@ -261,7 +416,6 @@ void dma_byte_handler_v2(int *ctx)
             volatile uint32_t *reg = (volatile uint32_t *)*ctx;
             reg[1] &= 0xFFFFFF7F;
             if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
-                extern void dma_transfer_done(void *);
                 dma_transfer_done(ctx);
             }
         }
@@ -291,35 +445,6 @@ void dma_halfword_handler(int *ctx)
             volatile uint32_t *reg = (volatile uint32_t *)*ctx;
             reg[1] &= 0xFFFFFF7F;
             if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
-                extern void dma_transfer_done(void *);
-                dma_transfer_done(ctx);
-            }
-        }
-    }
-}
-
-/*
- * DMA halfword transfer handler v2 — reads from peripheral to memory.
- *
- * Reads a halfword from (*ctx + 0x0C) into the destination buffer
- * at ctx[0x0E], increments by 2, decrements ctx+0x3E.
- * On completion: sets next callback or clears bit 6 in SR.
- */
-void dma_halfword_handler_v2(int *ctx)
-{
-    volatile uint16_t *dst = (volatile uint16_t *)ctx[0x0E];
-    *dst = (uint16_t)*(volatile uint32_t *)(*ctx + 0x0C);
-    ctx[0x0E] = (int)(dst + 1);
-    *(volatile int16_t *)((uintptr_t)ctx + 0x3E) -= 1;
-
-    if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
-        if (ctx[10] == 0x2000) {
-            ctx[0x10] = (int)0x08016161;
-        } else {
-            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
-            reg[1] &= 0xFFFFFFBF;
-            if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
-                extern void dma_transfer_done(void *);
                 dma_transfer_done(ctx);
             }
         }
@@ -342,7 +467,6 @@ uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3)
     uint32_t timeout = (*tick_ptr / divisor) * 1000;
 
     if (ctx[1] == 0x104) {
-        extern uint32_t timeout_poll(uint32_t *, uint32_t, char, uint32_t, uint32_t);
         int result = timeout_poll(ctx, 0x80, 0, param2, param3);
         if (result != 0) {
             ctx[0x15] |= 0x20;
@@ -396,7 +520,6 @@ uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t
 uint32_t dma_completion_handler(uint32_t *ctx)
 {
     extern uint32_t tick_get(void);
-    extern uint32_t timeout_poll(uint32_t *, uint32_t, char, uint32_t, uint32_t);
     uint32_t tick = tick_get();
     int result;
 

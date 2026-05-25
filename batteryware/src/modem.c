@@ -183,3 +183,58 @@ void temp_offset_send(uint8_t raw_temp)
 
     modem_send_2bytes((uint8_t)(offset >> 8), (uint8_t)offset);
 }
+
+/*
+ * Bus ready check — returns the status byte at ctx+0x51.
+ *
+ * The status byte tracks the bus/I²C state machine phase.
+ * 0 = idle/ready, 1 = active, 2 = deiniting, etc.
+ */
+uint8_t bus_ready_check(int ctx)
+{
+    return *(volatile uint8_t *)(ctx + 0x51);
+}
+
+/*
+ * Modem restart thunk — empty ROP call site for exception vector dispatch.
+ */
+void modem_restart_thunk(void)
+{
+}
+
+/*
+ * Modem ISR acknowledgment thunks.
+ * Compiler-generated duplicates used as ISR trampolines.
+ */
+void modem_isr_ack(void)
+{
+}
+
+void modem_isr_ack_dup(void)
+{
+}
+
+/*
+ * Modem (USART1) initialization.
+ *
+ * Enables NVIC IRQ 12 (USART1), calls the USART1 config function
+ * with the DMA context at 0x200024F4, masks RCC bit 9, resets
+ * GPIOA pins 5-7 (0xE0), then zeroes the DMA context pointer.
+ */
+void modem_init(void)
+{
+    volatile uint32_t * const s_dma_ctx_init = (volatile uint32_t *)0x200024F4;
+    volatile uint32_t * const RCC_INIT       = (volatile uint32_t *)0x40021000;
+
+    nvic_enable_irq_s_dsb(12);
+
+    extern void usart1_dma_setup(void *);  /* FUN_0800e63c */
+    usart1_dma_setup((void *)s_dma_ctx_init);
+
+    RCC_INIT[0x34 / 4] &= 0xFFFFFDFF;
+
+    extern void gpio_pin_reset(uint32_t gpio_base, uint32_t pin_mask);
+    gpio_pin_reset(0x50000000, 0xE0);
+
+    *s_dma_ctx_init = 0;
+}

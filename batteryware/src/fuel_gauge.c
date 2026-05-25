@@ -270,6 +270,25 @@ static volatile uint8_t  * const s_rsoc_percent   = (volatile uint8_t *)0x200025
 static volatile uint16_t * const s_rsoc_voltage   = (volatile uint16_t *)0x2000282A;
 static volatile uint32_t * const s_rsoc_register  = (volatile uint32_t *)0x200025AC;
 
+/* Capacity field in SRAM (for capacity_decrement) */
+static volatile uint32_t * const s_capacity       = (volatile uint32_t *)0x200029A8;
+
+/*
+ * Saturating capacity decrement.
+ *
+ * Decrements the capacity counter at 0x200029A8+0x24 by 'amount'.
+ * If the remaining capacity is less than 'amount', zeroes it instead
+ * (saturating subtract — prevents underflow).
+ */
+void capacity_decrement(uint32_t amount)
+{
+    if (s_capacity[0x24 / 4] < amount) {
+        s_capacity[0x24 / 4] = 0;
+    } else {
+        s_capacity[0x24 / 4] -= amount;
+    }
+}
+
 /*
  * State-of-charge lookup.
  *

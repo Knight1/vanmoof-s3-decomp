@@ -35,6 +35,7 @@ void led_flash(void);
 void nvic_system_reset(void);
 void system_reset(void);
 void system_reset_with_arg(uint32_t arg);
+void system_init(void);
 
 /* Charge MOSFET control via GPIOB pin 9 */
 void charge_mosfet_set(bool on);
@@ -55,8 +56,10 @@ void uart_tx_isr(void);
 void modem_config(void);
 void modem_reinit(void);
 bool modem_deinit(void *ctx);
+void modem_init(void);
 void modem_send_2bytes(uint8_t b1, uint8_t b2);
 void temp_offset_send(uint8_t raw_temp);
+uint8_t bus_ready_check(int ctx);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -86,6 +89,7 @@ void flash_op_cleanup(void *ctx);
 uint32_t flash_page_program(int *ctx);
 void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
+void flash_program_init(void *ctx);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
@@ -112,6 +116,7 @@ uint8_t fg_charge_status(void);
 void config_resend_all(void);
 void fg_watchdog_kick(void);
 void fg_cell_balance(uint8_t cell_idx);
+void capacity_decrement(uint32_t amount);
 uint32_t fg_read_field_8(void);
 uint32_t fg_read_field_11(void);
 void fg_read_loop(void *ctx);
@@ -152,6 +157,9 @@ void dma_byte_handler_v2(int *ctx);
 void dma_halfword_handler(int *ctx);
 void dma_halfword_handler_v2(int *ctx);
 uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3);
+uint32_t timeout_poll(int *ctx, uint32_t mask, uint8_t expected, int deadline, uint32_t max_time);
+void dma_transfer_done(int *ctx);
+void dma_channel_config(int *ctx);
 uint32_t dma_completion_handler(uint32_t *ctx);
 uint32_t dma_wait_done(int timeout);
 
@@ -163,6 +171,8 @@ uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);
+uint32_t tick_get(void);
+uint32_t tick_counter_read(void);
 
 /* NVIC interrupt enable */
 void nvic_enable_irq(uint8_t irqn);

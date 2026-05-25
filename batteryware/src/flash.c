@@ -297,6 +297,15 @@ uint32_t flash_page_program(int *ctx)
 }
 
 /*
+ * Flash program initialization thunk — empty placeholder for future
+ * or compile-time-optimized-away setup.
+ */
+void flash_program_init(void *ctx)
+{
+    (void)ctx;
+}
+
+/*
  * Peripheral reset.
  *
  * Sets bit 1 in FLASH_ACR, calls flash_timeout_check(3), and if
@@ -439,7 +448,6 @@ void flash_op_cleanup(void *ctx)
     volatile uint32_t *c = (volatile uint32_t *)ctx;
     volatile uint32_t *reg = (volatile uint32_t *)*c;
     reg[1] &= ~0x40U;
-    extern void dma_transfer_done(void *);
     dma_transfer_done(ctx);
 }
 
