@@ -26,3 +26,32 @@ uint8_t hex_to_nibble(char c)
     }
     return (uint8_t)c & 0x0F;
 }
+
+/*
+ * Parse a hex string (skipping first char) as a decimal integer.
+ *
+ * Reads 'digits' hex characters starting at str[1], converts each
+ * via hex_to_nibble, and accumulates the result as decimal:
+ *   result = result * 10 + digit
+ * (Note: * 10 = (result << 2 + result) << 1 = result * 10)
+ */
+uint32_t atoi_hex_offset1(char *str, uint8_t digits)
+{
+    uint32_t result = 0;
+
+    /* First digit at str[0] — used as initial value, no base shift */
+    result = hex_to_nibble(str[0]);
+    str++;
+
+    for (uint8_t i = 1; i < digits; i++) {
+        /* result = result * 10 */
+        if (result != 0) {
+            result = (result << 2) + result;   /* * 5 */
+            result = result << 1;              /* * 10 */
+        }
+        result += hex_to_nibble(str[0]);
+        str++;
+    }
+
+    return result;
+}

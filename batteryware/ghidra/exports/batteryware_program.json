@@ -272,8 +272,8 @@
     {
       "addr": "0x0800023c",
       "size": 6,
-      "name": "FUN_0800023c",
-      "auto_named": true,
+      "name": "__aeabi_uidiv",
+      "auto_named": false,
       "signature": "undefined FUN_0800023c(void)",
       "thunk": false,
       "external": false
@@ -281,8 +281,8 @@
     {
       "addr": "0x08000244",
       "size": 2,
-      "name": "FUN_08000244",
-      "auto_named": true,
+      "name": "trap_div0",
+      "auto_named": false,
       "signature": "undefined FUN_08000244(void)",
       "thunk": false,
       "external": false
@@ -290,8 +290,8 @@
     {
       "addr": "0x08000248",
       "size": 56,
-      "name": "FUN_08000248",
-      "auto_named": true,
+      "name": "__aeabi_ldiv0",
+      "auto_named": false,
       "signature": "undefined FUN_08000248(void)",
       "thunk": false,
       "external": false
@@ -461,8 +461,8 @@
     {
       "addr": "0x08001920",
       "size": 132,
-      "name": "FUN_08001920",
-      "auto_named": true,
+      "name": "rsoc_lookup",
+      "auto_named": false,
       "signature": "undefined FUN_08001920(void)",
       "thunk": false,
       "external": false
@@ -551,8 +551,8 @@
     {
       "addr": "0x08002ba6",
       "size": 6,
-      "name": "FUN_08002ba6",
-      "auto_named": true,
+      "name": "nop_2ba6",
+      "auto_named": false,
       "signature": "undefined FUN_08002ba6(void)",
       "thunk": false,
       "external": false
@@ -560,8 +560,8 @@
     {
       "addr": "0x08002bac",
       "size": 6,
-      "name": "FUN_08002bac",
-      "auto_named": true,
+      "name": "nop_2bac",
+      "auto_named": false,
       "signature": "undefined FUN_08002bac(void)",
       "thunk": false,
       "external": false
@@ -578,8 +578,8 @@
     {
       "addr": "0x08002cb8",
       "size": 142,
-      "name": "FUN_08002cb8",
-      "auto_named": true,
+      "name": "discharge_mosfet_set",
+      "auto_named": false,
       "signature": "undefined FUN_08002cb8(void)",
       "thunk": false,
       "external": false
@@ -650,8 +650,8 @@
     {
       "addr": "0x08004764",
       "size": 6,
-      "name": "FUN_08004764",
-      "auto_named": true,
+      "name": "nop_4764",
+      "auto_named": false,
       "signature": "undefined FUN_08004764(void)",
       "thunk": false,
       "external": false
@@ -722,8 +722,8 @@
     {
       "addr": "0x0800537c",
       "size": 10,
-      "name": "FUN_0800537c",
-      "auto_named": true,
+      "name": "nop_537c",
+      "auto_named": false,
       "signature": "undefined FUN_0800537c(void)",
       "thunk": false,
       "external": false
@@ -956,8 +956,8 @@
     {
       "addr": "0x0800716c",
       "size": 10,
-      "name": "FUN_0800716c",
-      "auto_named": true,
+      "name": "nop_716c",
+      "auto_named": false,
       "signature": "undefined FUN_0800716c(void)",
       "thunk": false,
       "external": false
@@ -974,8 +974,8 @@
     {
       "addr": "0x0800721c",
       "size": 10,
-      "name": "FUN_0800721c",
-      "auto_named": true,
+      "name": "nop_721c",
+      "auto_named": false,
       "signature": "undefined FUN_0800721c(void)",
       "thunk": false,
       "external": false
@@ -1064,8 +1064,8 @@
     {
       "addr": "0x08007f50",
       "size": 100,
-      "name": "FUN_08007f50",
-      "auto_named": true,
+      "name": "modem_config",
+      "auto_named": false,
       "signature": "undefined FUN_08007f50(void)",
       "thunk": false,
       "external": false
@@ -1379,8 +1379,8 @@
     {
       "addr": "0x0800a6aa",
       "size": 4,
-      "name": "thunk_FUN_0800a6e0",
-      "auto_named": true,
+      "name": "veneer_a6aa",
+      "auto_named": false,
       "signature": "undefined thunk_FUN_0800a6e0(void)",
       "thunk": true,
       "external": false
@@ -1388,8 +1388,8 @@
     {
       "addr": "0x0800a6ba",
       "size": 4,
-      "name": "thunk_FUN_0800a6e0",
-      "auto_named": true,
+      "name": "veneer_a6ba",
+      "auto_named": false,
       "signature": "undefined thunk_FUN_0800a6e0(void)",
       "thunk": true,
       "external": false
@@ -1397,8 +1397,8 @@
     {
       "addr": "0x0800a6be",
       "size": 4,
-      "name": "thunk_FUN_0800a6e0",
-      "auto_named": true,
+      "name": "veneer_a6be",
+      "auto_named": false,
       "signature": "undefined thunk_FUN_0800a6e0(void)",
       "thunk": true,
       "external": false
@@ -1415,8 +1415,8 @@
     {
       "addr": "0x0800a70c",
       "size": 134,
-      "name": "FUN_0800a70c",
-      "auto_named": true,
+      "name": "atoi_hex_offset1",
+      "auto_named": false,
       "signature": "undefined FUN_0800a70c(void)",
       "thunk": false,
       "external": false
@@ -1649,8 +1649,8 @@
     {
       "addr": "0x0800e1b4",
       "size": 8,
-      "name": "FUN_0800e1b4",
-      "auto_named": true,
+      "name": "thunk_e1b4",
+      "auto_named": false,
       "signature": "undefined FUN_0800e1b4(void)",
       "thunk": false,
       "external": false
@@ -1658,8 +1658,8 @@
     {
       "addr": "0x0800e1bc",
       "size": 8,
-      "name": "FUN_0800e1bc",
-      "auto_named": true,
+      "name": "thunk_e1bc",
+      "auto_named": false,
       "signature": "undefined FUN_0800e1bc(void)",
       "thunk": false,
       "external": false
@@ -1667,8 +1667,8 @@
     {
       "addr": "0x0800e1c4",
       "size": 4,
-      "name": "FUN_0800e1c4",
-      "auto_named": true,
+      "name": "thunk_e1c4",
+      "auto_named": false,
       "signature": "undefined FUN_0800e1c4(void)",
       "thunk": false,
       "external": false
@@ -1676,8 +1676,8 @@
     {
       "addr": "0x0800e1c8",
       "size": 2,
-      "name": "FUN_0800e1c8",
-      "auto_named": true,
+      "name": "nop_e1c8",
+      "auto_named": false,
       "signature": "undefined FUN_0800e1c8(void)",
       "thunk": false,
       "external": false
@@ -1685,8 +1685,8 @@
     {
       "addr": "0x0800e1ca",
       "size": 14,
-      "name": "FUN_0800e1ca",
-      "auto_named": true,
+      "name": "epilogue_e1ca",
+      "auto_named": false,
       "signature": "undefined FUN_0800e1ca(void)",
       "thunk": false,
       "external": false
@@ -1865,8 +1865,8 @@
     {
       "addr": "0x0800ec48",
       "size": 212,
-      "name": "FUN_0800ec48",
-      "auto_named": true,
+      "name": "interrupt_set_priority",
+      "auto_named": false,
       "signature": "undefined FUN_0800ec48(void)",
       "thunk": false,
       "external": false
@@ -1928,8 +1928,8 @@
     {
       "addr": "0x0800eebc",
       "size": 16,
-      "name": "FUN_0800eebc",
-      "auto_named": true,
+      "name": "nop_eebc",
+      "auto_named": false,
       "signature": "undefined FUN_0800eebc(void)",
       "thunk": false,
       "external": false
@@ -2378,8 +2378,8 @@
     {
       "addr": "0x08011e14",
       "size": 10,
-      "name": "FUN_08011e14",
-      "auto_named": true,
+      "name": "veneer_11e14",
+      "auto_named": false,
       "signature": "undefined FUN_08011e14(void)",
       "thunk": false,
       "external": false
@@ -2414,8 +2414,8 @@
     {
       "addr": "0x08011ea8",
       "size": 10,
-      "name": "FUN_08011ea8",
-      "auto_named": true,
+      "name": "veneer_11ea8",
+      "auto_named": false,
       "signature": "undefined FUN_08011ea8(void)",
       "thunk": false,
       "external": false
@@ -2423,8 +2423,8 @@
     {
       "addr": "0x08011eb8",
       "size": 10,
-      "name": "FUN_08011eb8",
-      "auto_named": true,
+      "name": "veneer_11eb8",
+      "auto_named": false,
       "signature": "undefined FUN_08011eb8(void)",
       "thunk": false,
       "external": false
@@ -2432,8 +2432,8 @@
     {
       "addr": "0x08011ec8",
       "size": 10,
-      "name": "FUN_08011ec8",
-      "auto_named": true,
+      "name": "veneer_11ec8",
+      "auto_named": false,
       "signature": "undefined FUN_08011ec8(void)",
       "thunk": false,
       "external": false
@@ -2441,8 +2441,8 @@
     {
       "addr": "0x08011ed8",
       "size": 10,
-      "name": "FUN_08011ed8",
-      "auto_named": true,
+      "name": "veneer_11ed8",
+      "auto_named": false,
       "signature": "undefined FUN_08011ed8(void)",
       "thunk": false,
       "external": false
@@ -2450,8 +2450,8 @@
     {
       "addr": "0x08011ee8",
       "size": 10,
-      "name": "FUN_08011ee8",
-      "auto_named": true,
+      "name": "veneer_11ee8",
+      "auto_named": false,
       "signature": "undefined FUN_08011ee8(void)",
       "thunk": false,
       "external": false
@@ -2459,8 +2459,8 @@
     {
       "addr": "0x08011ef8",
       "size": 10,
-      "name": "FUN_08011ef8",
-      "auto_named": true,
+      "name": "veneer_11ef8",
+      "auto_named": false,
       "signature": "undefined FUN_08011ef8(void)",
       "thunk": false,
       "external": false
@@ -2468,8 +2468,8 @@
     {
       "addr": "0x08011f08",
       "size": 10,
-      "name": "FUN_08011f08",
-      "auto_named": true,
+      "name": "veneer_11f08",
+      "auto_named": false,
       "signature": "undefined FUN_08011f08(void)",
       "thunk": false,
       "external": false
@@ -2477,8 +2477,8 @@
     {
       "addr": "0x08011f18",
       "size": 10,
-      "name": "FUN_08011f18",
-      "auto_named": true,
+      "name": "veneer_11f18",
+      "auto_named": false,
       "signature": "undefined FUN_08011f18(void)",
       "thunk": false,
       "external": false
@@ -2486,8 +2486,8 @@
     {
       "addr": "0x08011f28",
       "size": 10,
-      "name": "FUN_08011f28",
-      "auto_named": true,
+      "name": "veneer_11f28",
+      "auto_named": false,
       "signature": "undefined FUN_08011f28(void)",
       "thunk": false,
       "external": false
@@ -2495,8 +2495,8 @@
     {
       "addr": "0x08011f38",
       "size": 10,
-      "name": "FUN_08011f38",
-      "auto_named": true,
+      "name": "veneer_11f38",
+      "auto_named": false,
       "signature": "undefined FUN_08011f38(void)",
       "thunk": false,
       "external": false
@@ -2504,8 +2504,8 @@
     {
       "addr": "0x08011f48",
       "size": 10,
-      "name": "FUN_08011f48",
-      "auto_named": true,
+      "name": "veneer_11f48",
+      "auto_named": false,
       "signature": "undefined FUN_08011f48(void)",
       "thunk": false,
       "external": false
@@ -2513,8 +2513,8 @@
     {
       "addr": "0x08011f58",
       "size": 10,
-      "name": "FUN_08011f58",
-      "auto_named": true,
+      "name": "veneer_11f58",
+      "auto_named": false,
       "signature": "undefined FUN_08011f58(void)",
       "thunk": false,
       "external": false
@@ -2522,8 +2522,8 @@
     {
       "addr": "0x08011f68",
       "size": 10,
-      "name": "FUN_08011f68",
-      "auto_named": true,
+      "name": "veneer_11f68",
+      "auto_named": false,
       "signature": "undefined FUN_08011f68(void)",
       "thunk": false,
       "external": false
@@ -2531,8 +2531,8 @@
     {
       "addr": "0x08011f88",
       "size": 10,
-      "name": "FUN_08011f88",
-      "auto_named": true,
+      "name": "veneer_11f88",
+      "auto_named": false,
       "signature": "undefined FUN_08011f88(void)",
       "thunk": false,
       "external": false
@@ -2738,8 +2738,8 @@
     {
       "addr": "0x0801556c",
       "size": 10,
-      "name": "FUN_0801556c",
-      "auto_named": true,
+      "name": "veneer_1556c",
+      "auto_named": false,
       "signature": "undefined FUN_0801556c(void)",
       "thunk": false,
       "external": false
@@ -2747,8 +2747,8 @@
     {
       "addr": "0x0801557c",
       "size": 10,
-      "name": "FUN_0801557c",
-      "auto_named": true,
+      "name": "veneer_1557c",
+      "auto_named": false,
       "signature": "undefined FUN_0801557c(void)",
       "thunk": false,
       "external": false
@@ -2756,8 +2756,8 @@
     {
       "addr": "0x0801558c",
       "size": 10,
-      "name": "FUN_0801558c",
-      "auto_named": true,
+      "name": "veneer_1558c",
+      "auto_named": false,
       "signature": "undefined FUN_0801558c(void)",
       "thunk": false,
       "external": false
@@ -2765,8 +2765,8 @@
     {
       "addr": "0x0801559c",
       "size": 10,
-      "name": "FUN_0801559c",
-      "auto_named": true,
+      "name": "veneer_1559c",
+      "auto_named": false,
       "signature": "undefined FUN_0801559c(void)",
       "thunk": false,
       "external": false
@@ -2774,8 +2774,8 @@
     {
       "addr": "0x080155cc",
       "size": 10,
-      "name": "FUN_080155cc",
-      "auto_named": true,
+      "name": "veneer_155cc",
+      "auto_named": false,
       "signature": "undefined FUN_080155cc(void)",
       "thunk": false,
       "external": false
@@ -2783,8 +2783,8 @@
     {
       "addr": "0x080155ec",
       "size": 10,
-      "name": "FUN_080155ec",
-      "auto_named": true,
+      "name": "veneer_155ec",
+      "auto_named": false,
       "signature": "undefined FUN_080155ec(void)",
       "thunk": false,
       "external": false

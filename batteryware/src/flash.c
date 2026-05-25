@@ -37,3 +37,66 @@ uint32_t flash_lock_opt(void)
     FLASH[0x00 / 4] &= ~0x10U;      /* FLASH_CR &= ~OPTER */
     return 0;
 }
+
+/* Systick timer base */
+static volatile uint32_t * const SYSTICK = (volatile uint32_t *)0xE000E010;
+
+/*
+ * Start flash page erase via Systick timeout.
+ *
+ * Configures Systick with (timeout_ticks - 1) in LOAD, clears VAL,
+ * sets CTRL to 7 (ENABLE | TICKINT | CLKSOURCE), and sets the
+ * flash operation struct at 0xE000E010[4] = timeout, struct[0] = 7.
+ * Returns false if timeout_ticks is out of range (< 0x1000000).
+ */
+bool flash_page_erase(uint32_t timeout_ticks)
+{
+    if (timeout_ticks - 1 >= 0x1000000) {
+        return true;  /* out of range */
+    }
+
+    SYSTICK[1] = timeout_ticks - 1;   /* SYSTICK_LOAD */
+    interrupt_set_priority(0xFF, 3);   /* set SysTick priority */
+    SYSTICK[2] = 0;                    /* SYSTICK_VAL = 0 */
+    SYSTICK[0] = 7;                    /* SYSTICK_CTRL: ENABLE | TICKINT | CLKSOURCE */
+
+    return false;  /* success */
+}
+
+/*
+ * NVIC / SCB interrupt priority setter.
+ *
+ * If irqn < 0x80: sets NVIC priority (IPR register at 0xE000E400).
+ * If irqn >= 0x80: sets SCB system handler priority (SHPR register at 0xE000ED18).
+ *
+ * Only the upper 2 bits of priority are used (Cortex-M0+ implements 2-bit priority).
+ */
+void interrupt_set_priority(uint8_t irqn, uint32_t priority)
+{
+    volatile uint32_t *reg;
+
+    if (irqn < 0x80) {
+        /* NVIC IPR: base 0xE000E400, byte lanes [irqn/4] */
+        reg = (volatile uint32_t *)(0xE000E400 + ((irqn >> 2) * 4));
+    } else {
+        /* SCB SHPR2/SHPR3: base 0xE000ED00, IRQ 8-15 */
+        reg = (volatile uint32_t *)(0xE000ED00 + ((((irqn & 0xF) - 8) >> 2) + 6) * 4 + 4);
+    }
+
+    uint32_t shift = (irqn & 3) << 3;
+    uint32_t mask  = 0xFFUL << shift;
+    *reg = (*reg & ~mask) | (((priority & 3) << 6) << shift);
+}
+
+/*
+ * Flash option byte operation wrapper.
+ *
+ * Delegates to interrupt_set_priority with signed-char conversion.
+ * The OEM uses this as a unified "priority setter" for both NVIC
+ * and SCB registers — the name "flash_opt_byte_op" is inherited
+ * from the call site context (flash operation setup).
+ */
+void flash_opt_byte_op(uint8_t op, uint32_t val)
+{
+    interrupt_set_priority(op, val);
+}

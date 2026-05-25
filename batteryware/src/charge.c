@@ -23,3 +23,38 @@ void charge_mosfet_set(bool on)
         }
     }
 }
+
+/* Config/status register for discharge MOSFET */
+static volatile uint8_t * const s_discharge_cfg = (volatile uint8_t *)0x20002870;
+
+/*
+ * Discharge MOSFET control.
+ *
+ * If the pre-discharge bit (bit 12) in s_mosfet_status is clear,
+ * forces the charge MOSFET off. Otherwise, if 'on' is set and the
+ * discharge MOSFET is not already enabled (bit 1 of s_discharge_cfg),
+ * enables it and reconfigures the BMS. If 'on' is clear and the
+ * discharge MOSFET is enabled, disables it.
+ */
+void discharge_mosfet_set(bool on)
+{
+    if (((*s_mosfet_status >> 12) & 1) == 0) {
+        charge_mosfet_set(false);
+        return;
+    }
+
+    if (on) {
+        if ((*s_discharge_cfg & 2) == 2) {
+            return;  /* already on */
+        }
+        *s_discharge_cfg |= 2;
+        extern void bms_configure(uint8_t cfg);  /* FUN_080052d8 */
+        bms_configure(*s_discharge_cfg);
+    } else {
+        if ((*s_discharge_cfg & 2) == 2) {
+            *s_discharge_cfg &= ~2U;
+            extern void bms_configure(uint8_t cfg);
+            bms_configure(*s_discharge_cfg);
+        }
+    }
+}

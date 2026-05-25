@@ -26,14 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 188 |
+| pending      | 131 |
 | in-progress  |   0 |
-| named        |  56 |
-| decomp-c     |  37 |
+| named        | 107 |
+| decomp-c     |  43 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
+_Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 
 ## Functions
 
@@ -61,7 +61,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x0800163c` | — | `FUN_0800163c` | pending | |
 | `0x08001898` | 72 | `state_handler_02` | named | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
 | `0x080018ec` | 46 | `capacity_decrement` | named | Saturating counter decrement |
-| `0x08001920` | — | `FUN_08001920` | pending | |
+| `0x08001920` | 132 | `rsoc_lookup` | named | SoC lookup table (100-entry descending search) |
 | `0x080019b8` | — | `FUN_080019b8` | pending | |
 | `0x08001b44` | 90 | `state_handler_0d` | named | State handler → bms_set_state(0x0D) [conditional variant] |
 | `0x08001bb4` | — | `FUN_08001bb4` | pending | |
@@ -74,7 +74,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x08002ba6` | — | `FUN_08002ba6` | pending | |
 | `0x08002bac` | — | `FUN_08002bac` | pending | |
 | `0x08002bc8` | — | `FUN_08002bc8` | pending | |
-| `0x08002cb8` | — | `FUN_08002cb8` | pending | |
+| `0x08002cb8` | 142 | `discharge_mosfet_set` | named | Discharge MOSFET control with state tracking |
 | `0x08002d50` | 106 | `charge_mosfet_set` | decomp-c | Charge MOSFET on/off via GPIOB pin 9 with idempotent state tracking |
 | `0x08002dc4` | — | `FUN_08002dc4` | pending | |
 | `0x08003188` | 60 | `ymodem_send_byte` | decomp-c | Send YMODEM response byte + reset protocol state |
@@ -128,7 +128,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x08007cf8` | 64 | `memcpy_byte` | decomp-c | Byte-by-byte memcpy (ldrb/strb) |
 | `0x08007d38` | 62 | `system_init` | named | System startup: GPIO + modem + flash + NVIC |
 | `0x08007d78` | — | `FUN_08007d78` | pending | |
-| `0x08007f50` | — | `FUN_08007f50` | pending | |
+| `0x08007f50` | 100 | `modem_config` | named | USART2/modem struct init + peripheral enable |
 | `0x08007fc4` | 80 | `uart_puthex_byte` | decomp-c | Print byte as 2 hex chars via uart_putchar |
 | `0x08008014` | — | `FUN_08008014` | pending | |
 | `0x080080a8` | — | `FUN_080080a8` | pending | |
@@ -152,7 +152,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x080095d4` | 106 | `fg_uvp2_check` | decomp-c | Under-voltage protection 2 monitor |
 | `0x08009650` | 106 | `fg_ovp1_check` | decomp-c | Over-voltage protection 1 monitor |
 | `0x080096cc` | 106 | `fg_ovp2_check` | decomp-c | Over-voltage protection 2 monitor |
-| `0x08009748` | 86 | `fg_threshold_check` | named | Fuel gauge threshold comparison + flag set |
+| `0x08009748` | 86 | `fg_threshold_check` | decomp-c | Temperature sensor threshold monitor → FAULT_TS (0x10) |
 | `0x080097b0` | 76 | `fg_alert_monitor` | named | Fuel gauge alert pin monitor |
 | `0x0800980c` | 118 | `fg_discharge_oc_check` | decomp-c | Discharge over-current monitor |
 | `0x0800989c` | 118 | `fg_charge_oc_check` | decomp-c | Charge over-current monitor |
@@ -167,7 +167,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x0800a6ba` | — | `thunk_FUN_0800a6e0` | pending | Thunk |
 | `0x0800a6be` | — | `thunk_FUN_0800a6e0` | pending | Thunk |
 | `0x0800a6e0` | — | `FUN_0800a6e0` | pending | |
-| `0x0800a70c` | — | `FUN_0800a70c` | pending | |
+| `0x0800a70c` | 134 | `atoi_hex_offset1` | decomp-c | Parse hex string (offset 1) as decimal int |
 | `0x0800a794` | — | `FUN_0800a794` | pending | |
 | `0x0800a934` | 72 | `state_handler_09` | named | State handler → bms_set_state(0x09) [dual-MOSFET variant] |
 | `0x0800a988` | — | `FUN_0800a988` | pending | |
@@ -180,7 +180,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x0800aee4` | 130 | `uart_tx_isr` | decomp-c | TXE interrupt — drains TX ring buffer to USART data register |
 | `0x0800af80` | 28 | `uart_tx_flush` | decomp-c | Blocks until TX buffer fully drained |
 | `0x0800afa4` | — | `FUN_0800afa4` | pending | |
-| `0x0800b328` | 3690 | `HardFault_Handler` | named | Vector table slot 3 — real HardFault handler |
+| `0x0800b328` | 3690 | `HardFault_Handler` | named | Misidentified — actually modem response builder (indirect dispatch table) |
 | `0x0800c24c` | 44 | `EXTI0_1_IRQHandler` | named | Vector IRQ handler — EXTI lines 0 and 1 |
 | `0x0800c278` | 2970 | `EXTI4_15_IRQHandler` | named | Vector IRQ handler — EXTI lines 4-15 |
 | `0x0800ce9e` | — | `FUN_0800ce9e` | pending | |
@@ -218,9 +218,9 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x0800eb90` | 54 | `delay_us` | decomp-c | Calibrated busy-wait microsecond delay |
 | `0x0800ebd0` | 48 | `nvic_enable_irq` | decomp-c | NVIC ISER bit set |
 | `0x0800ec04` | 60 | `nvic_enable_irq_dsb` | decomp-c | NVIC ISER bit set + DSB/ISB |
-| `0x0800ec48` | — | `FUN_0800ec48` | pending | |
-| `0x0800ed24` | 66 | `flash_page_erase` | named | Flash page erase (addr range check + ops) |
-| `0x0800ed6c` | 42 | `flash_opt_byte_op` | named | Flash option byte operation wrapper |
+| `0x0800ec48` | 60 | `interrupt_set_priority` | decomp-c | NVIC/SCB interrupt priority setter |
+| `0x0800ed24` | 66 | `flash_page_erase` | decomp-c | Systick-based erase timeout (not actual flash erase) |
+| `0x0800ed6c` | 42 | `flash_opt_byte_op` | decomp-c | Priority setter wrapper (signed-char conversion) |
 | `0x0800ed96` | 32 | `nvic_enable_irq_s` | decomp-c | NVIC IRQ enable (signed char wrapper) |
 | `0x0800edb6` | 32 | `nvic_enable_irq_s_dsb` | decomp-c | NVIC IRQ enable + DSB/ISB (signed char) |
 | `0x0800edd6` | — | `FUN_0800edd6` | pending | |
@@ -303,7 +303,7 @@ _Total functions: 281. 93 decomp-c/named, 188 pending (`FUN_*`)._
 | `0x08014130` | — | `FUN_08014130` | pending | |
 | `0x080141e4` | — | `FUN_080141e4` | pending | |
 | `0x080149b8` | — | `FUN_080149b8` | pending | |
-| `0x08014a90` | 88 | `shipping_mode_check` | named | Shipping mode entry conditions check |
+| `0x08014a90` | 88 | `shipping_mode_check` | decomp-c | Shipping mode entry: state 0x0F/0x10/0x11 timeout check |
 | `0x08014af8` | — | `FUN_08014af8` | pending | |
 | `0x08014ea4` | — | `FUN_08014ea4` | pending | |
 | `0x08014f40` | — | `FUN_08014f40` | pending | |

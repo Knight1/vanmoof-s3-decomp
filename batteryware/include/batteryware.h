@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Hex conversion helpers */
+char     nibble_to_hex(uint8_t nibble);
+uint8_t  hex_to_nibble(char c);
+uint32_t atoi_hex_offset1(char *str, uint8_t digits);
+
 /* GPIO bit write: atomic set (BSRR) or clear (BRR) */
 void gpio_bit_write(uint32_t gpio_base, uint16_t pin_bit, uint8_t value);
 
@@ -26,6 +31,7 @@ void system_reset_with_arg(uint32_t arg);
 
 /* Charge MOSFET control via GPIOB pin 9 */
 void charge_mosfet_set(bool on);
+void discharge_mosfet_set(bool on);
 
 /* YMODEM protocol — send response byte and reset state */
 void ymodem_send_byte(uint8_t b);
@@ -35,6 +41,9 @@ void uart_putchar(uint8_t c);
 
 /* UART TXE interrupt handler — drains TX ring buffer */
 void uart_tx_isr(void);
+
+/* USART2/modem configuration */
+void modem_config(void);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -48,6 +57,11 @@ uint32_t flash_enable_prefetch(void);
 uint32_t flash_unlock_opt(void);
 uint32_t flash_lock_opt(void);
 
+/* Flash page erase + interrupt priority setup */
+bool flash_page_erase(uint32_t timeout_ticks);
+void interrupt_set_priority(uint8_t irqn, uint32_t priority);
+void flash_opt_byte_op(uint8_t op, uint32_t val);
+
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
 
@@ -59,6 +73,7 @@ extern volatile uint32_t * const g_fault_flags;
 #define FAULT_OVP2  0x08
 #define FAULT_DISCHARGE_OC  0x40
 #define FAULT_CHARGE_OC     0x80
+#define FAULT_TS            0x10
 
 /* Under/over-voltage protection checks */
 void fg_uvp1_check(void);
@@ -67,6 +82,10 @@ void fg_ovp1_check(void);
 void fg_ovp2_check(void);
 void fg_discharge_oc_check(void);
 void fg_charge_oc_check(void);
+
+/* Shipping mode */
+void shipping_mode_check(void);
+void rsoc_lookup(void);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);
