@@ -25,7 +25,7 @@ peripheral wiring, anything that's specific to VanMoof.
 
 | Count | Status |
 | --- | --- |
-| 148 | decomp (asm or c) |
+| 149 | decomp (asm or c) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
 | 143 | decomp (asm or c) |
@@ -105,6 +105,7 @@ peripheral wiring, anything that's specific to VanMoof.
 | 0x000101B0  | `ymodem_receive`                   | `src/ymodem.c` (new)     | Full YModem receiver with CRC-16 validation, SOH/STX support, block sequencing, CAN abort, EOT double-ACK. Includes ymodem_engine_receive protocol state machine (~200 B). |
 | 0x000054D8  | `print_firmware_info`             | `src/print_firmware_info.c` (new) | Prints device name (ES3- + MAC), BLE MAC, firmware version, compile date, BIM bootloader info, reset reason, systick. ~220 B. |
 | 0x000145AC  | `reset_reason_string`             | `src/reset_reason.c` (new) | Returns static string for reset cause (power-on, pin-reset, VDDS loss, WDT, etc.) via ROM SysCtrlResetSourceGet. 58 B. |
+| 0x0000D444  | `firmware_update_start`           | `src/cmd_update.c` (new)  | YModem-receives firmware image, validates OAD-NVM1 header magic, CRC-checks, marks pending, triggers software reset. ~180 B. |
 | —           | `gatt_scratch_free`               | `src/gatt_read.c`        | Thin wrapper around monitor_free. |
 | —           | `nvs_open`                        | `src/gatt_read.c`        | TI-RTOS NVS driver open stub (vendor-stock). |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |

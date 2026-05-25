@@ -860,3 +860,11 @@ g_backoffice_reassembly:
 s_dest_service_id:
     .skip    1
 
+/* OAD-NVM1 header magic — OEM DAT_0000D5C8 = "OAD NVM1" */
+    .section .rodata.g_oad_header_magic, "a", %progbits
+    .weak    g_oad_header_magic
+    .type    g_oad_header_magic, %object
+    .size    g_oad_header_magic, 8
+g_oad_header_magic:
+    .ascii  "OAD NVM1"
+

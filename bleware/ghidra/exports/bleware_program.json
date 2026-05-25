@@ -1036,7 +1036,7 @@
     {
       "addr": "0x0000d444",
       "size": 178,
-      "name": "FUN_0000d444",
+      "name": "firmware_update_start",
       "auto_named": true,
       "signature": "undefined FUN_0000d444(void)",
       "thunk": false,

@@ -134,11 +134,7 @@ int pack_upload_finalize(void)
 
 /* ---- Firmware update / info ----------------------------------------- */
 
-int firmware_update_start(void *params)
-{
-    (void)params;
-    return 0;
-}
+int firmware_update_start(void *params);
 
 void print_firmware_info(void);
 
