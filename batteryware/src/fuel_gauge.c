@@ -585,7 +585,6 @@ void fg_read_loop(void *ctx)
         return;
     }
 
-    extern int smbus_read(uint8_t addr, uint8_t count);
     if (smbus_read(0x34, 2) == 0) {
         extern void fg_read_done(void);
         fg_read_done();
@@ -607,7 +606,6 @@ void fg_read_loop(void *ctx)
     if (*s_index < 0x10) {
         s_callback_tbl[*s_index](val);
     } else {
-        extern void smbus_write_reg(uint8_t addr, uint8_t val, uint8_t mask);
         smbus_write_reg(8, 0x91, 0xFF);
         extern void fg_read_done(void);
         fg_read_done();

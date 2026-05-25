@@ -63,3 +63,68 @@ void batteryware_main(void)
     flash_unlock();
     system_init();
 }
+
+/*
+ * Peripheral initialization — 3-phase USART/DMA/GPIO startup.
+ *
+ * Phase 1: memset three local structs (0x38, 0x14, 0x24 bytes) to 0,
+ *   OR RCC bit 0x800, configure bus fault params (10,1,16,1,1),
+ *   call FUN_0800fdac (bus fault reset). system_reset on failure.
+ *
+ * Phase 2: configure 20-byte USART struct (prescaler=0xF, flags_at_4=1,
+ *   bit7_at_8=0x80), call FUN_08010554. system_reset on failure.
+ *
+ * Phase 3: configure RCC struct (flags=1, ?, 2), call rcc_reconfigure.
+ *   system_reset on failure.
+ */
+void peripheral_init(bool arg)
+{
+    uint32_t cfg_a[0xE];    /* 0x38 bytes */
+    uint8_t  cfg_b[0x14];   /* 20 bytes */
+    uint32_t cfg_c[9];      /* 0x24 bytes (9 words) */
+
+    (void)arg;
+    memset_byte_fill((uint8_t *)cfg_a, 0, 0x38);
+    memset_byte_fill(cfg_b, 0, 0x14);
+    memset_byte_fill((uint8_t *)cfg_c, 0, 0x24);
+
+    volatile uint32_t * const s_rcc = (volatile uint32_t *)0x20002C6C;
+    *s_rcc = (*s_rcc & 0xFFFFFFF7) | 0x800;
+
+    cfg_a[0] = 10;
+    *(uint32_t *)((uint8_t *)cfg_a + 0x30) = 1;
+    *(uint32_t *)((uint8_t *)cfg_a + 0x2C) = 0x10;
+    *(uint32_t *)((uint8_t *)cfg_a + 0x28) = 1;
+    *(uint32_t *)((uint8_t *)cfg_a + 0x14) = 1;
+
+    volatile uint32_t * const s_bus_fault = (volatile uint32_t *)0x20002C70;
+    *s_bus_fault = 0;
+
+    extern int bus_fault_reset(void *);
+    if (bus_fault_reset(cfg_a) != 0) {
+        system_reset();
+    }
+
+    cfg_b[0] = 0x0F;
+    cfg_b[1] = 0;
+    cfg_b[2] = 0;
+    cfg_b[3] = 0;
+    cfg_b[4] = 1;
+    cfg_b[5] = 0;
+    cfg_b[6] = 0;
+    cfg_b[7] = 0;
+    cfg_b[8] = 0x80;
+    /* bytes 9-19 remain 0 from memset */
+
+    extern int usart_bus_config(void *, uint8_t);
+    if (usart_bus_config(cfg_b, 0) != 0) {
+        system_reset();
+    }
+
+    cfg_c[0] = 1;
+    cfg_c[1] = 2;
+
+    if (rcc_reconfigure(cfg_c) != 0) {
+        system_reset();
+    }
+}

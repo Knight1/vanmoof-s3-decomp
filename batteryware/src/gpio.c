@@ -82,3 +82,35 @@ void gpio_pin_reset(uint32_t *gpio_base, uint32_t pin_mask)
         gpio_base[2] &= ~(3U << ((i & 0x7F) << 1));       /* MODER */
     }
 }
+
+/*
+ * Word-to-bytes — unpack 32-bit words into byte stream.
+ *
+ * Copies 'byte_count' bytes from the word array at src to dst.
+ * Each 32-bit word is split into 4 bytes (little-endian order).
+ * Stops when byte_count bytes have been written.
+ */
+void word_to_bytes(uint32_t *src, uint16_t byte_count, int dst)
+{
+    uint16_t offset = 0;
+    uint32_t *s = src;
+    while (offset < byte_count) {
+        uint32_t w = *s++;
+        if (offset < byte_count) {
+            *(volatile uint8_t *)(dst + offset) = (uint8_t)w;
+            offset++;
+        }
+        if (offset < byte_count) {
+            *(volatile uint8_t *)(dst + offset) = (uint8_t)(w >> 8);
+            offset++;
+        }
+        if (offset < byte_count) {
+            *(volatile uint8_t *)(dst + offset) = (uint8_t)(w >> 16);
+            offset++;
+        }
+        if (offset < byte_count) {
+            *(volatile uint8_t *)(dst + offset) = (uint8_t)(w >> 24);
+            offset++;
+        }
+    }
+}

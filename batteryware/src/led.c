@@ -25,3 +25,22 @@ void led_flash(void)
         delay_ms(10);
     }
 }
+
+/*
+ * Fault LED trigger — triggers a system reset while lighting the LED.
+ *
+ * Writes magic value to SRAM, calls nvic_system_reset_dup, clears
+ * fault timer, sets RCC bit 0x400, pulses GPIOA pin 2 high.
+ */
+void fault_led_trigger(void)
+{
+    volatile uint32_t * const s_magic = (volatile uint32_t *)0x20002C2C;
+    volatile uint32_t * const s_timer = (volatile uint32_t *)0x20002C44;
+    volatile uint32_t * const s_rcc   = (volatile uint32_t *)0x20002C48;
+
+    *s_magic = 0x05FA0004;
+    nvic_system_reset_dup();
+    *s_timer = 0;
+    *s_rcc |= 0x400;
+    gpio_bit_write(0x50000400, 2, 1);
+}

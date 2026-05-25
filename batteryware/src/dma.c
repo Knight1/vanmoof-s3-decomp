@@ -361,6 +361,80 @@ void dma_channel_config(int *ctx)
 }
 
 /*
+ * memset byte copy — copy 'count' bytes from src to dst.
+ */
+void memset_byte_copy(int dst, int src, int count)
+{
+    int i;
+    for (i = 0; i != count; i++) {
+        *(volatile uint8_t *)(dst + i) = *(volatile uint8_t *)(src + i);
+    }
+}
+
+/*
+ * memset byte fill — fill 'count' bytes at dst with 'val'.
+ */
+void memset_byte_fill(uint8_t *dst, uint8_t val, int count)
+{
+    uint8_t *end = dst + count;
+    for (; dst != end; dst++) {
+        *dst = val;
+    }
+}
+
+/*
+ * DMA byte done — post-byte-transfer cleanup.
+ * Clears bits 5-6 in SR, triggers dma_transfer_done if ctx+0x36 == 0.
+ */
+void dma_byte_done(int *ctx)
+{
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[1] &= 0xFFFFFF9F;
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+        dma_transfer_done(ctx);
+    }
+}
+
+/*
+ * Timeout poll v2 — status poll with (*ctx + 0x1C) as status register.
+ * Used by dma_completion_handler. Has emergency cleanup on bit 2+11.
+ */
+uint32_t timeout_poll_v2(int *ctx, uint32_t mask, uint8_t param_3, int param_4, uint32_t param_5)
+{
+    uint32_t now;
+    while (1) {
+        do {
+            if ((mask == (*(volatile uint32_t *)(*ctx + 0x1C) & mask)) != (param_3 != 0)) {
+                return 0;
+            }
+        } while (param_5 == 0xFFFFFFFF);
+
+        now = tick_get();
+        if ((param_5 < (now - (uint32_t)param_4)) || (param_5 == 0)) break;
+
+        if (((*(volatile uint32_t *)*ctx & 4) != 0) &&
+            ((*(volatile uint32_t *)(*ctx + 0x1C) & 0x800) == 0x800)) {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            *(volatile uint32_t *)(*ctx + 0x20) = 0x800;
+            reg[0] &= 0xFFFFFE5F;
+            reg[2] &= ~1U;
+            ctx[0x1E] = 0x20;
+            ctx[0x1F] = 0x20;
+            ctx[0x20] = 0x20;
+            *(volatile uint8_t *)(ctx + 0x1D) = 0;
+            return 3;
+        }
+    }
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[0] &= 0xFFFFFE5F;
+    reg[2] &= ~1U;
+    ctx[0x1E] = 0x20;
+    ctx[0x1F] = 0x20;
+    *(volatile uint8_t *)(ctx + 0x1D) = 0;
+    return 3;
+}
+
+/*
  * DMA/USART peripheral initialization.
  *
  * NULL check → returns 1.

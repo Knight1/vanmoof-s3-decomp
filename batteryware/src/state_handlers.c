@@ -359,3 +359,73 @@ void state_flags_handler(uint8_t arg)
         }
     }
 }
+
+/*
+ * State flags handler (timer-driven context).
+ *
+ * Similar to state_flags_handler but driven from a timer ISR.
+ * Processes flags at 0x20002C54:
+ *   - bit 0: clears it, calls FUN_08000880 (subsystem restart)
+ *   - bit 1: clears it
+ *   - bit 2: clears it, calls fg_watchdog_kick + veneers (response send chain)
+ *   - bit 3: clears it, writes magic 0xAAAA
+ *   - bit 4: clears it
+ *   - bit 5: clears it, increments two counters. If timeout > 9 and
+ *     condition bits set and threshold met: enters shipping mode via
+ *     memcmp_verify → button_entry_check → infinite loop.
+ */
+void state_flags_handler_timer(void)
+{
+    volatile uint32_t * const s_flags  = (volatile uint32_t *)0x20002C54;
+    volatile uint32_t * const s_magic  = (volatile uint32_t *)0x20002C58;
+    volatile uint32_t * const s_timer  = (volatile uint32_t *)0x20002C74;
+    volatile uint32_t * const s_timer2 = (volatile uint32_t *)0x20002C5C;
+
+    extern void subsys_restart(void);   /* FUN_08000880 */
+    extern void resp_send_chain(void);  /* veneer_11f68 */
+    extern void resp_send_chain2(void); /* veneer_11f88 */
+    extern void resp_send_chain3(void); /* veneer_11f18 */
+
+    extern void flags_scan(void);       /* FUN_0800325c */
+    flags_scan();
+
+    if ((*s_flags & 1) != 0) {
+        *s_flags &= ~1U;
+        subsys_restart();
+    }
+    if (((*s_flags >> 1) & 1) != 0) {
+        *s_flags &= ~2U;
+    }
+    if (((*s_flags >> 2) & 1) != 0) {
+        *s_flags &= ~4U;
+        resp_send_chain();
+        resp_send_chain2();
+        resp_send_chain3();
+        fg_watchdog_kick();
+    }
+    if (((*s_flags >> 3) & 1) != 0) {
+        *s_flags &= ~8U;
+        *s_magic = 0xAAAA;
+    }
+    if (((*s_flags >> 4) & 1) != 0) {
+        *s_flags &= ~0x10U;
+    }
+    if (((*s_flags >> 5) & 1) != 0) {
+        *s_flags &= ~0x20U;
+        *s_timer += 1;
+        *s_timer2 += 1;
+
+        volatile uint32_t * const s_thresh = (volatile uint32_t *)0x20002C60;
+        volatile uint32_t * const s_cmp1   = (volatile uint32_t *)0x20002C64;
+
+        if ((*s_timer2 > 9) && (((*s_cmp1 >> 3) & 1) != 0) && (*s_thresh <= *(volatile uint32_t *)0x20002C68)) {
+            extern void flash_block_update(void);
+            flash_block_update();
+            if (button_entry_check()) {
+                gpio_bit_write(0x50000400, 0x1000, 0);
+                while (1) { }  /* bootloader mode */
+            }
+            *s_timer2 = 0;
+        }
+    }
+}

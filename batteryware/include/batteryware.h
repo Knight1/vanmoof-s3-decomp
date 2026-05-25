@@ -25,6 +25,9 @@ bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit);
 /* GPIO pin reset — reset multiple pins to input mode */
 void gpio_pin_reset(uint32_t *gpio_base, uint32_t pin_mask);
 
+/* Word-to-bytes unpack */
+void word_to_bytes(uint32_t *src, uint16_t byte_count, int dst);
+
 /* Busy-wait millisecond delay */
 void delay_ms(uint32_t ms);
 
@@ -33,6 +36,7 @@ void delay_us(uint32_t us);
 
 /* LED flash routine — toggles a GPIO pin with fast/slow timing */
 void led_flash(void);
+void fault_led_trigger(void);
 
 /* System reset via SCB AIRCR register */
 void nvic_system_reset(void);
@@ -144,12 +148,14 @@ void bms_set_state(uint8_t state);
 
 /* Main entry point */
 void batteryware_main(void);
+void peripheral_init(bool arg);
 
 /* State machine handlers */
 void state_handler_01(void);
 void state_handler_03_init(void);
 void state_handler_17_19(void);
 void state_flags_handler(uint8_t arg);
+void state_flags_handler_timer(void);
 
 /* DMA operations */
 uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);
@@ -175,9 +181,20 @@ uint32_t dma_usart_init(int *ctx);
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
+void memset_byte_copy(int dst, int src, int count);
+void memset_byte_fill(uint8_t *dst, uint8_t val, int count);
+
+/* DMA byte transfer done */
+void dma_byte_done(int *ctx);
+
+/* Timeout poll variant */
+uint32_t timeout_poll_v2(int *ctx, uint32_t mask, uint8_t param_3, int param_4, uint32_t param_5);
 
 /* SPI register write (FEDL5236 communication) */
 uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);
+void smbus_write_reg(uint8_t reg, uint8_t val, uint8_t mask);
+uint32_t smbus_read(uint8_t addr, uint8_t count);
+void smbus_read_nack(uint8_t addr, uint8_t val);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);
