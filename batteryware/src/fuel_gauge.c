@@ -292,3 +292,129 @@ void rsoc_lookup(void)
     *s_rsoc_register = *s_rsoc_register * (uint32_t)*s_rsoc_percent;
     *s_rsoc_register = *s_rsoc_register * 0x90;
 }
+
+/* Alert monitor — GPIOB pin 6 */
+#define FAULT_ALERT  0x20
+static volatile uint8_t  * const s_alert_counter = (volatile uint8_t *)0x20002ABF;
+static volatile uint8_t  * const s_alert_cfg     = (volatile uint8_t *)0x200029A8;
+
+/*
+ * Fuel gauge alert pin monitor.
+ *
+ * Reads GPIOB pin 6 (0x40). If high (inactive), clears the counter.
+ * If low (active alert), increments the debounce counter. After 10
+ * consecutive active reads, sets FAULT_ALERT in g_fault_flags and
+ * sets the BMS status field at s_alert_cfg[0x38] to 3.
+ */
+void fg_alert_monitor(void)
+{
+    if (gpio_bit_read(0x50000400, 0x40)) {
+        *s_alert_counter = 0;
+    } else {
+        uint8_t count = *s_alert_counter + 1;
+        *s_alert_counter = count;
+        if (count > 9) {
+            *s_alert_counter = 0;
+            s_alert_cfg[0x38] = 3;
+            *g_fault_flags |= FAULT_ALERT;
+        }
+    }
+}
+
+/* Charge/discharge state byte */
+static volatile uint8_t  * const s_charge_state     = (volatile uint8_t *)0x20002B58;
+static volatile uint16_t * const s_discharge_counter = (volatile uint16_t *)0x20002800;
+static volatile uint16_t * const s_charge_current    = (volatile uint16_t *)0x200028C8;
+#define CHARGE_CURRENT_LOW_THRESHOLD  19999
+
+/* Charge/discharge status flags */
+#define CHG_STATUS_DISCHARGING  0
+#define CHG_STATUS_CHARGING     1
+#define CHG_STATUS_IDLE         2
+#define CHG_STATUS_CHARGE_LOW   4
+
+/*
+ * Determine charge/discharge status.
+ *
+ * Uses the current BMS state to determine the mode:
+ *   - state > 6   → IDLE (2)
+ *   - state == 2  → CHARGING (1)
+ *   - state == 3  → config[0x16] <= s_discharge_counter ? 1 : 0
+ *   - otherwise   → DISCHARGING (0)
+ * ORs bit 4 (CHG_STATUS_CHARGE_LOW) if charge current <= 19999.
+ */
+uint8_t fg_charge_status(void)
+{
+    uint8_t status = *s_charge_state;
+
+    if (status < 0x1A) {
+        if (status > 6) {
+            status = CHG_STATUS_IDLE;
+        } else if (status == 2) {
+            status = CHG_STATUS_CHARGING;
+        } else if (status == 3) {
+            uint16_t thresh = *(volatile uint16_t *)(s_protection_cfg + 0x16);
+            status = (thresh <= *s_discharge_counter) ? 1 : 0;
+        } else {
+            status = CHG_STATUS_DISCHARGING;
+        }
+    } else {
+        status = CHG_STATUS_DISCHARGING;
+    }
+
+    if (*s_charge_current <= CHARGE_CURRENT_LOW_THRESHOLD) {
+        status |= CHG_STATUS_CHARGE_LOW;
+    }
+
+    return status;
+}
+
+/* Config resend counter */
+static volatile uint32_t * const s_config_counter = (volatile uint32_t *)0x200025A0;
+
+/*
+ * Re-send all configuration blocks to the fuel gauge.
+ *
+ * Zeroes the config counter, then calls memcmp_verify for three
+ * configuration blocks (4+4+1 bytes) to restore FEDL5236 settings.
+ */
+void config_resend_all(void)
+{
+    *s_config_counter = 0;
+    memcmp_verify((char *)0x200029CC,   4, (char *)0x08080C24);
+    memcmp_verify((char *)0x200029D4,   4, (char *)0x08080C2C);
+    memcmp_verify((char *)0x200029DE,   1, (char *)0x08080C36);
+}
+
+/* DMA compare helper */
+static volatile uint32_t * const s_dma_compare_reg = (volatile uint32_t *)0x20002000;
+static volatile uint32_t * const s_dma_compare_flags = (volatile uint32_t *)0x20002000;
+#define DMA_COMPARE_BLOCK_SIZE  0x40
+
+/*
+ * DMA transfer compare.
+ *
+ * Compares two memory regions block-by-block (0x40 bytes each).
+ * Returns 1 if any block fails comparison, 0 if all match.
+ */
+uint32_t dma_compare(uint32_t addr_a, uint16_t count, uint32_t addr_b)
+{
+    extern int dma_memcmp(uint32_t a, uint32_t b);  /* veneer_11ea8 */
+    *s_dma_compare_reg = 0;
+    *s_dma_compare_flags = 0;
+
+    int16_t remaining = (int16_t)count;
+    uint32_t a = addr_a;
+    uint32_t b = addr_b;
+
+    while (remaining != 0) {
+        if (dma_memcmp(a, b) != 0) {
+            return 1;
+        }
+        remaining -= DMA_COMPARE_BLOCK_SIZE;
+        a += DMA_COMPARE_BLOCK_SIZE;
+        b += DMA_COMPARE_BLOCK_SIZE;
+    }
+
+    return 0;
+}

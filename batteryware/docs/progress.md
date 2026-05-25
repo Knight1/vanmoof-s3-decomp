@@ -28,8 +28,8 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 | --- | --- |
 | pending      | 131 |
 | in-progress  |   0 |
-| named        |  87 |
-| decomp-c     |  63 |
+| named        |  78 |
+| decomp-c     |  72 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
@@ -139,7 +139,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08008fa4` | — | `FUN_08008fa4` | pending | |
 | `0x08009084` | 64 | `dma_init` | named | DMA channel configuration + reset on fail |
 | `0x080090dc` | 110 | `flash_dma_start` | named | Flash DMA transfer start with retry + reset on fail |
-| `0x0800915c` | 106 | `dma_compare` | named | DMA transfer compare (0x40-byte chunks) |
+| `0x0800915c` | 106 | `dma_compare` | decomp-c | DMA transfer compare (0x40B blocks) |
 | `0x080091d4` | — | `FUN_080091d4` | pending | |
 | `0x080092b8` | — | `FUN_080092b8` | pending | |
 | `0x080093a6` | 108 | `memcmp_verify` | named | Byte-verify with per-byte spin-wait (I2C/config check) |
@@ -153,11 +153,11 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08009650` | 106 | `fg_ovp1_check` | decomp-c | Over-voltage protection 1 monitor |
 | `0x080096cc` | 106 | `fg_ovp2_check` | decomp-c | Over-voltage protection 2 monitor |
 | `0x08009748` | 86 | `fg_threshold_check` | decomp-c | Temperature sensor threshold monitor → FAULT_TS (0x10) |
-| `0x080097b0` | 76 | `fg_alert_monitor` | named | Fuel gauge alert pin monitor |
+| `0x080097b0` | 76 | `fg_alert_monitor` | decomp-c | Fuel gauge alert pin monitor → FAULT_ALERT |
 | `0x0800980c` | 118 | `fg_discharge_oc_check` | decomp-c | Discharge over-current monitor |
 | `0x0800989c` | 118 | `fg_charge_oc_check` | decomp-c | Charge over-current monitor |
-| `0x0800992c` | 52 | `config_resend_all` | named | Re-send config data via memcpy-verify |
-| `0x0800997c` | 128 | `fg_charge_status` | named | Charge/discharge status flags from fuel gauge |
+| `0x0800992c` | 52 | `config_resend_all` | decomp-c | Re-send config to FEDL5236 via memcmp_verify |
+| `0x0800997c` | 128 | `fg_charge_status` | decomp-c | Charge/discharge status flags |
 | `0x08009a10` | 46 | `fg_status_flag_get` | decomp-c | Fuel gauge status flag read |
 | `0x08009a44` | 54 | `fg_status_flag2_get` | decomp-c | Fuel gauge status flag 2 (bit 1) |
 | `0x08009a80` | — | `FUN_08009a80` | pending | |
@@ -184,14 +184,14 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800c24c` | 44 | `EXTI0_1_IRQHandler` | named | Vector IRQ handler — EXTI lines 0 and 1 |
 | `0x0800c278` | 2970 | `EXTI4_15_IRQHandler` | named | Vector IRQ handler — EXTI lines 4-15 |
 | `0x0800ce9e` | — | `FUN_0800ce9e` | pending | |
-| `0x0800d75e` | 34 | `cmd_counter_inc` | named | Increment command counter |
-| `0x0800d780` | 34 | `cmd_counter_inc_v2` | named | Counter increment variant 2 |
-| `0x0800d7fc` | 34 | `cmd_counter_inc_v3` | named | Counter increment variant 3 |
-| `0x0800d81e` | 40 | `cmd_write_and_inc` | named | Write to struct field + counter increment |
+| `0x0800d75e` | 34 | `cmd_counter_inc` | decomp-c | Extract byte from frame + inc counter + send response |
+| `0x0800d780` | 34 | `cmd_counter_inc_v2` | decomp-c | Counter inc variant 2 |
+| `0x0800d7fc` | 34 | `cmd_counter_inc_v3` | decomp-c | Counter inc variant 3 |
+| `0x0800d81e` | 40 | `cmd_write_and_inc` | named | Write 2B to struct + inc counter + send |
 | `0x0800d846` | — | `FUN_0800d846` | pending | |
 | `0x0800d84a` | — | `FUN_0800d84a` | pending | |
-| `0x0800d850` | 70 | `cmd_send_response` | named | Send 8-byte Modbus response via uart_putchar |
-| `0x0800d896` | 48 | `cmd_send_8byte` | named | Send 8-byte response via uart_putchar |
+| `0x0800d850` | 70 | `cmd_send_response` | decomp-c | Send 8-byte Modbus response via uart_putchar |
+| `0x0800d896` | 48 | `cmd_send_8byte` | decomp-c | Send 8-byte response via uart_putchar |
 | `0x0800d8c6` | — | `FUN_0800d8c6` | pending | |
 | `0x0800d8f0` | — | `FUN_0800d8f0` | pending | |
 | `0x0800e1b4` | — | `FUN_0800e1b4` | pending | |

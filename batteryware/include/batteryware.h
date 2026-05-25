@@ -82,10 +82,20 @@ void fg_ovp1_check(void);
 void fg_ovp2_check(void);
 void fg_discharge_oc_check(void);
 void fg_charge_oc_check(void);
+void fg_alert_monitor(void);
+uint8_t fg_charge_status(void);
+void config_resend_all(void);
 
 /* Shipping mode */
 void shipping_mode_check(void);
 void rsoc_lookup(void);
+
+/* Modbus command response helpers */
+void cmd_counter_inc(uint16_t frame_word);
+void cmd_counter_inc_v2(uint16_t frame_word);
+void cmd_counter_inc_v3(uint16_t frame_word);
+void cmd_send_response(void);
+void cmd_send_8byte(void);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);
