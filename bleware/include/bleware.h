@@ -266,4 +266,13 @@ uint32_t log_emit_v(uint32_t service_id, const char *fmt, ...);
  * event loop. OEM at flash 0x00010B40. */
 uint32_t gap_event_91_3e_handler(const void *msg);
 
+/* Firmware info printer (src/print_firmware_info.c). Prints device
+ * name, BLE MAC, version, compile date, BIM info, reset reason,
+ * and systick. Called by cmd_info_ver. OEM @ 0x000054D8. */
+void print_firmware_info(void);
+
+/* Reset reason string (src/reset_reason.c). Returns a static string
+ * for the last reset cause. OEM @ 0x000145AC. */
+const char *reset_reason_string(void);
+
 #endif /* BLEWARE_BLEWARE_H */

@@ -25,10 +25,10 @@ peripheral wiring, anything that's specific to VanMoof.
 
 | Count | Status |
 | --- | --- |
-| ?? | pending (TBD as functions are categorised) |
+| 148 | decomp (asm or c) |
 | 0 | vendor-stock (recognised; no decomp needed) |
 | 0 | in-progress |
-| 71 | decomp (asm or c) |
+| 143 | decomp (asm or c) |
 | 0 | named (rename in Ghidra, no source yet) |
 
 ### Decoded functions
@@ -77,6 +77,36 @@ peripheral wiring, anything that's specific to VanMoof.
 | —           | `ble_connection_params`           | `src/ble_connection.c`   | Reads interval (+0x56), latency (+0x58), timeout (+0x5A) under lock. |
 | —           | `ble_connection_is_rider_app`     | `src/ble_connection.c`   | Reads rider-app flag at +0x64 under lock. |
 | —           | `ble_device_address`              | `src/ble_connection.c`   | Returns local device BLE address (calls init helper, returns 6-byte buffer). |
+| 0x000193C0  | `extflash_sector_write`           | `src/extflash.c`         | 4 KB-sector read-modify-write — reads sector, merges caller data, erases, writes back. Handles cross-sector spans. Used by `secrets_record_write_verify`. 76 B. |
+| 0x00011228  | `gatt_config_lookup_item`         | `src/gatt_config.c` (new) | Linear scan over 11-entry GATT service table, returns 28-byte item entry pointer. Called by both GATT dispatchers. ~200 B. |
+| 0x00020848  | `block_dispatch_queue_post`       | `src/auth.c`              | Posts an AES crypto operation to the TI CryptoCC26X2 ROM queue. Used by `mfg_key_ecb_decrypt_chunks` and GATT write dispatcher. ~44 B. |
+| 0x000177E8  | `module_forward_sync`             | `src/protocols/ssp.c`     | Synchronous SSP forward — publishes payload frame, blocks on per-module reply semaphore with ~2.5s timeout. Backoffice sub-command 8. 72 B. |
+| 0x000152FC  | `extflash_open`                   | `src/extflash.c`         | Opens SPI flash driver — slow-speed init, REMS probe via extflash_identify_chip, reopens at production bitrate. Returns 1 if already open. ~170 B. |
+| 0x0001B9F4  | `log_gatt_notify_channel`         | `src/log_gatt.c`         | Per-channel log notify dispatcher (ch 0=0x55C1, ch 1=0x55C2, ch 2=0x55C3 variable up to 0xF0 aligned). 98 B. |
+| —           | `ti_semaphore_pend` / `ti_semaphore_post` / `ti_queue_put` / `ti_event_post` / `ti_mailbox_post` / `ti_task_self` / `bios_*` / `ssp_frame_alloc` / `icall_*` / `aes128` / `trng` / `ble_gap_terminate` | `src/hal_stubs.S` | ROM thunk aliases — `b.w` to existing `thunk_EXT_FUN_*` entries at end of file. Eliminates 20 WEAK_NOOP stubs. |
+| 0x00018654  | `memcpy`                           | `src/runtime.c` (new)    | Optimized word-aligned memcpy with fast 16-byte chunk path. 23 callers. ~180 B. |
+| 0x0001B6B2  | `memset`                           | `src/runtime.c`          | Word-aligned fill with 16-byte chunk optimization. 8 callers. ~110 B. |
+| 0x00025490  | `memcmp`                           | `src/runtime.c`          | Standard byte-by-byte comparison. 2 callers. ~40 B. |
+| 0x000107BC  | `monitor_strtol`                   | `src/runtime.c`          | TI runtime strtol clone with overflow detection, ctype table, base detection. 1 caller (log_seek_to_timestamp). ~180 B. |
+| 0x0001F9AE  | `cccd_write_validate`             | `src/gatt_cccd.c` (new)  | Validates CCCD write — rejects bits beyond notification/indication, delegates changed values to cccd_write_store. 60 B. |
+| 0x00024D90  | `cccd_write_store`                | `src/gatt_cccd.c`        | Stores 2-byte CCCD value for a connection. 40 B. |
+| 0x00026D94  | `cccd_read`                       | `src/gatt_cccd.c`        | Reads stored CCCD byte for a connection. 20 B. |
+| 0x000251BE  | `monitor_command_matches`         | `src/monitor/dispatcher.c` | Case-sensitive strcmp for command matching. Returns 1 on equal, 0 otherwise. 32 B. |
+| —           | `svc_*_char_uuid_to_index` (×8)  | `src/gatt_uuid_matchers.c` (new) | Per-service 128-bit UUID matchers — generated via DEFINE_CHAR_UUID_MATCHER macro over shared core. 3–11 entries each. |
+| —           | `vanmoof_ssp_uuid_to_index`       | `src/gatt_uuid_matchers.c` | SSP UUID matcher for svc 0x5540 (18 entries). |
+| —           | `rom_gap_*` (×10) + `queue_post_message` + `thunk_FUN_*` (×3) + `FUN_000274e8/27766/2776a` | `src/hal_stubs.S` | ROM thunk aliases. Eliminated 17 WEAK_NOOPs. |
+| —           | 32 remaining WEAK_NOOPs (monitor, audio, packfs, system, YModem, log helpers) | `src/stubs.c` (new) | Lightweight C stubs. All WEAK_NOOPs eliminated — zero active remaining. |
+| 0x000273D0  | `extflash_get_chip_info`          | `src/extflash.c`         | Returns `g_extflash_state.chip_info`. 1-liner. |
+| —           | `monitor_log` (stub with mini-printf) | `src/stubs.c` | Variadic logger stub with %s/%d/%x/%c/%02x format support. 77 call sites. Full OEM body is ~350 B of encrypted BLE logging — deferred to SDK vendoring. |
+| —           | Build fixes (6 type conflicts resolved) | multiple files | Fixed `gatt_svc_5560.c` arg count, `gatt_notify_channel` signature mismatch, `crc32_le`/`extflash_get_chip_info`/`ble_connection_get_session_key` extern conflicts, `ssp_publish_fetch_frame` forward decl, `ROM_ALIAS1` macro. Full `make` now succeeds — 52 object files, 1028 B binary (stub build). |
+| 0x000054D8  | `print_firmware_info` (named)     | — (named only)           | Prints device name, BLE MAC, firmware version, compile date, BIM version, reset reason, systick. ~220 B. Called by cmd_info_ver. |
+| 0x000145AC  | `reset_reason_string` (named)     | — (named only)           | Returns a static string for the last reset cause (power-on, pin-reset, VDDS loss, etc.) via ROM SysCtrlResetSourceGet. 58 B. |
+| 0x0001E248  | `svc_5510_notify_channel` (named) | — (named only)           | Per-channel GATT notify for svc 0x5510 (OAD service). Same template as gatt_notify_channel. 78 B. |
+| 0x000101B0  | `ymodem_receive`                   | `src/ymodem.c` (new)     | Full YModem receiver with CRC-16 validation, SOH/STX support, block sequencing, CAN abort, EOT double-ACK. Includes ymodem_engine_receive protocol state machine (~200 B). |
+| 0x000054D8  | `print_firmware_info`             | `src/print_firmware_info.c` (new) | Prints device name (ES3- + MAC), BLE MAC, firmware version, compile date, BIM bootloader info, reset reason, systick. ~220 B. |
+| 0x000145AC  | `reset_reason_string`             | `src/reset_reason.c` (new) | Returns static string for reset cause (power-on, pin-reset, VDDS loss, WDT, etc.) via ROM SysCtrlResetSourceGet. 58 B. |
+| —           | `gatt_scratch_free`               | `src/gatt_read.c`        | Thin wrapper around monitor_free. |
+| —           | `nvs_open`                        | `src/gatt_read.c`        | TI-RTOS NVS driver open stub (vendor-stock). |
 | 0x00010B40  | `gap_event_91_3e_handler`         | `src/gap_event_handler.c` | GAP Host command dispatcher for ICall event class 0x91 sub-code 0x3E. Switches on GAP opcode at msg[2]; routes establish-link (0x01/0x0A), update-link-params (0x03/0x83), terminate-link (0x06), and sub-dispatches 0x0E-0x10/0x15-0x17/0x81/0x84 to `gap_event_sub_dispatch`. Called by the bluetoothtask event loop at 0x0001AF2E. |
 | 0x0001AC6C  | `log_emit_v`                      | `src/log_emit.c`         | Variadic log dispatcher — builds an ICall envelope and waits for the logger-service ack (1000 ms). Sub-helpers (`icall_*`, `bios_*`, `log_reply_match_pred`) are still weak no-ops in `hal_stubs.S`. |
 | 0x00020C54  | `icall_caller_entity`             | `src/icall_runtime.c`    | Walks the 6-entry ICall entity registry (RAM 0x20004E78, 12-byte records) to find the entry whose `*task_holder` matches `ti_task_self()`. Returns the entity index, or 0xff if not registered / not in a runnable thread. Bracketed by `icall_cs_enter` / `icall_cs_exit` (still weak stubs). |

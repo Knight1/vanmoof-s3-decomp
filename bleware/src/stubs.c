@@ -140,9 +140,8 @@ int firmware_update_start(void *params)
     return 0;
 }
 
-void print_firmware_info(void)
-{
-}
+void print_firmware_info(void);
+
 
 void format_size(uint32_t bytes, char *buf, unsigned int bufsz)
 {
