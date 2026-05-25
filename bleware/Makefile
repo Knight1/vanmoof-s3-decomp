@@ -8,11 +8,31 @@
 # at runtime; bleware's vector table starts at flash 0x00000090 (the
 # `prgEntry` field in the header points there). See docs/hardware.md
 # for the full header layout.
+#
+# ---- TI SDK integration ----
+#
+# This build requires the TI SimpleLink CC13x2/CC26x2 SDK 3.40.00.02.
+# Download from TI.com (free account), then either:
+#
+#   1. Set TI_SDK on the make command line:
+#        make TI_SDK=~/ti/simplelink_cc13x2_26x2_sdk_3_40_00_02
+#
+#   2. Or extract into vendor/ with the helper script:
+#        ./vendor/fetch_sdk.sh ~/Downloads/sdk.zip
+#        make TI_SDK=vendor/ti-sdk-3.40
+#
+#   3. Or export once:
+#        export TI_SDK=vendor/ti-sdk-3.40
+#        make
+#
+# Without TI_SDK, the build uses weak stubs only (compiles but the
+# binary is not functional). See vendor/README.md for details.
 
 PROJECT      := bleware
 MCU          := cortex-m4
 FPU          := fpv4-sp-d16
 TOOLCHAIN    := arm-none-eabi-
+TI_SDK       ?=
 
 CC           := $(TOOLCHAIN)gcc
 AS           := $(TOOLCHAIN)gcc
@@ -25,10 +45,47 @@ BUILD_DIR    := build
 SRC_DIR      := src
 INC_DIR      := include
 LD_SCRIPT    := linker_cc2642r1.ld
+VENDOR_DIR   := vendor
 
 OEM_IMAGE    ?= bleware/bleware_1.4.01.bin
 
-C_SRCS       := $(shell find $(SRC_DIR) -name '*.c' 2>/dev/null)
+# ---- SDK detection ---------------------------------------------------
+
+ifeq ($(TI_SDK),)
+  $(info TI_SDK not set — building with weak stubs only (no BLE stack, no drivers))
+  $(info To build a functional image, set TI_SDK=path/to/sdk. See vendor/README.md)
+  SDK_CFLAGS := -DBLEWARE_NO_SDK
+  SDK_INC   :=
+  SDK_SRCS  :=
+else ifeq ($(wildcard $(TI_SDK)/source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.h),)
+  $(error TI_SDK set to '$(TI_SDK)' but ble_rom_jt.h not found. Wrong SDK version? Expected SDK 3.40.00.02)
+else
+  $(info Using TI SDK: $(TI_SDK))
+  SDK_CFLAGS :=
+  SDK_INC   := -I$(TI_SDK) \
+               -I$(TI_SDK)/source \
+               -I$(TI_SDK)/source/ti/blestack \
+               -I$(TI_SDK)/source/ti/blestack/inc \
+               -I$(TI_SDK)/source/ti/blestack/icall/inc \
+               -I$(TI_SDK)/source/ti/blestack/rom \
+               -I$(TI_SDK)/source/ti/blestack/hal/inc \
+               -I$(TI_SDK)/source/ti/drivers \
+               -I$(TI_SDK)/source/ti/devices/cc13x2_cc26x2 \
+               -I$(TI_SDK)/source/ti/devices/cc13x2_cc26x2/inc \
+               -I$(TI_SDK)/kernel/tirtos/packages
+  SDK_SRCS  := $(TI_SDK)/source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.c \
+               $(TI_SDK)/source/ti/blestack/icall/src/icall.c \
+               $(TI_SDK)/source/ti/blestack/icall/src/icall_lite.c \
+               $(wildcard $(TI_SDK)/source/ti/devices/cc13x2_cc26x2/driverlib/*.c) \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/family/arm/m3/Hwi.c \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Semaphore.c \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Queue.c \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Event.c \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/knl/Task.c \
+               $(TI_SDK)/kernel/tirtos/packages/ti/sysbios/heaps/HeapMem.c
+endif
+
+C_SRCS       := $(shell find $(SRC_DIR) -name '*.c' 2>/dev/null) $(SDK_SRCS)
 S_SRCS       := $(shell find $(SRC_DIR) -name '*.S' 2>/dev/null)
 OBJS         := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS)) \
                 $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(S_SRCS))
@@ -40,6 +97,7 @@ DEPS         := $(OBJS:.o=.d)
 ARCH_FLAGS   := -mcpu=$(MCU) -mthumb -mfpu=$(FPU) -mfloat-abi=hard
 
 CFLAGS       := $(ARCH_FLAGS) \
+                $(SDK_CFLAGS) \
                 -std=c11 \
                 -Os -g3 \
                 -ffunction-sections -fdata-sections \
@@ -47,6 +105,7 @@ CFLAGS       := $(ARCH_FLAGS) \
                 -Wall -Wextra -Wpedantic -Wshadow \
                 -Wno-unused-parameter \
                 -I$(INC_DIR) \
+                $(SDK_INC) \
                 -MMD -MP
 
 ASFLAGS      := $(ARCH_FLAGS) -g3 -I$(INC_DIR) -MMD -MP -Wa,--no-warn
@@ -117,7 +176,19 @@ help:
 	@echo "  disasm  — emit interleaved C+asm listing"
 	@echo "  compare — diff our build against OEM_IMAGE"
 	@echo "  clean   — remove build/"
+	@echo "  sdk     — show TI SDK integration status"
 	@echo "Variables:"
-	@echo "  OEM_IMAGE=$(OEM_IMAGE)"
+	@echo "  TI_SDK   = $(if $(TI_SDK),$(TI_SDK),(not set — weak stubs only))"
+	@echo "  OEM_IMAGE = $(OEM_IMAGE)"
+
+sdk:
+	@echo "TI SDK path: $(if $(TI_SDK),$(TI_SDK),(not set))"
+	@echo "SDK integration: $(if $(TI_SDK),active ($(SDK_INC)),weak stubs only (no BLE stack))"
+	@echo ""
+	@echo "To integrate the SDK:"
+	@echo "  1. Download SimpleLink CC13x2/CC26x2 SDK 3.40 from TI.com"
+	@echo "  2. Run: ./vendor/fetch_sdk.sh <path-to-sdk-zip>"
+	@echo "  3. Build: make TI_SDK=vendor/ti-sdk-3.40"
+	@echo "See vendor/README.md for details."
 
 -include $(DEPS)
