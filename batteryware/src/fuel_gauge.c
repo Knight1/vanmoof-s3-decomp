@@ -18,6 +18,15 @@ static volatile uint16_t * const s_uvp2_counter = (volatile uint16_t *)0x20002A8
 static volatile uint16_t * const s_ovp1_counter = (volatile uint16_t *)0x20002A94;
 static volatile uint16_t * const s_ovp2_counter = (volatile uint16_t *)0x20002A52;
 
+/* Tick counter in SRAM */
+static volatile uint32_t * const s_tick_counter = (volatile uint32_t *)0x200000C8;
+
+/* RCC base for clock tree queries */
+static volatile uint32_t * const RCC_FG = (volatile uint32_t *)0x40021000;
+
+/* Shift table in flash for fg_read_field_8 / fg_read_field_11 */
+static const uint8_t * const s_fg_shift_table = (const uint8_t *)0x080181F8;
+
 /* Fault flag bits */
 #define FAULT_UVP1  0x01
 #define FAULT_UVP2  0x02
@@ -482,4 +491,35 @@ void fg_cell_balance(uint8_t cell_idx)
         s_cell_voltage_table[cell_idx + 1] = avg;
         *s_balance_idx = cell_idx;
     }
+}
+
+/*
+ * Fuel gauge register field read (field starting at bit 8).
+ *
+ * Reads the tick counter at 0x200000C8, then right-shifts by
+ * a value from the shift table at 0x080181F8, indexed by
+ * (RCC_CFGR >> 8) & 7 (the APB1 prescaler field).
+ * Used by the flash page program logic to determine the
+ * clock scaling factor for timeout calculations.
+ */
+uint32_t fg_read_field_8(void)
+{
+    uint32_t val = *s_tick_counter;
+    uint8_t shift_idx = (RCC_FG[3] >> 8) & 7;
+    uint8_t shift = s_fg_shift_table[shift_idx];
+    return val >> shift;
+}
+
+/*
+ * Fuel gauge register field read (field starting at bit 11).
+ *
+ * Same as fg_read_field_8 but indexes by (RCC_CFGR >> 11) & 7
+ * (the APB2 prescaler field).
+ */
+uint32_t fg_read_field_11(void)
+{
+    uint32_t val = *s_tick_counter;
+    uint8_t shift_idx = (RCC_FG[3] >> 11) & 7;
+    uint8_t shift = s_fg_shift_table[shift_idx];
+    return val >> shift;
 }

@@ -26,14 +26,14 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 131 |
+| pending      | 124 |
 | in-progress  |   0 |
-| named        |  34 |
-| decomp-c     |  99 |
+| named        |  24 |
+| decomp-c     | 110 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
+_Total functions: 281. 110 decomp-c, 24 named, 124 pending (`FUN_*`)._
 
 ## Functions
 
@@ -229,7 +229,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800eecc` | 142 | `dma_transfer` | decomp-c | DMA transfer dispatcher (word/halfword/byte) |
 | `0x0800ef5a` | 158 | `dma_transfer_irq` | decomp-c | DMA transfer with IRQ enable |
 | `0x0800eff8` | — | `FUN_0800eff8` | pending | |
-| `0x0800f11a` | 110 | `memcpy_halfword` | named | Halfword-aligned memcpy with odd-byte tail |
+| `0x0800f11a` | 110 | `memcpy_halfword` | decomp-c | Halfword-aligned memcpy with odd-byte tail |
 | `0x0800f188` | — | `FUN_0800f188` | pending | |
 | `0x0800f264` | 110 | `flash_word_write` | decomp-c | Single 32-bit flash word write with mutex |
 | `0x0800f2dc` | 148 | `flash_unlock_both` | decomp-c | Flash + option byte unlock with PRIMASK |
@@ -251,26 +251,26 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08010554` | — | `FUN_08010554` | pending | |
 | `0x080107e4` | — | `FUN_080107e4` | pending | |
 | `0x08010930` | — | `FUN_08010930` | pending | |
-| `0x08010944` | 34 | `fg_read_field_8` | named | Fuel gauge register field read (shift 8) |
-| `0x08010970` | 34 | `fg_read_field_11` | named | Fuel gauge register field read (shift 11) |
+| `0x08010944` | 34 | `fg_read_field_8` | decomp-c | Fuel gauge register field read (shift 8) |
+| `0x08010970` | 34 | `fg_read_field_11` | decomp-c | Fuel gauge register field read (shift 11) |
 | `0x0801099c` | — | `FUN_0801099c` | pending | |
 | `0x08010c48` | — | `FUN_08010c48` | pending | |
-| `0x08010d84` | 82 | `modem_deinit` | named | USART/modem deinit + register cleanup |
+| `0x08010d84` | 82 | `modem_deinit` | decomp-c | USART/modem deinit + register cleanup |
 | `0x08010dd6` | — | `FUN_08010dd6` | pending | |
 | `0x08010de6` | — | `FUN_08010de6` | pending | |
 | `0x08010df8` | — | `FUN_08010df8` | pending | |
 | `0x08010f78` | — | `FUN_08010f78` | pending | |
 | `0x08010f88` | — | `FUN_08010f88` | pending | |
-| `0x08010fa0` | 120 | `dma_byte_handler` | named | DMA byte-by-byte transfer callback |
+| `0x08010fa0` | 120 | `dma_byte_handler` | decomp-c | DMA byte-by-byte transfer callback (periph→mem) |
 | `0x0801101c` | — | `FUN_0801101c` | pending | |
-| `0x08011056` | 144 | `dma_byte_handler_v2` | named | DMA byte handler variant 2 |
-| `0x080110e8` | 116 | `dma_halfword_handler_v2` | named | DMA halfword handler variant 2 |
-| `0x08011160` | 46 | `flash_op_cleanup` | named | Flash operation cleanup (clear CR bit) |
-| `0x0801118e` | 142 | `dma_halfword_handler` | named | DMA halfword transfer completion handler |
+| `0x08011056` | 144 | `dma_byte_handler_v2` | decomp-c | DMA byte handler variant 2 (mem→periph) |
+| `0x080110e8` | 116 | `dma_halfword_handler_v2` | decomp-c | DMA halfword handler variant 2 (periph→mem) |
+| `0x08011160` | 46 | `flash_op_cleanup` | decomp-c | Flash operation cleanup (clear CR bit + DMA done) |
+| `0x0801118e` | 142 | `dma_halfword_handler` | decomp-c | DMA halfword transfer completion handler (mem→periph) |
 | `0x0801121c` | — | `FUN_0801121c` | pending | |
-| `0x08011338` | 132 | `dma_timeout_copy` | named | DMA copy with calibrated timeout |
+| `0x08011338` | 132 | `dma_timeout_copy` | decomp-c | DMA copy with calibrated timeout |
 | `0x080113c4` | — | `FUN_080113c4` | pending | |
-| `0x080114ec` | 164 | `flash_page_program` | named | Flash page program via DMA |
+| `0x080114ec` | 164 | `flash_page_program` | decomp-c | Flash page program via DMA |
 | `0x08011594` | — | `FUN_08011594` | pending | |
 | `0x080115a4` | — | `FUN_080115a4` | pending | |
 | `0x08011b20` | — | `FUN_08011b20` | pending | |

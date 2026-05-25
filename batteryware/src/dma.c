@@ -203,3 +203,181 @@ uint32_t dma_flash_start(void *ctx)
 
     return 3;  /* timeout */
 }
+
+/*
+ * DMA byte transfer handler — reads from peripheral to memory.
+ *
+ * Called during a DMA byte-by-byte transfer: reads one byte from
+ * peripheral register (*ctx + 0x0C) into the destination buffer
+ * at ctx[0x0E], increments destination, decrements remaining count
+ * at ctx+0x3E. When the transfer completes:
+ *   - If ctx[10] == 0x2000: sets the next-stage callback ptr
+ *   - Otherwise: clears bit 6 in SR, and if secondary counter
+ *     ctx[0x36] == 0, calls the transfer-done callback.
+ */
+void dma_byte_handler(int *ctx)
+{
+    volatile uint8_t *dst = (volatile uint8_t *)ctx[0x0E];
+    *dst = *(volatile uint8_t *)(*ctx + 0x0C);
+    ctx[0x0E] = (int)(dst + 1);
+    *(volatile int16_t *)((uintptr_t)ctx + 0x3E) -= 1;
+
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
+        if (ctx[10] == 0x2000) {
+            ctx[0x10] = (int)0x0801601D;
+        } else {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[1] &= 0xFFFFFF9F;
+            if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+                extern void dma_transfer_done(void *);
+                dma_transfer_done(ctx);
+            }
+        }
+    }
+}
+
+/*
+ * DMA byte transfer handler v2 — writes from memory to peripheral.
+ *
+ * Like dma_byte_handler but reversed: reads from source buffer at
+ * ctx[0x0C] into peripheral register (*ctx + 0x0C). Uses ctx+0x36
+ * as the primary count. On completion:
+ *   - If ctx[10] == 0x2000: sets bit 0x1000 in base, clears bit 7 in SR
+ *   - Otherwise: clears bit 7, checks secondary counter ctx[0x3E]
+ */
+void dma_byte_handler_v2(int *ctx)
+{
+    volatile uint8_t *src = (volatile uint8_t *)ctx[0x0C];
+    *(volatile uint8_t *)(*ctx + 0x0C) = *src;
+    ctx[0x0C] = (int)(src + 1);
+    *(volatile int16_t *)((uintptr_t)ctx + 0x36) -= 1;
+
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+        if (ctx[10] == 0x2000) {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[0] |= 0x1000;
+            reg[1] &= 0xFFFFFF7F;
+        } else {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[1] &= 0xFFFFFF7F;
+            if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
+                extern void dma_transfer_done(void *);
+                dma_transfer_done(ctx);
+            }
+        }
+    }
+}
+
+/*
+ * DMA halfword transfer handler — writes from memory to peripheral.
+ *
+ * Same pattern as dma_byte_handler_v2 but operates on 16-bit
+ * halfwords instead of bytes. Reads from ctx[0x0C], writes to
+ * (*ctx + 0x0C). Increments source by 2. Uses ctx+0x36 as primary.
+ */
+void dma_halfword_handler(int *ctx)
+{
+    volatile uint16_t *src = (volatile uint16_t *)ctx[0x0C];
+    *(volatile uint32_t *)(*ctx + 0x0C) = (uint32_t)*src;
+    ctx[0x0C] = (int)(src + 1);
+    *(volatile int16_t *)((uintptr_t)ctx + 0x36) -= 1;
+
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+        if (ctx[10] == 0x2000) {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[0] |= 0x1000;
+            reg[1] &= 0xFFFFFF7F;
+        } else {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[1] &= 0xFFFFFF7F;
+            if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
+                extern void dma_transfer_done(void *);
+                dma_transfer_done(ctx);
+            }
+        }
+    }
+}
+
+/*
+ * DMA halfword transfer handler v2 — reads from peripheral to memory.
+ *
+ * Reads a halfword from (*ctx + 0x0C) into the destination buffer
+ * at ctx[0x0E], increments by 2, decrements ctx+0x3E.
+ * On completion: sets next callback or clears bit 6 in SR.
+ */
+void dma_halfword_handler_v2(int *ctx)
+{
+    volatile uint16_t *dst = (volatile uint16_t *)ctx[0x0E];
+    *dst = (uint16_t)*(volatile uint32_t *)(*ctx + 0x0C);
+    ctx[0x0E] = (int)(dst + 1);
+    *(volatile int16_t *)((uintptr_t)ctx + 0x3E) -= 1;
+
+    if (*(volatile int16_t *)((uintptr_t)ctx + 0x3E) == 0) {
+        if (ctx[10] == 0x2000) {
+            ctx[0x10] = (int)0x08016161;
+        } else {
+            volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+            reg[1] &= 0xFFFFFFBF;
+            if (*(volatile int16_t *)((uintptr_t)ctx + 0x36) == 0) {
+                extern void dma_transfer_done(void *);
+                dma_transfer_done(ctx);
+            }
+        }
+    }
+}
+
+/*
+ * DMA timeout copy — waits for DMA peripheral to be ready.
+ *
+ * If ctx[1] == 0x104 (special mode): calls the timeout poll helper
+ * with mask 0x80. On failure sets bit 5 in ctx[0x15] and returns 3.
+ * Otherwise: countdown loop using a calibrated timeout from
+ * (tick_counter / 0x016E3600 * 1000). Returns 0 when bit 0x80
+ * clears in (*ctx + 8) or when timeout expires.
+ */
+uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3)
+{
+    volatile uint32_t *tick_ptr = (volatile uint32_t *)0x200000C8;
+    uint32_t divisor = 0x016E3600;
+    uint32_t timeout = (*tick_ptr / divisor) * 1000;
+
+    if (ctx[1] == 0x104) {
+        extern uint32_t timeout_poll(int *, uint32_t, char, uint32_t, uint32_t);
+        int result = timeout_poll(ctx, 0x80, 0, param2, param3);
+        if (result != 0) {
+            ctx[0x15] |= 0x20;
+            return 3;
+        }
+    } else {
+        do {
+            if (timeout == 0) {
+                return 0;
+            }
+            timeout--;
+        } while (((*(volatile uint32_t *)(*ctx + 8)) & 0x80) == 0x80);
+    }
+    return 0;
+}
+
+/*
+ * memcpy_halfword — copy halfword-aligned data into a destination pointer.
+ *
+ * Copies param_3 halfwords from param_2 to *param_1. Pairs two halfwords
+ * into one 32-bit store. If an odd halfword remains, writes it as a 16-bit
+ * store. Returns the last word written (the value at *param_1).
+ */
+uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count)
+{
+    uint32_t i;
+    const uint16_t *src = (const uint16_t *)src_base;
+
+    for (i = 0; i < (count >> 1); i++) {
+        *dst_ptr = ((uint32_t)src[i * 2 + 1] << 16) | src[i * 2];
+    }
+
+    if ((count & 1) != 0) {
+        *(volatile uint16_t *)dst_ptr = src[i * 2];
+    }
+
+    return *dst_ptr;
+}

@@ -171,6 +171,54 @@ uint32_t flash_timeout_check(uint32_t param)
 }
 
 /*
+ * Program a flash page via DMA.
+ *
+ * Handles the complete flash page programming sequence:
+ * 1. NULL check → returns 1 (error)
+ * 2. If page counter ctx[0x1E] == 0: calls init thunk
+ * 3. Sets page counter to 0x24 (36 pages)
+ * 4. Clears bit 0 in base register (disable)
+ * 5. Calls the prescaler/divisor setup function; returns 1 on failure
+ * 6. If ctx[9] != 0: applies DMA channel configuration
+ * 7. Clears EOP (bit 6) in SR and error bits in status
+ * 8. Sets bit 0 in base register (enable)
+ * 9. Delegates to dma_completion_handler for the transfer
+ */
+uint32_t flash_page_program(int *ctx)
+{
+    if (ctx == NULL) {
+        return 1;
+    }
+
+    if (ctx[0x1E] == 0) {
+        *(volatile uint8_t *)(ctx + 0x1D) = 0;
+        extern void flash_program_init(void *);
+        flash_program_init(ctx);
+    }
+
+    ctx[0x1E] = 0x24;
+    *(volatile uint32_t *)*ctx &= ~1U;
+
+    extern uint32_t flash_prescaler_setup(int *);
+    if (flash_prescaler_setup(ctx) == 1) {
+        return 1;
+    }
+
+    if (ctx[9] != 0) {
+        extern void dma_channel_config(int *);
+        dma_channel_config(ctx);
+    }
+
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+    reg[1] &= 0xFFFFB7FF;
+    reg[2] &= 0xFFFFFFD5;
+    *(volatile uint32_t *)*ctx |= 1;
+
+    extern uint32_t dma_completion_handler(int *);
+    return dma_completion_handler(ctx);
+}
+
+/*
  * Peripheral reset.
  *
  * Sets bit 1 in FLASH_ACR, calls flash_timeout_check(3), and if
@@ -299,6 +347,22 @@ uint8_t flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val)
 
     s_flash_mutex[0x10] = 0;
     return ret;
+}
+
+/*
+ * Clean up after a flash operation.
+ *
+ * Clears bit 6 (0x40) in the peripheral control register (SR),
+ * then calls the DMA transfer completion callback to handle
+ * the post-operation state machine transition.
+ */
+void flash_op_cleanup(void *ctx)
+{
+    volatile uint32_t *c = (volatile uint32_t *)ctx;
+    volatile uint32_t *reg = (volatile uint32_t *)*c;
+    reg[1] &= ~0x40U;
+    extern void dma_transfer_done(void *);
+    dma_transfer_done(ctx);
 }
 
 /*

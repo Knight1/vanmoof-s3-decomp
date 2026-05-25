@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /* Hex conversion helpers */
 char     nibble_to_hex(uint8_t nibble);
@@ -50,6 +51,8 @@ void uart_tx_isr(void);
 
 /* USART2/modem configuration */
 void modem_config(void);
+void modem_reinit(void);
+bool modem_deinit(void *ctx);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -75,6 +78,8 @@ uint32_t flash_program_start(void *ctx);
 uint32_t flash_erase_start(void *ctx);
 uint8_t  flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val);
 uint32_t flash_unlock_both(void);
+void flash_op_cleanup(void *ctx);
+uint32_t flash_page_program(int *ctx);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
@@ -101,6 +106,8 @@ uint8_t fg_charge_status(void);
 void config_resend_all(void);
 void fg_watchdog_kick(void);
 void fg_cell_balance(uint8_t cell_idx);
+uint32_t fg_read_field_8(void);
+uint32_t fg_read_field_11(void);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -124,6 +131,16 @@ uint8_t  atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src);
 void dma_init(void);
 void dma_channel_reset(uint32_t dma_base);
 uint32_t dma_flash_start(void *ctx);
+
+/* DMA transfer handlers */
+void dma_byte_handler(int *ctx);
+void dma_byte_handler_v2(int *ctx);
+void dma_halfword_handler(int *ctx);
+void dma_halfword_handler_v2(int *ctx);
+uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3);
+
+/* memcpy helpers */
+uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
 
 /* SPI register write (FEDL5236 communication) */
 uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);

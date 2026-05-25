@@ -64,7 +64,6 @@ void modem_reinit(void)
     RCC[0x24 / 4] &= 0xFFFFEFFF;
 
     /* Deinitialize modem */
-    extern void modem_deinit(void *ctx);
     modem_deinit((void *)s_modem_ctx);
 
     /* Reset USART2 in RCC_APB1RSTR */
@@ -77,6 +76,28 @@ void modem_reinit(void)
 }
 
 /*
+ * Deinitialize the USART/modem context.
+ *
+ * Sets the context's status byte to 2, clears bit 6 (0x40) in the base
+ * register, calls the deinit thunk, then zeroes the status and control
+ * fields. Returns true if ctx was null (error), false on success.
+ */
+bool modem_deinit(void *ctx)
+{
+    if (ctx != NULL) {
+        volatile uint32_t *c = (volatile uint32_t *)ctx;
+        *(volatile uint8_t *)((uintptr_t)c + 0x51) = 2;
+        *c &= ~0x40U;
+        extern void modem_deinit_thunk(void *);
+        modem_deinit_thunk(ctx);
+        c[0x15] = 0;
+        *(volatile uint8_t *)((uintptr_t)c + 0x51) = 0;
+        *(volatile uint8_t *)(c + 0x14) = 0;
+    }
+    return ctx == NULL;
+}
+
+/*
  * Bootloader entry sequence.
  *
  * Prints "I am VanMoof AP", turns off charge MOSFET, enters state 6,
@@ -86,6 +107,13 @@ void modem_reinit(void)
  */
 void bootloader_entry(void)
 {
+    extern volatile uint8_t * const s_protection_cfg;
+    extern void uart_printf(char *str);
+    extern void charge_mosfet_off(void);
+    extern void bms_set_state(uint8_t state);
+    extern void memcmp_verify(char *a, uint32_t size, char *b);
+    extern void state_handler_01(void);
+
     s_protection_cfg[5] = 1;
     *s_modem_ctx |= 0x20000;
     uart_printf((char *)0x08007204);
