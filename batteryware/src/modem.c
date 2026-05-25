@@ -225,8 +225,7 @@ void modem_init(void)
 
     nvic_enable_irq_s_dsb(12);
 
-    extern void usart1_dma_setup(void *);  /* FUN_0800e63c */
-    usart1_dma_setup((void *)s_dma_ctx_init);
+    usart1_dma_setup((int *)s_dma_ctx_init);
 
     RCC_INIT[0x34 / 4] &= 0xFFFFFDFF;
 

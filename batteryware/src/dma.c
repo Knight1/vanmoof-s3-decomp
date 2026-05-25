@@ -716,3 +716,48 @@ uint32_t dma_wait_done(int timeout)
 
     return 0;
 }
+
+/*
+ * DMA IRQ copy — copy two 16-word blocks with IRQs disabled.
+ *
+ * Used by atomic_copy_16words. Calls dma_wait_done, sets SR bits
+ * (0x8000 | 0x400 | 8), then copies 16 words from src2→dst1
+ * and 16 words from src4→dst3 within a critical section.
+ * Cleans up SR bits and returns the wait_done result.
+ */
+uint8_t dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *src4)
+{
+    volatile uint32_t * const s_periph = (volatile uint32_t *)0x40020020;
+    uint32_t i;
+    uint8_t result;
+
+    result = (uint8_t)dma_wait_done(0x200024FC);
+    if (result != 0) return result;
+
+    s_periph[1] |= 0x8000;
+    s_periph[1] |= 0x400;
+    s_periph[1] |= 8;
+
+    result = (uint8_t)dma_wait_done(0x200024FC);
+    if (result != 0) return result;
+
+    __disable_irq();
+
+    for (i = 0; i < 16; i++) {
+        dst1[i] = src2[i];
+    }
+
+    for (i = 0; i < 16; i++) {
+        dst3[i] = src4[i];
+    }
+
+    __enable_irq();
+
+    result = (uint8_t)dma_wait_done(0x200024FC);
+
+    s_periph[1] &= ~8U;
+    s_periph[1] &= 0xFFFFBFFF;
+    s_periph[1] &= 0xFFFF7FFF;
+
+    return result;
+}

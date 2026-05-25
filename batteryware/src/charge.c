@@ -53,8 +53,27 @@ void discharge_mosfet_set(bool on)
     } else {
         if ((*s_discharge_cfg & 2) == 2) {
             *s_discharge_cfg &= ~2U;
-            extern void bms_configure(uint8_t cfg);
             bms_configure(*s_discharge_cfg);
         }
     }
+}
+
+/*
+ * Charge MOSFET turn-on — GPIOB pin 2 high.
+ */
+void charge_mosfet_on(void)
+{
+    *(volatile uint32_t *)0x20002C48 = 0;
+    *(volatile uint32_t *)0x20002C4C |= 0x400;
+    gpio_bit_write(0x50000400, 2, 1);
+}
+
+/*
+ * Charge MOSFET turn-off — GPIOB pin 2 low.
+ */
+void charge_mosfet_off(void)
+{
+    *(volatile uint32_t *)0x20002C50 = 0;
+    *(volatile uint32_t *)0x20002C54 &= 0xFFFFFBFF;
+    gpio_bit_write(0x50000400, 2, 0);
 }

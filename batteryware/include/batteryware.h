@@ -99,9 +99,12 @@ void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
 void flash_program_init(void *ctx);
 uint32_t flash_prescaler_setup(int *ctx);
+uint8_t  usart1_dma_setup(int *ctx);
+uint32_t flash_op_start(int *ctx);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
+void fg_clear_status(void);
 
 /* Fault flags — central protection status register at 0x20002C44 */
 extern volatile uint32_t * const g_fault_flags;
@@ -149,6 +152,7 @@ void bms_set_state(uint8_t state);
 /* Main entry point */
 void batteryware_main(void);
 void peripheral_init(bool arg);
+void main_clock_setup(void);
 
 /* State machine handlers */
 void state_handler_01(void);
@@ -178,6 +182,7 @@ void dma_channel_config(int *ctx);
 uint32_t dma_completion_handler(uint32_t *ctx);
 uint32_t dma_wait_done(int timeout);
 uint32_t dma_usart_init(int *ctx);
+uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *src4);
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
@@ -202,11 +207,15 @@ uint32_t tick_get(void);
 uint32_t tick_counter_read(void);
 int32_t  clock_prescaler_val(void);
 uint32_t rcc_reconfigure(uint32_t *param);
+uint32_t tick_val_get(void);
+uint32_t tick_ms_get(void);
+uint32_t tick_timeout_get(void);
 
 /* NVIC interrupt enable */
 void nvic_enable_irq(uint8_t irqn);
 void nvic_enable_irq_dsb(uint8_t irqn);
 void nvic_enable_irq_s(int8_t irqn);
 void nvic_enable_irq_s_dsb(int8_t irqn);
+uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
 
 #endif /* BATTERYWARE_H */

@@ -198,3 +198,27 @@ uint32_t rcc_reconfigure(uint32_t *param)
 
     return 0;
 }
+
+/*
+ * Tick value getter — reads SRAM 0x200047E4.
+ */
+uint32_t tick_val_get(void)
+{
+    return *(volatile uint32_t *)0x200047E4;
+}
+
+/*
+ * Tick ms getter — reads SRAM 0x200047FC.
+ */
+uint32_t tick_ms_get(void)
+{
+    return *(volatile uint32_t *)0x200047FC;
+}
+
+/*
+ * Tick timeout getter — reads SRAM 0x20004814.
+ */
+uint32_t tick_timeout_get(void)
+{
+    return *(volatile uint32_t *)0x20004814;
+}

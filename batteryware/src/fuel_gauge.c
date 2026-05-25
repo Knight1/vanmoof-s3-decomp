@@ -1,5 +1,14 @@
 #include "batteryware.h"
 
+/*
+ * Clear fuel gauge status registers.
+ */
+void fg_clear_status(void)
+{
+    *(volatile uint32_t *)0x20002C88 = 0;
+    *(volatile uint32_t *)0x20002C8C = 0;
+}
+
 /* Fuel gauge status byte in SRAM */
 static volatile uint8_t * const s_fg_status = (volatile uint8_t *)0x20002870;
 

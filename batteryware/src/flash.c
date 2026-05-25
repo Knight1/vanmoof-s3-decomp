@@ -296,6 +296,174 @@ uint32_t flash_page_program(int *ctx)
 }
 
 /*
+ * Flash operation start / USART1 DMA setup.
+ *
+ * Calls flash_wait_ready, flash_erase_start in sequence.
+ * On success: clears and reconfigures peripheral registers
+ * (SR, CR, ICR, etc.) and calls nop_e784 (DMA cleanup).
+ * Returns 0 on success, 1 on error.
+ */
+uint8_t usart1_dma_setup(int *ctx)
+{
+    if (ctx == NULL) return 1;
+
+    ctx[0x15] |= 2;
+    uint8_t result = (uint8_t)flash_wait_ready(ctx);
+
+    if (result == 0) {
+        result = (uint8_t)flash_erase_start(ctx);
+        if (result != 1) {
+            ctx[0x15] = 1;
+        }
+    }
+
+    if (result != 1) {
+        volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+        reg[1] &= 0xFFFF7FFF;
+        reg[0] = 0x800;
+        reg[2] &= 0xFFFFEFFF;
+        reg[3] &= 0xFFFFF7FF;
+        reg[4] &= 0xFFFCFFFF;
+        reg[5] &= 0xFFFFFFF8;
+        reg[8] &= 0xFFFFFEFF;
+        reg[0x2D] &= 0xFFFFFF80;
+        reg[0x2D] &= 0xFFFFFF80;
+
+        extern void nop_e784(void);
+        nop_e784();
+
+        ctx[0x16] = 0;
+        ctx[0x15] = 0;
+    }
+
+    *(volatile uint8_t *)(ctx + 0x14) = 0;
+    return result;
+}
+
+/*
+ * DMA deinit — deinitialise DMA after transfer.
+ *
+ * If BUSY flag (bit 2) is set, returns 2 (still active).
+ * Otherwise sets tx_active=1, calls flash_program_start,
+ * and on success: clears status, configures SR/CR bits,
+ * and sets BUSY flag.
+ * Returns 0 on success, 2 if busy.
+ */
+uint8_t dma_deinit(int *ctx)
+{
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+
+    if ((reg[2] & 4) == 0) {
+        if (((uint8_t)ctx[0x14]) == 1) {
+            return 2;
+        }
+        *(volatile uint8_t *)(ctx + 0x14) = 1;
+
+        uint8_t result = 0;
+        if (ctx[7] != 1) {
+            result = (uint8_t)flash_program_start(ctx);
+        }
+
+        if (result == 0) {
+            ctx[0x15] = (ctx[0x15] & 0xFFFFDFFF) | 0x100;
+            ctx[0x16] = 0;
+            *(volatile uint8_t *)(ctx + 0x14) = 0;
+            reg[0] = 0x1C;
+
+            if (ctx[5] == 8) {
+                reg[1] = (reg[1] & ~4U) | 0x18;
+            } else {
+                reg[1] |= 0x1C;
+            }
+            reg[2] |= 4;
+        }
+    } else {
+        return 2;
+    }
+    return 0;
+}
+
+/*
+ * Flash operation start — configure peripheral for flash op.
+ */
+uint32_t flash_op_start(int *ctx)
+{
+    if (ctx == NULL) return 1;
+
+    if (ctx[0x15] == 0) {
+        ctx[0x16] = 0;
+        *(volatile uint8_t *)(ctx + 0x14) = 0;
+        extern void nop_e774(void);
+        nop_e774();
+    }
+
+    volatile uint32_t *reg = (volatile uint32_t *)*ctx;
+
+    if (((ctx[0x15] & 0x10) == 0x10) || ((reg[2] & 4) != 0)) {
+        ctx[0x15] |= 0x10;
+        *(volatile uint8_t *)(ctx + 0x14) = 0;
+        return 1;
+    }
+
+    ctx[0x15] = (ctx[0x15] & 0xFFFF5FEF) | 2;
+
+    bool ready = ((reg[2] & 3) == 1) && ((reg[0] & 1) == 1);
+
+    if (!ready) {
+        if ((ctx[1] == (int)0xC0000000) || (ctx[1] == 0x40000000) || (ctx[1] == (int)0x80000000)) {
+            reg[4] = (reg[4] & 0x3FFFFFFF) | ctx[1];
+        } else {
+            volatile uint32_t * const s_magic = (volatile uint32_t *)0x200047FC;
+            reg[4] &= 0x3FFFFFFF;
+            *s_magic = (*s_magic & 0xFFFF7FFF) | ctx[1];
+        }
+        reg[3] = (reg[3] & ~0x18U) | ctx[2];
+    }
+
+    volatile uint32_t * const s_magic = (volatile uint32_t *)0x200047FC;
+    *s_magic &= 0xFFFFBFFF;
+    *s_magic |= ctx[0xD] << 25;
+
+    if ((reg[2] & 0x10000000) == 0) {
+        reg[2] |= 0x10000000;
+    }
+
+    reg[3] &= 0xFFFFFBFF;
+
+    uint32_t extra = (ctx[4] == 2) ? 4 : 0;
+    reg[3] = ctx[3] | extra | ((uint32_t)*(uint8_t *)(ctx + 8) << 13) |
+             ((uint32_t)*(uint8_t *)(ctx + 11) << 1) | ctx[12] |
+             ((uint32_t)ctx[6] << 14) | ((uint32_t)ctx[7] << 15) | reg[3];
+
+    if (ctx[9] != 0x1C1) {
+        reg[3] = ctx[9] | ctx[10] | reg[3];
+    }
+
+    if (*(volatile uint8_t *)((uintptr_t)ctx + 0x21) == 1) {
+        if (*(volatile uint8_t *)(ctx + 8) == 0) {
+            reg[3] |= 0x10000;
+        } else {
+            ctx[0x15] |= 0x20;
+            ctx[0x16] |= 1;
+        }
+    }
+
+    if (ctx[0xF] == 1) {
+        reg[4] &= 0xFFFFFE7F;
+        reg[4] = ctx[0x10] | ctx[0x11] | ctx[0x12] | reg[4];
+        reg[4] |= 1;
+    } else if ((reg[4] & 1) == 1) {
+        reg[4] &= ~1U;
+    }
+
+    reg[5] = (reg[5] & 0xFFFFFFF8) | ctx[0xE];
+    ctx[0x16] = 0;
+    ctx[0x15] = (ctx[0x15] & 0xFFFFFFFC) | 1;
+
+    return 0;
+}
+
+/*
  * Flash prescaler setup — configure clock-dependent baud rate register.
  *
  * Merges ctx configuration fields (ctx[2]-ctx[8]) into the base
@@ -312,7 +480,7 @@ uint32_t flash_page_program(int *ctx)
  *   - ctx[7]==0x8000: table at 0x080181A0 (for USART1/2/3)
  *   - otherwise: table at 0x080181C4 (for USART1/2/3)
  * For USART3 base: directly calls fg_read_field_8/11, clock_prescaler_val
- * or uses fixed constants 0xF42400 (16MHz) / 0x003D0900 (~4MHz).
+ * or uses fixed constants 0xF42400 / 0x003D0900.
  * Validates baud rate (BRR) via __aeabi_ldiv0 and range checks,
  * writes result to *ctx+0x0C.
  *
