@@ -55,6 +55,8 @@ void uart_tx_isr(void);
 void modem_config(void);
 void modem_reinit(void);
 bool modem_deinit(void *ctx);
+void modem_send_2bytes(uint8_t b1, uint8_t b2);
+void temp_offset_send(uint8_t raw_temp);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -133,6 +135,7 @@ void bms_set_state(uint8_t state);
 void state_handler_01(void);
 void state_handler_03_init(void);
 void state_handler_17_19(void);
+void state_flags_handler(uint8_t arg);
 
 /* DMA operations */
 uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);
@@ -149,6 +152,8 @@ void dma_byte_handler_v2(int *ctx);
 void dma_halfword_handler(int *ctx);
 void dma_halfword_handler_v2(int *ctx);
 uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3);
+uint32_t dma_completion_handler(uint32_t *ctx);
+uint32_t dma_wait_done(int timeout);
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);

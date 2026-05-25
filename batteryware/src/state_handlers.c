@@ -305,3 +305,57 @@ void state_handler_17_19(void)
         bms_set_state(0x19);
     }
 }
+
+/*
+ * State flags housekeeping handler.
+ *
+ * Processes a flags byte at 0x20002C80:
+ *   - bit 1 set: clears it (handled event)
+ *   - bit 3 set: clears it, writes magic 0xAAAA to register, optionally
+ *     calls coulomb counter (FUN_08013228) with value from 0x200028C0
+ *   - bit 4 set: clears it
+ *   - bit 5 set: clears it, increments three counters, and if the
+ *     event counter at 0x200025A0 exceeds 0x27, triggers a system event
+ *     via veneer_155ec (→ FUN_0800e92d, a subsystem reset/event hook)
+ *
+ * The 'arg' parameter controls whether the coulomb counter is invoked
+ * (only when arg != 0).
+ */
+void state_flags_handler(uint8_t arg)
+{
+    volatile uint32_t * const s_flags      = (volatile uint32_t *)0x20002C80;
+    volatile uint32_t * const s_magic_reg  = (volatile uint32_t *)0x20002C10;
+    volatile uint32_t * const s_charge_in  = (volatile uint32_t *)0x200028C0;
+    volatile uint32_t * const s_timer      = (volatile uint32_t *)0x20002C74;
+    volatile uint32_t * const s_timer2     = (volatile uint32_t *)0x20002AC8;
+    volatile uint16_t * const s_evt_count  = (volatile uint16_t *)0x200025A0;
+
+    if (((*s_flags >> 1) & 1) != 0) {
+        *s_flags &= ~2U;
+    }
+
+    if (((*s_flags >> 3) & 1) != 0) {
+        *s_flags &= ~8U;
+        *s_magic_reg = 0xAAAA;
+        if (arg != 0) {
+            extern void coulomb_counter(uint32_t val);
+            coulomb_counter(*s_charge_in);
+        }
+    }
+
+    if (((*s_flags >> 4) & 1) != 0) {
+        *s_flags &= ~0x10U;
+    }
+
+    if (((*s_flags >> 5) & 1) != 0) {
+        *s_flags &= ~0x20U;
+        *s_timer += 1;
+        *s_timer2 += 1;
+        uint16_t cnt = *s_evt_count + 1;
+        *s_evt_count = cnt;
+        if (cnt > 0x27) {
+            extern void sys_event_hook(void);
+            sys_event_hook();
+        }
+    }
+}

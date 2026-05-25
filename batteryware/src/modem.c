@@ -135,3 +135,51 @@ void bootloader_entry(void)
     *s_modem_ctx &= 0xFFFFFFFD;
     state_handler_01();
 }
+
+/*
+ * Append 2 bytes to the modem response buffer.
+ *
+ * Writes two bytes at the current buffer position, increments the
+ * index by 2, decrements the remaining count by 2, and increments
+ * the outgoing counter.
+ */
+void modem_send_2bytes(uint8_t b1, uint8_t b2)
+{
+    volatile uint32_t * const s_buf_idx   = (volatile uint32_t *)0x200047D0;
+    volatile uint8_t  * const s_buf_base  = (volatile uint8_t  *)0x20004648;
+    volatile uint32_t * const s_buf_rem   = (volatile uint32_t *)0x200047D4;
+    volatile uint32_t * const s_tx_count  = (volatile uint32_t *)0x20004748;
+
+    s_buf_base[*s_buf_idx] = b1;
+    *s_buf_idx += 1;
+    *s_buf_rem -= 1;
+    s_buf_base[*s_buf_idx] = b2;
+    *s_buf_idx += 1;
+    *s_buf_rem -= 1;
+    *s_tx_count += 1;
+}
+
+/*
+ * Temperature offset computation and send.
+ *
+ * Given a raw temperature byte (0-255):
+ *   - If < 40: computes (40 - val) * (-10) → negative offset from 40°C
+ *   - If >= 40: computes (val - 40) * 10 → positive offset from 40°C
+ * Adds base offset 0x0AAB (2731 = 27.31°C in centikelvin, or a calibration
+ * constant) and sends the resulting 16-bit value as two bytes.
+ */
+void temp_offset_send(uint8_t raw_temp)
+{
+    uint16_t val = raw_temp;
+    int16_t offset;
+
+    if (val < 0x28) {
+        offset = (int16_t)((0x28 - val) * (-10));
+    } else {
+        offset = (int16_t)((val - 0x28) * 10);
+    }
+
+    offset += 0x0AAB;
+
+    modem_send_2bytes((uint8_t)(offset >> 8), (uint8_t)offset);
+}

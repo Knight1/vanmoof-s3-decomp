@@ -33,7 +33,7 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 116 decomp-c, 24 named, 118 pending (`FUN_*`).  `discharge_mosfet_set` was already decomp-c in charge.c, now correctly tracked._
+_Total functions: 281. 121 decomp-c, 24 named, 113 pending (`FUN_*`)._
 
 ## Functions
 

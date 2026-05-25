@@ -342,7 +342,7 @@ uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3)
     uint32_t timeout = (*tick_ptr / divisor) * 1000;
 
     if (ctx[1] == 0x104) {
-        extern uint32_t timeout_poll(int *, uint32_t, char, uint32_t, uint32_t);
+        extern uint32_t timeout_poll(uint32_t *, uint32_t, char, uint32_t, uint32_t);
         int result = timeout_poll(ctx, 0x80, 0, param2, param3);
         if (result != 0) {
             ctx[0x15] |= 0x20;
@@ -380,4 +380,80 @@ uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t
     }
 
     return *dst_ptr;
+}
+
+/*
+ * DMA completion handler — finalize DMA transfer.
+ *
+ * Called after a DMA page program completes. Clears the completion
+ * counter, gets the current tick, then checks two completion flags:
+ *   - bit 3 (0x8): calls timeout poll with 0x200000 mask
+ *   - bit 2 (0x4): calls timeout poll with 0x400000 mask
+ * If either fails (returns non-zero), returns 3 (timeout error).
+ * Otherwise sets page counters (0x1E/0x1F to 0x20, 0x18 to 0,
+ * status byte to 0) and returns 0 (success).
+ */
+uint32_t dma_completion_handler(uint32_t *ctx)
+{
+    extern uint32_t tick_get(void);
+    extern uint32_t timeout_poll(uint32_t *, uint32_t, char, uint32_t, uint32_t);
+    uint32_t tick = tick_get();
+    int result;
+
+    ctx[0x20] = 0;
+
+    if (((*ctx & 8) == 8) &&
+        ((result = timeout_poll(ctx, 0x200000, 0, tick, 0x01FFFFFF)) != 0)) {
+        return 3;
+    }
+    if (((*ctx & 4) == 4) &&
+        ((result = timeout_poll(ctx, 0x400000, 0, tick, 0x01FFFFFF)) != 0)) {
+        return 3;
+    }
+
+    ctx[0x1E] = 0x20;
+    ctx[0x1F] = 0x20;
+    ctx[0x18] = 0;
+    *(volatile uint8_t *)(ctx + 0x1D) = 0;
+    return 0;
+}
+
+/*
+ * DMA wait-done — poll DMA channel until transfer completes.
+ *
+ * Counts down from the given timeout value while bit 0 (TCIF)
+ * remains set in the DMA status register at *ctx + 0x18.
+ * If count reaches zero (timeout): returns 3.
+ * Otherwise: clears any TCIF (bit 1), then checks for error flags
+ * (bits 0x100-0x20000) and triggers fault handler on any error.
+ * Returns 0 on clean completion.
+ */
+uint32_t dma_wait_done(int timeout)
+{
+    volatile uint32_t * const s_dma_ch_status = (volatile uint32_t *)0x40020020;
+    int count = timeout;
+
+    while (((s_dma_ch_status[6] & 1) == 1) && (count != 0)) {
+        count--;
+    }
+
+    if (count == 0) {
+        return 3;
+    }
+
+    if ((s_dma_ch_status[6] & 2) == 2) {
+        s_dma_ch_status[6] = 2;  /* clear TCIF */
+    }
+
+    uint32_t status = s_dma_ch_status[6];
+    if (((status & 0x100) == 0x100) || ((status & 0x200) == 0x200) ||
+        ((status & 0x400) == 0x400) || ((status & 0x800) == 0x800) ||
+        ((status & 0x2000) == 0x2000) || ((status & 0x20000) == 0x20000) ||
+        ((status & 0x10000) == 0x10000)) {
+        extern void dma_fault_handler(void);
+        dma_fault_handler();
+        return 1;
+    }
+
+    return 0;
 }

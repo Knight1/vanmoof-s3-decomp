@@ -292,7 +292,7 @@ uint32_t flash_page_program(int *ctx)
     reg[2] &= 0xFFFFFFD5;
     *(volatile uint32_t *)*ctx |= 1;
 
-    extern uint32_t dma_completion_handler(int *);
+    extern uint32_t dma_completion_handler(uint32_t *);
     return dma_completion_handler(ctx);
 }
 
