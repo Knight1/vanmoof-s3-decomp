@@ -87,3 +87,46 @@ void uart_check_parity_error(void)
         usart1[0x14 / 4] = 1;
     }
 }
+
+/*
+ * Check USART1 overrun error flag (bit 0x2000 = ORE).
+ * If set, records error in SRAM flag bit 0 and clears ORE.
+ */
+void uart_check_overrun_error(void)
+{
+    volatile uint32_t *usart1 = (volatile uint32_t *)0x40010400;
+    volatile uint8_t * const s_error_flags = (volatile uint8_t *)0x20002BFC;
+
+    if (usart1[0x14 / 4] & 0x2000) {
+        *s_error_flags |= 1;
+        usart1[0x14 / 4] = 0x2000;
+    }
+}
+
+/*
+ * Print a byte as two uppercase hex characters via uart_putchar.
+ */
+void uart_puthex_byte(uint8_t b)
+{
+    uart_putchar((uint8_t)nibble_to_hex(b >> 4));
+    uart_putchar((uint8_t)nibble_to_hex(b & 0xF));
+}
+
+/*
+ * Write a null-terminated string to the TX ring buffer.
+ * Uses the same ring buffer as uart_putchar.
+ */
+void uart_puts(char *str)
+{
+    if (*s_tx_enabled != 1) {
+        return;
+    }
+    for (char *p = str; *p != '\0'; p++) {
+        s_tx_buffer[*s_tx_wr_idx] = (uint8_t)*p;
+        uint16_t next = *s_tx_wr_idx + 1;
+        *s_tx_wr_idx = next;
+        if (next >= 0x1400) {
+            *s_tx_wr_idx = 0;
+        }
+    }
+}

@@ -27,3 +27,20 @@ void delay_ms(uint32_t ms)
         }
     }
 }
+
+/*
+ * Busy-wait microsecond delay.
+ *
+ * Reads a hardware counter from SRAM, divides by 1,000,000 to get
+ * loop iterations per microsecond, multiplies by requested us, and
+ * spins for that many iterations.
+ */
+void delay_us(uint32_t us)
+{
+    volatile uint32_t * const s_counter = (volatile uint32_t *)0x200000C8;
+    uint32_t cycles = *s_counter / 1000000;
+    uint32_t count = cycles * us;
+
+    for (volatile uint32_t i = count; i != 0; i--) {
+    }
+}

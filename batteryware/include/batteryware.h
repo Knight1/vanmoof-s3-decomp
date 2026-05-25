@@ -13,6 +13,9 @@ bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit);
 /* Busy-wait millisecond delay */
 void delay_ms(uint32_t ms);
 
+/* Busy-wait microsecond delay */
+void delay_us(uint32_t us);
+
 /* LED flash routine — toggles a GPIO pin with fast/slow timing */
 void led_flash(void);
 
@@ -36,6 +39,30 @@ void uart_tx_isr(void);
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
 void uart_check_parity_error(void);
+void uart_check_overrun_error(void);
+void uart_puthex_byte(uint8_t b);
+void uart_puts(char *str);
+
+/* Flash controller operations */
+uint32_t flash_enable_prefetch(void);
+uint32_t flash_unlock_opt(void);
+uint32_t flash_lock_opt(void);
+
+/* Fuel gauge status */
+bool fg_status_flag_get(void);
+
+/* Fault flags — central protection status register at 0x20002C44 */
+extern volatile uint32_t * const g_fault_flags;
+#define FAULT_UVP1  0x01
+#define FAULT_UVP2  0x02
+#define FAULT_OVP1  0x04
+#define FAULT_OVP2  0x08
+
+/* Under/over-voltage protection checks */
+void fg_uvp1_check(void);
+void fg_uvp2_check(void);
+void fg_ovp1_check(void);
+void fg_ovp2_check(void);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);
