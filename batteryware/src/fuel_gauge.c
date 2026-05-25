@@ -453,3 +453,33 @@ void fg_watchdog_kick(void)
         }
     }
 }
+
+/* Cell voltage table and balance threshold */
+static volatile uint16_t * const s_cell_voltage_table = (volatile uint16_t *)0x08013E50;
+static volatile uint16_t * const s_balance_threshold  = (volatile uint16_t *)0x20002000;
+static volatile uint8_t  * const s_balance_idx        = (volatile uint8_t  *)0x20002000;
+
+/*
+ * Cell voltage balancing.
+ *
+ * Averages adjacent cell voltages indexed by 'cell_idx'. If the average
+ * differs from the threshold by less than ±0x31, updates both entries.
+ */
+void fg_cell_balance(uint8_t cell_idx)
+{
+    uint16_t v1  = s_cell_voltage_table[cell_idx];
+    uint16_t v2  = s_cell_voltage_table[cell_idx + 1];
+    uint16_t avg = (v1 + v2) >> 1;
+
+    if (*s_balance_threshold < avg) {
+        if (avg <= *s_balance_threshold + 0x31) {
+            s_cell_voltage_table[cell_idx]     = avg;
+            s_cell_voltage_table[cell_idx + 1] = avg;
+            *s_balance_idx = cell_idx;
+        }
+    } else if (*s_balance_threshold <= avg + 0x31) {
+        s_cell_voltage_table[cell_idx]     = avg;
+        s_cell_voltage_table[cell_idx + 1] = avg;
+        *s_balance_idx = cell_idx;
+    }
+}

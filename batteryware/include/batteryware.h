@@ -12,6 +12,9 @@ uint32_t atoi_hex_offset1(char *str, uint8_t digits);
 /* Modbus CRC-16 */
 uint16_t crc16_calc(uint8_t *data, int16_t len);
 
+/* CRC-8 for flash verification */
+uint8_t  crc8_calc(uint8_t *data, int8_t len);
+
 /* GPIO bit write: atomic set (BSRR) or clear (BRR) */
 void gpio_bit_write(uint32_t gpio_base, uint16_t pin_bit, uint8_t value);
 
@@ -68,6 +71,10 @@ bool peripheral_reset(void);
 bool flash_page_erase(uint32_t timeout_ticks);
 void interrupt_set_priority(uint8_t irqn, uint32_t priority);
 void flash_opt_byte_op(uint8_t op, uint32_t val);
+uint32_t flash_program_start(void *ctx);
+uint32_t flash_erase_start(void *ctx);
+uint8_t  flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val);
+uint32_t flash_unlock_both(void);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
@@ -93,6 +100,7 @@ void fg_alert_monitor(void);
 uint8_t fg_charge_status(void);
 void config_resend_all(void);
 void fg_watchdog_kick(void);
+void fg_cell_balance(uint8_t cell_idx);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -111,6 +119,14 @@ void bms_configure(uint8_t cfg);
 /* DMA operations */
 uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count);
 uint8_t  atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src);
+
+/* DMA initialization */
+void dma_init(void);
+void dma_channel_reset(uint32_t dma_base);
+uint32_t dma_flash_start(void *ctx);
+
+/* SPI register write (FEDL5236 communication) */
+uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);

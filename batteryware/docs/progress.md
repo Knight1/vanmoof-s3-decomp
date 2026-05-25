@@ -28,8 +28,8 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 | --- | --- |
 | pending      | 131 |
 | in-progress  |   0 |
-| named        |  65 |
-| decomp-c     |  82 |
+| named        |  34 |
+| decomp-c     |  99 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
@@ -73,7 +73,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08002194` | — | `FUN_08002194` | pending | |
 | `0x08002ba6` | — | `FUN_08002ba6` | pending | |
 | `0x08002bac` | — | `FUN_08002bac` | pending | |
-| `0x08002bc8` | — | `FUN_08002bc8` | pending | |
+| `0x08002bc8` | 202 | `state_handler_03_init` | named | State 3 init: GPIO off, mask, bms_configure, set_state(3) |
 | `0x08002cb8` | 142 | `discharge_mosfet_set` | named | Discharge MOSFET control with state tracking |
 | `0x08002d50` | 106 | `charge_mosfet_set` | decomp-c | Charge MOSFET on/off via GPIOB pin 9 with idempotent state tracking |
 | `0x08002dc4` | — | `FUN_08002dc4` | pending | |
@@ -92,7 +92,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x080052d8` | 148 | `bms_configure` | decomp-c | FEDL5236 SPI register config (regs 3-9) |
 | `0x0800537c` | — | `FUN_0800537c` | pending | |
 | `0x08005388` | — | `FUN_08005388` | pending | |
-| `0x080054cc` | — | `FUN_080054cc` | pending | |
+| `0x080054cc` | 198 | `state_handler_17_19` | named | State dispatch 0x17/0x18/0x19 (OVP/UVP power-on) |
 | `0x080055a8` | — | `FUN_080055a8` | pending | |
 | `0x08005738` | 72 | `state_handler_16` | decomp-c | State machine handler → bms_set_state(0x16) |
 | `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
@@ -100,9 +100,9 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08005b34` | — | `FUN_08005b34` | pending | |
 | `0x08006328` | — | `FUN_08006328` | pending | |
 | `0x08006336` | 10 | `system_reset` | decomp-c | Wrapper around nvic_system_reset |
-| `0x08006340` | 142 | `flash_verify_header` | named | Firmware image header validation + CRC check |
+| `0x08006340` | 142 | `flash_verify_header` | decomp-c | Firmware image header validation + CRC check |
 | `0x080063e0` | — | `FUN_080063e0` | pending | |
-| `0x08006748` | — | `FUN_08006748` | pending | |
+| `0x08006748` | 186 | `state_handler_01` | named | State 1 entry: gpio off, mosfet on, bms_configure, set_state(1) |
 | `0x08006810` | — | `FUN_08006810` | pending | |
 | `0x08006948` | 74 | `state_handler_07` | decomp-c | State handler → bms_set_state(0x07) [MOSFET on variant] |
 | `0x0800699c` | — | `FUN_0800699c` | pending | |
@@ -117,7 +117,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x080070f8` | 78 | `modem_reinit` | decomp-c | USART/modem reinit + GPIO reset |
 | `0x08007158` | 20 | `system_reset_with_arg` | decomp-c | Wrapper — takes arg, calls system_reset |
 | `0x0800716c` | — | `FUN_0800716c` | pending | |
-| `0x08007178` | — | `FUN_08007178` | pending | |
+| `0x08007178` | 132 | `bootloader_entry` | decomp-c | Bootloader entry: prints AP msg, enters infinite loop |
 | `0x0800721c` | — | `FUN_0800721c` | pending | |
 | `0x08007228` | 26 | `nvic_system_reset_dup` | decomp-c | Duplicate of nvic_system_reset from a different translation unit |
 | `0x0800724c` | 36 | `uart_check_parity_error` | decomp-c | USART1 parity error detection + flag set |
@@ -128,7 +128,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08007cf8` | 64 | `memcpy_byte` | decomp-c | Byte-by-byte memcpy (ldrb/strb) |
 | `0x08007d38` | 62 | `system_init` | named | System startup: GPIO + modem + flash + NVIC |
 | `0x08007d78` | — | `FUN_08007d78` | pending | |
-| `0x08007f50` | 100 | `modem_config` | named | USART2/modem struct init + peripheral enable |
+| `0x08007f50` | 100 | `modem_config` | decomp-c | USART2/modem struct init + peripheral enable |
 | `0x08007fc4` | 80 | `uart_puthex_byte` | decomp-c | Print byte as 2 hex chars via uart_putchar |
 | `0x08008014` | 148 | `uart_puthex_16` | decomp-c | Print uint16 as 4 hex chars |
 | `0x080080a8` | — | `FUN_080080a8` | pending | |
@@ -136,13 +136,13 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08008998` | — | `FUN_08008998` | pending | |
 | `0x08008f28` | — | `FUN_08008f28` | pending | |
 | `0x08008f6c` | 56 | `hex_to_nibble` | decomp-c | ASCII hex char → nibble (reverse of nibble_to_hex) |
-| `0x08008fa4` | — | `FUN_08008fa4` | pending | |
-| `0x08009084` | 64 | `dma_init` | named | DMA channel configuration + reset on fail |
+| `0x08008fa4` | 210 | `peripheral_init` | named | 3-phase USART/DMA/GPIO init with SR on failure |
+| `0x08009084` | 64 | `dma_init` | decomp-c | DMA channel config + reset on fail (via dma_flash_start) |
 | `0x080090dc` | 110 | `flash_dma_start` | named | Flash DMA transfer start with retry + reset on fail |
 | `0x0800915c` | 106 | `dma_compare` | decomp-c | DMA transfer compare (0x40B blocks) |
-| `0x080091d4` | — | `FUN_080091d4` | pending | |
+| `0x080091d4` | 214 | `flash_write_verify` | named | Word-by-word flash write + readback compare |
 | `0x080092b8` | — | `FUN_080092b8` | pending | |
-| `0x080093a6` | 108 | `memcmp_verify` | named | Byte-verify with per-byte spin-wait (I2C/config check) |
+| `0x080093a6` | 108 | `memcmp_verify` | decomp-c | SPI byte-verify with per-byte spin-wait |
 | `0x08009412` | — | `FUN_08009412` | pending | |
 | `0x0800946c` | — | `delay_ms` | decomp-c | Busy-wait SysTick-polling millisecond delay |
 | `0x080094d4` | — | `FUN_080094d4` | pending | |
@@ -187,7 +187,7 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800d75e` | 34 | `cmd_counter_inc` | decomp-c | Extract byte from frame + inc counter + send response |
 | `0x0800d780` | 34 | `cmd_counter_inc_v2` | decomp-c | Counter inc variant 2 |
 | `0x0800d7fc` | 34 | `cmd_counter_inc_v3` | decomp-c | Counter inc variant 3 |
-| `0x0800d81e` | 40 | `cmd_write_and_inc` | named | Write 2B to struct + inc counter + send |
+| `0x0800d81e` | 40 | `cmd_write_and_inc` | decomp-c | Write 2B to struct + inc counter + send response |
 | `0x0800d846` | — | `FUN_0800d846` | pending | |
 | `0x0800d84a` | — | `FUN_0800d84a` | pending | |
 | `0x0800d850` | 70 | `cmd_send_response` | decomp-c | Send 8-byte Modbus response via uart_putchar |
@@ -212,8 +212,8 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800e784` | — | `FUN_0800e784` | pending | |
 | `0x0800e794` | — | `FUN_0800e794` | pending | |
 | `0x0800e878` | — | `FUN_0800e878` | pending | |
-| `0x0800e984` | — | `FUN_0800e984` | pending | |
-| `0x0800ea44` | — | `FUN_0800ea44` | pending | |
+| `0x0800e984` | 188 | `flash_program_start` | decomp-c | Flash program: set bit 1 + 1µs delay + poll 0xB |
+| `0x0800ea44` | 192 | `flash_erase_start` | decomp-c | Flash erase: set bit 2 + CR=3 + poll 0xB |
 | `0x0800eb04` | 140 | `flash_wait_ready` | decomp-c | Flash busy-wait with 0xB tick timeout |
 | `0x0800eb90` | 54 | `delay_us` | decomp-c | Calibrated busy-wait microsecond delay |
 | `0x0800ebd0` | 48 | `nvic_enable_irq` | decomp-c | NVIC ISER bit set |
@@ -231,21 +231,21 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x0800eff8` | — | `FUN_0800eff8` | pending | |
 | `0x0800f11a` | 110 | `memcpy_halfword` | named | Halfword-aligned memcpy with odd-byte tail |
 | `0x0800f188` | — | `FUN_0800f188` | pending | |
-| `0x0800f264` | 110 | `flash_word_write` | named | Single 32-bit word flash write |
-| `0x0800f2dc` | 148 | `flash_unlock_both` | named | Unlock flash + option bytes with PRIMASK |
+| `0x0800f264` | 110 | `flash_word_write` | decomp-c | Single 32-bit flash word write with mutex |
+| `0x0800f2dc` | 148 | `flash_unlock_both` | decomp-c | Flash + option byte unlock with PRIMASK |
 | `0x0800f384` | 36 | `flash_enable_prefetch` | decomp-c | FLASH_ACR prefetch + latency enable |
 | `0x0800f3ac` | — | `FUN_0800f3ac` | pending | |
 | `0x0800f490` | — | `FUN_0800f490` | pending | |
-| `0x0800f5c8` | — | `FUN_0800f5c8` | pending | |
-| `0x0800f694` | 78 | `flash_unlock` | named | Flash unlock sequence with PRIMASK save/restore |
-| `0x0800f6f0` | — | `FUN_0800f6f0` | pending | |
-| `0x0800f7a0` | 58 | `dma_channel_reset` | named | DMA channel reset + register clear |
+| `0x0800f5c8` | 188 | `dma_channel_reset_all` | decomp-c | Reset all DMA channels (0x80B blocks) with mutex |
+| `0x0800f694` | 78 | `flash_unlock` | decomp-c | Flash KEYR unlock with PRIMASK save/restore |
+| `0x0800f6f0` | 166 | `spi_register_write` | decomp-c | SPI byte/halfword/word write with mutex |
+| `0x0800f7a0` | 58 | `dma_channel_reset` | decomp-c | Reset single DMA channel (clear + reset bits) |
 | `0x0800f7e4` | — | `FUN_0800f7e4` | pending | |
 | `0x0800fae0` | — | `FUN_0800fae0` | pending | |
 | `0x0800fca4` | — | `FUN_0800fca4` | pending | |
 | `0x0800fcde` | 58 | `gpio_bit_write` | decomp-c | Atomic GPIO bit set/clear via BSRR/BRR |
 | `0x0800fca4` | 36 | `gpio_bit_read` | decomp-c | GPIO input read via IDR register |
-| `0x0800fd18` | 136 | `dma_flash_start` | named | DMA-based flash write with 0x2A timeout |
+| `0x0800fd18` | 136 | `dma_flash_start` | decomp-c | DMA flash operation: write keys, config, poll 0x2A timeout |
 | `0x0800fdac` | — | `FUN_0800fdac` | pending | |
 | `0x0801053e` | — | `FUN_0801053e` | pending | |
 | `0x08010554` | — | `FUN_08010554` | pending | |
@@ -264,17 +264,17 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08010fa0` | 120 | `dma_byte_handler` | named | DMA byte-by-byte transfer callback |
 | `0x0801101c` | — | `FUN_0801101c` | pending | |
 | `0x08011056` | 144 | `dma_byte_handler_v2` | named | DMA byte handler variant 2 |
-| `0x080110e8` | — | `FUN_080110e8` | pending | |
+| `0x080110e8` | 116 | `dma_halfword_handler_v2` | named | DMA halfword handler variant 2 |
 | `0x08011160` | 46 | `flash_op_cleanup` | named | Flash operation cleanup (clear CR bit) |
 | `0x0801118e` | 142 | `dma_halfword_handler` | named | DMA halfword transfer completion handler |
 | `0x0801121c` | — | `FUN_0801121c` | pending | |
-| `0x08011338` | — | `FUN_08011338` | pending | |
+| `0x08011338` | 132 | `dma_timeout_copy` | named | DMA copy with calibrated timeout |
 | `0x080113c4` | — | `FUN_080113c4` | pending | |
 | `0x080114ec` | 164 | `flash_page_program` | named | Flash page program via DMA |
 | `0x08011594` | — | `FUN_08011594` | pending | |
 | `0x080115a4` | — | `FUN_080115a4` | pending | |
 | `0x08011b20` | — | `FUN_08011b20` | pending | |
-| `0x08011c88` | — | `FUN_08011c88` | pending | |
+| `0x08011c88` | 140 | `dma_completion_handler` | named | DMA transfer completion + status flag check |
 | `0x08011d18` | — | `FUN_08011d18` | pending | |
 | `0x08011e14` | — | `FUN_08011e14` | pending | |
 | `0x08011e68` | — | `FUN_08011e68` | pending | |
@@ -299,21 +299,21 @@ _Total functions: 281. 150 decomp-c/named, 131 pending (`FUN_*`)._
 | `0x08013800` | 90 | `rsoc_set` | named | Relative SoC percentage setter |
 | `0x08013860` | — | `FUN_08013860` | pending | |
 | `0x080138ac` | — | `FUN_080138ac` | pending | |
-| `0x08013d88` | — | `FUN_08013d88` | pending | |
-| `0x08014130` | — | `FUN_08014130` | pending | |
+| `0x08013d88` | 198 | `fg_cell_balance` | decomp-c | Cell voltage balancing: average pairs within ±0x31 range |
+| `0x08014130` | 180 | `crc8_calc` | decomp-c | CRC-8 (poly 0x07, init 0xFF) for flash verification |
 | `0x080141e4` | — | `FUN_080141e4` | pending | |
-| `0x080149b8` | — | `FUN_080149b8` | pending | |
+| `0x080149b8` | 186 | `state_flags_handler` | named | State flag housekeeping + timer event counter |
 | `0x08014a90` | 88 | `shipping_mode_check` | decomp-c | Shipping mode entry: state 0x0F/0x10/0x11 timeout check |
 | `0x08014af8` | — | `FUN_08014af8` | pending | |
 | `0x08014ea4` | 150 | `crc16_calc` | decomp-c | Modbus CRC-16 (polynomial 0xA001) |
 | `0x08014f40` | 128 | `modem_send_2bytes` | named | Append 2 bytes to response buffer + dec counter |
-| `0x08014fd0` | — | `FUN_08014fd0` | pending | |
+| `0x08014fd0` | 168 | `temp_offset_send` | named | Temperature offset calc + send 2 bytes |
 | `0x0801507c` | 36 | `flash_unlock_opt` | decomp-c | Flash option byte unlock (OPTKEYR write) |
 | `0x080150ac` | 36 | `flash_lock_opt` | decomp-c | Flash option byte lock |
 | `0x0801518c` | — | `FUN_0801518c` | pending | |
 | `0x08015294` | 160 | `atomic_copy_16words` | decomp-c | Atomic 64B copy (16 words) with IRQ disable |
 | `0x08015340` | 26 | `get_tick_ms` | decomp-c | Read system tick counter (ms since boot) from SRAM |
-| `0x08015360` | — | `FUN_08015360` | pending | |
+| `0x08015360` | 206 | `dma_wait_done` | named | DMA completion poll with timeout + error flags |
 | `0x08015434` | — | `FUN_08015434` | pending | |
 | `0x0801556c` | — | `FUN_0801556c` | pending | |
 | `0x0801557c` | — | `FUN_0801557c` | pending | |

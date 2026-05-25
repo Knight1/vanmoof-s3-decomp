@@ -75,3 +75,35 @@ void modem_reinit(void)
 
     *s_modem_ctx = 0;
 }
+
+/*
+ * Bootloader entry sequence.
+ *
+ * Prints "I am VanMoof AP", turns off charge MOSFET, enters state 6,
+ * then calls FUN_080050ac (power-on GPIO check). If the check passes
+ * (true), verifies a config block and enters an infinite loop (bootloader
+ * mode). Otherwise falls through to state_handler_01 (normal boot).
+ */
+void bootloader_entry(void)
+{
+    s_protection_cfg[5] = 1;
+    *s_modem_ctx |= 0x20000;
+    uart_printf((char *)0x08007204);
+    uart_tx_flush();
+    charge_mosfet_off();
+    gpio_bit_write(0x50000400, 0x200, 0);
+    bms_configure(0);
+    bms_set_state(6);
+    uart_printf((char *)0x0800720C);
+    uart_tx_flush();
+
+    extern bool power_on_gpio_check(void);  /* FUN_080050ac */
+    if (power_on_gpio_check()) {
+        memcmp_verify((char *)0x08007214, 0x80, (char *)0x08007210);
+        gpio_bit_write(0x50000400, 0x1000, 0);
+        while (1) { }  /* bootloader mode — wait for reset */
+    }
+
+    *s_modem_ctx &= 0xFFFFFFFD;
+    state_handler_01();
+}

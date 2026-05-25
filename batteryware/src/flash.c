@@ -187,3 +187,162 @@ bool peripheral_reset(void)
 
     return flash_timeout_check(3) != 0;
 }
+
+/*
+ * Start flash program operation.
+ *
+ * If status indicates not-ready (bit 1+0 both set in control?), returns 0.
+ * Otherwise sets bit 1 in the control register, delays 1µs, and polls
+ * with 0xB tick timeout. Returns 0 on completion, 1 on timeout.
+ */
+uint32_t flash_program_start(void *ctx)
+{
+    volatile uint32_t *c = (volatile uint32_t *)ctx;
+    volatile uint32_t *reg = (volatile uint32_t *)*c;
+    extern uint32_t tick_get(void);  /* FUN_0800e304 */
+
+    /* Check if ready: bit 1 set in control and bit 0 set in base? */
+    if (((reg[8 / 4] & 3) == 1) && ((reg[0] & 1) == 1)) {
+        return 0;  /* already done */
+    }
+
+    if ((reg[8 / 4] & 0xFFFFFFFF) == 0) {
+        reg[8 / 4] |= 1;  /* start program */
+        delay_us(1);
+
+        uint32_t start = tick_get();
+        do {
+            if ((reg[0] & 1) == 1) {
+                return 0;
+            }
+        } while ((tick_get() - start) < 0xB);
+
+        /* Timeout */
+        c[0x15] |= 0x10;
+        c[0x16] |= 1;
+        return 1;
+    }
+
+    /* Error state */
+    c[0x15] |= 0x10;
+    c[0x16] |= 1;
+    return 1;
+}
+
+/*
+ * Start flash erase operation.
+ *
+ * If not ready, sets bit 2 in control, writes CR=3, polls with
+ * 0xB timeout. Additional error check: if bit 0+2 set but bit 0
+ * of base is clear, still treats as error. Returns 0 on success, 1 on failure.
+ */
+uint32_t flash_erase_start(void *ctx)
+{
+    volatile uint32_t *c = (volatile uint32_t *)ctx;
+    volatile uint32_t *reg = (volatile uint32_t *)*c;
+    extern uint32_t tick_get(void);  /* FUN_0800e304 */
+
+    if (((reg[8 / 4] & 3) == 1) && ((reg[0] & 1) == 1)) {
+        /* Check additional error: bit 0+2 must both be set */
+        if ((reg[8 / 4] & 5) == 1) {
+            reg[8 / 4] |= 2;
+            reg[0] = 3;  /* write CR */
+
+            uint32_t start = tick_get();
+            do {
+                if ((reg[8 / 4] & 1) != 1) {
+                    return 0;
+                }
+            } while ((tick_get() - start) < 0xB);
+
+            /* Timeout */
+            c[0x15] |= 0x10;
+            c[0x16] |= 1;
+            return 1;
+        }
+
+        /* Error: bits set wrong */
+        c[0x15] |= 0x10;
+        c[0x16] |= 1;
+        return 1;
+    }
+
+    return 0;
+}
+
+/*
+ * Write a single 32-bit word to flash memory.
+ *
+ * Mutex-guarded: if the flash mutex at 0x200047E0 is locked, returns 2.
+ * Otherwise locks the mutex, checks the bus via dma_lock, writes the word,
+ * unlocks the mutex, and returns the status.
+ */
+uint8_t flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val)
+{
+    volatile uint8_t  * const s_flash_mutex  = (volatile uint8_t *)0x200047E0;
+    volatile uint32_t * const s_flash_addr   = (volatile uint32_t *)0x200047E4;
+    volatile uint32_t * const s_flash_busy   = (volatile uint32_t *)0x20002000;
+    extern uint8_t dma_lock(void *ctx);  /* FUN_0800f3ac */
+
+    if (s_flash_mutex[0x10] == 1) {
+        return 2;  /* already locked */
+    }
+
+    s_flash_mutex[0x10] = 1;
+    uint8_t ret = dma_lock((void *)s_flash_busy);
+
+    if (ret == 0) {
+        s_flash_addr[0x14 / 4] = 0;
+        *dst = val;
+        ret = dma_lock((void *)s_flash_busy);
+    }
+
+    s_flash_mutex[0x10] = 0;
+    return ret;
+}
+
+/*
+ * Unlock both flash program and option byte access.
+ *
+ * If FLASH_SR bit 0 is set: saves PRIMASK, disables IRQs, writes KEY1+KEY2
+ * to FLASH_KEYR, restores PRIMASK, checks success.
+ * If FLASH_SR bit 1 is set: same for OPTKEYR.
+ * Returns 1 if unlock fails, 0 on success.
+ */
+uint32_t flash_unlock_both(void)
+{
+    /* Check if already unlocked */
+    if ((FLASH[4 / 4] & 1) == 1) {
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+
+        FLASH[0x0C / 4] = 0x89ABCDEF;  /* KEY1 */
+        FLASH[0x0C / 4] = 0x02030405;  /* KEY2 */
+
+        if (__get_PRIMASK() == 0) {
+            __set_PRIMASK(primask);
+        }
+
+        if ((FLASH[4 / 4] & 1) == 1) {
+            return 1;  /* unlock failed */
+        }
+    }
+
+    if ((FLASH[4 / 4] & 2) == 2) {
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+
+        FLASH[0x10 / 4] = 0x89ABCDEF;  /* OPTKEY1 */
+        FLASH[0x10 / 4] = 0x02030405;  /* OPTKEY2 */
+
+        if (__get_PRIMASK() == 0) {
+            __set_PRIMASK(primask);
+        }
+
+        if ((FLASH[4 / 4] & 2) == 2) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
