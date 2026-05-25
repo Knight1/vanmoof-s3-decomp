@@ -9,12 +9,12 @@ TI and extract the needed files.
 ```bash
 # 1. Download the SDK from TI.com (free account required):
 #    https://www.ti.com/tool/download/SIMPLELINK-CC13X2-26X2-SDK/3.40.00.02
-#    Choose the "Windows Zip" or "Linux Installer" variant.
+#    Choose the Linux .run installer or Windows .zip.
 
-# 2. Extract only the files bleware needs:
-./vendor/fetch_sdk.sh ~/Downloads/simplelink_cc13x2_26x2_sdk_3_40_00_02.zip
+# 2. Extract the SDK into vendor/:
+./vendor/fetch_sdk.sh ~/Downloads/simplelink_cc13x2_26x2_sdk_3_40_00_02.run
 
-# 3. Build:
+# 3. Build with SDK headers:
 make TI_SDK=vendor/ti-sdk-3.40
 ```
 
@@ -27,60 +27,49 @@ make
 
 ## What the SDK provides
 
-| Component | Path in SDK | What bleware uses |
-|-----------|-------------|-------------------|
-| ROM symbol table | `source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.h` | Maps ROM addresses → BLE stack function names |
-| ICall | `source/ti/blestack/icall/` | Inter-task message passing (BLE stack ↔ app) |
-| DriverLib | `source/ti/devices/cc13x2_cc26x2/driverlib/` | Peripheral register definitions (GPIO, SPI, UART, …) |
-| TI-RTOS kernel | `kernel/tirtos/packages/ti/sysbios/` | Semaphore, Queue, Event, Task, Hwi, Clock, HeapMem |
-| BLE host | `source/ti/blestack/` | GAP, GATT, L2CAP, HCI host stack |
-| RF driver | `source/ti/drivers/rf/` | Radio configuration |
-| PIN driver | `source/ti/drivers/pin/` | GPIO pin muxing |
-| SPI driver | `source/ti/drivers/spi/` | SPI bus for external flash |
-| Crypto driver | `source/ti/drivers/crypto/` | AES-128 ECB/CBC hardware accelerator |
-| Power driver | `source/ti/drivers/power/` | Power/clock management |
-| Startup | `source/ti/devices/cc13x2_cc26x2/startup_files/` | GCC startup (vector table, cinit) |
+This project compiles only the **VanMoof-custom application code** (47 `.c`
+files in `src/`). The TI SimpleLink SDK provides the **headers** that our
+code compiles against:
 
-## What we DON'T ship (and why)
+| SDK path | Provided by |
+|----------|-------------|
+| `source/ti/ble5stack/rom/rom_jt.h` | ROM function address → name mapping |
+| `source/ti/ble5stack/inc/` | BLE stack type definitions |
+| `source/ti/ble5stack/icall/inc/` | ICall inter-task messaging API |
+| `source/ti/devices/cc13x2_cc26x2/inc/` | Peripheral register addresses |
+| `source/ti/devices/cc13x2_cc26x2/driverlib/` | DriverLib function prototypes |
+| `source/ti/drivers/` | SPI, GPIO, PIN, Crypto driver headers |
+| `kernel/tirtos/packages/` | TI-RTOS kernel type definitions |
 
-- **No TI `.c` or `.h` files** — these are TI's copyrighted code. You get them
-  from TI directly.
-- **No precompiled ROM symbols** — the ROM jump table addresses are factual
-  (the ROM is fixed silicon, unchanging), but the *names* of those functions
-  come from the SDK header. Our `hal_stubs.S` only has the addresses.
-- **No linker command files (.cmd)** — we use our own `linker_cc2642r1.ld`.
+The SDK also contains TI's source code (BLE host stack, TI-RTOS kernel,
+drivers) but these are **not compiled** by this Makefile — they require
+TI's XDCtools configuration system and Code Composer Studio project format.
+All runtime functions called by our code reside in the CC2642R1F **mask ROM**
+and are accessed through the ROM thunks in `src/hal_stubs.S`.
 
-## Legal basis
+## Build modes
 
-Reverse engineering for interoperability is permitted under:
+| Command | Description |
+|---------|-------------|
+| `make` | Build with weak stubs — compiles VanMoof code, all TI functions are no-ops |
+| `make TI_SDK=vendor/ti-sdk-3.40` | Build with SDK headers — VanMoof code compiles against real TI types |
+| `make compare OEM_IMAGE=path/to/oem.bin` | Byte-level diff against OEM firmware |
 
-- **EU Software Directive 2009/24/EC Art. 6** — "authorized to observe, study
-  or test the functioning of the program in order to determine the ideas and
-  principles which underlie any element of the program"
-- **US DMCA §1201(f)** — reverse engineering for interoperability
-
-The ROM addresses, function prototypes, and struct layouts in our source code
-are **facts about the system** discovered through reverse engineering, not
-copyrighted expression. The actual TI implementation code remains in the SDK
-you download separately.
-
-## Without the SDK
-
-If you build without the SDK (`make` with no `TI_SDK` set), the build uses the
-**weak stub fallbacks** in `hal_stubs.S` and `hal_stubs.c`. These are minimal
-no-op implementations that let the VanMoof-custom code compile and link, but
-the resulting binary will not be functional — TI-RTOS calls return safe defaults,
-SPI/crypto operations are no-ops, and the BLE stack is absent.
-
-This is useful for:
-- Checking that VanMoof-custom code compiles without warnings
-- Comparing decompiled functions against the OEM binary (the VanMoof parts
-  should be byte-equivalent regardless of the SDK layer underneath)
-- CI / static analysis
+The weak-stub build produces a 1 KB binary (OAD header + VanMoof code only).
+A functional 180 KB firmware image requires building the full TI BLE stack
+in Code Composer Studio with the SimpleLink SDK 3.40 project. The OAD header
+(144 bytes at flash 0x00-0x8F) is byte-equivalent to the OEM binary.
 
 ## SDK version pinning
 
-bleware was compiled against **SDK 3.40.00.02** (shipped April 2020, matching
-the bleware 1.4.01 build date). Later SDK versions (4.x, 5.x, 6.x) changed
-ROM jump table layouts and driver APIs. If you use a different version, expect
-linker errors.
+bleware 1.4.01 was compiled against **SDK 3.40.00.02** (April 2020).
+Later SDK versions (4.x, 5.x, 6.x) changed ROM jump table layouts and
+driver APIs. The build will refuse to proceed if the wrong SDK is detected.
+
+## Legal basis
+
+Reverse engineering for interoperability is permitted under EU Software
+Directive 2009/24/EC Art. 6 and US DMCA §1201(f). The ROM addresses,
+function prototypes, and struct layouts in our source code are **facts
+about the system** discovered through reverse engineering, not copyrighted
+expression. No TI source code is distributed in this repository.

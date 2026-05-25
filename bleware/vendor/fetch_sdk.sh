@@ -1,17 +1,16 @@
 #!/bin/bash
-# fetch_sdk.sh — extract needed TI SimpleLink SDK files from a user-provided
-# SDK installer or zip. Run this once after downloading the SDK from TI.com.
+# fetch_sdk.sh — extract the TI SimpleLink SDK into vendor/ti-sdk-3.40/.
 #
 # Usage:
-#   ./vendor/fetch_sdk.sh <path-to-sdk-installer-or-zip>
+#   ./vendor/fetch_sdk.sh <path-to-sdk-installer>
 #
-# The SDK installer is a Linux .run file or a Windows .exe; the zip variant
-# is simpler. Either way, this extracts only the files bleware actually
-# needs, keeping the vendor footprint small.
+# Supports:
+#   .run  — Linux self-extracting installer (recommended)
+#   .zip  — Windows/Mac zip archive
 #
-# Required SDK version: SimpleLink CC13x2/CC26x2 SDK 3.40.00.02
-# Download from: https://www.ti.com/tool/download/SIMPLELINK-CC13X2-26X2-SDK/3.40.00.02
-# (requires TI.com account, free registration)
+# Required: SimpleLink CC13x2/CC26x2 SDK 3.40.00.02
+# Download: https://www.ti.com/tool/download/SIMPLELINK-CC13X2-26X2-SDK/3.40.00.02
+# (free TI.com account required)
 
 set -euo pipefail
 
@@ -20,7 +19,7 @@ VENDOR_DIR="$SCRIPT_DIR"
 SDK_DIR="$VENDOR_DIR/ti-sdk-3.40"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <path-to-sdk-installer-or-zip>"
+    echo "Usage: $0 <path-to-sdk-installer>"
     echo ""
     echo "Download the SDK from:"
     echo "  https://www.ti.com/tool/download/SIMPLELINK-CC13X2-26X2-SDK/3.40.00.02"
@@ -34,95 +33,51 @@ if [ ! -f "$SDK_ARCHIVE" ]; then
     exit 1
 fi
 
-echo "=== Extracting TI SimpleLink SDK 3.40 files ==="
+echo "=== Extracting TI SimpleLink SDK 3.40 ==="
 echo "Source: $SDK_ARCHIVE"
 echo "Target: $SDK_DIR"
 echo ""
 
-# Clean any previous extraction
 rm -rf "$SDK_DIR"
 mkdir -p "$SDK_DIR"
 
-# Determine archive type and extract
 case "$SDK_ARCHIVE" in
-    *.zip)
-        echo "Detected ZIP archive, extracting needed paths..."
-        # List of paths bleware actually needs (minimal set)
-        NEEDED_PATHS=(
-            "source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.h"
-            "source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.c"
-            "source/ti/blestack/inc/*.h"
-            "source/ti/blestack/icall/inc/*.h"
-            "source/ti/blestack/icall/src/icall.c"
-            "source/ti/blestack/icall/src/icall_lite.c"
-            "source/ti/blestack/hal/src/common/hal_assert.c"
-            "source/ti/blestack/npi/src/npi_tl_uart.c"
-            "source/ti/drivers/rf/RF.c"
-            "source/ti/drivers/pin/PINCC26XX.c"
-            "source/ti/drivers/power/PowerCC26XX.c"
-            "source/ti/drivers/spi/SPICC26XXDMA.c"
-            "source/ti/drivers/crypto/CryptoCC26XX.c"
-            "source/ti/drivers/*.h"
-            "source/ti/drivers/pin/*.h"
-            "source/ti/drivers/power/*.h"
-            "source/ti/drivers/spi/*.h"
-            "source/ti/drivers/crypto/*.h"
-            "source/ti/devices/cc13x2_cc26x2/startup_files/startup_cc13x2_cc26x2_gcc.c"
-            "source/ti/devices/cc13x2_cc26x2/inc/*.h"
-            "source/ti/devices/cc13x2_cc26x2/driverlib/*.c"
-            "source/ti/devices/cc13x2_cc26x2/driverlib/*.h"
-            "kernel/tirtos/packages/ti/sysbios/rom/cortexm/cc13xx/package/CC13X2_CC26X2.h"
-            "kernel/tirtos/packages/ti/sysbios/family/arm/m3/Hwi.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Semaphore.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Queue.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Event.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Task.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Clock.c"
-            "kernel/tirtos/packages/ti/sysbios/knl/Swi.c"
-            "kernel/tirtos/packages/ti/sysbios/heaps/HeapMem.c"
-            "kernel/tirtos/packages/ti/sysbios/hal/Hwi.c"
-        )
-
-        # Build the unzip include list
-        INCLUDE_ARGS=()
-        for path in "${NEEDED_PATHS[@]}"; do
-            INCLUDE_ARGS+=("$path")
-        done
-
-        unzip -o "$SDK_ARCHIVE" "${INCLUDE_ARGS[@]}" -d "$SDK_DIR" 2>&1 | tail -5
-        ;;
-
     *.run)
-        echo "Detected .run installer. This requires executing the installer"
-        echo "in a temporary directory. If you prefer not to run it, download"
-        echo "the .zip variant instead from the same TI.com page."
-        echo ""
-        echo "Attempting extraction with --noexec --target..."
+        echo "Detected .run installer."
         chmod +x "$SDK_ARCHIVE"
         TEMP_INSTALL="$VENDOR_DIR/.tmp_sdk_install"
         rm -rf "$TEMP_INSTALL"
         mkdir -p "$TEMP_INSTALL"
-        "$SDK_ARCHIVE" --noexec --target "$TEMP_INSTALL" 2>&1 || {
-            echo "NOTE: .run extraction failed. Try the .zip download instead."
+
+        "$SDK_ARCHIVE" --mode unattended --prefix "$TEMP_INSTALL" 2>&1 | tail -5
+
+        # The installer creates a subdirectory with the SDK version name
+        SDK_CONTENT=$(find "$TEMP_INSTALL" -maxdepth 2 -name "source" -type d | head -1)
+        if [ -z "$SDK_CONTENT" ]; then
+            echo "ERROR: SDK extraction failed — no 'source/' directory found."
+            echo "Try the .zip download instead."
             rm -rf "$TEMP_INSTALL"
             exit 1
-        }
-        # The .run extracts into a subdirectory; move the source/ tree
-        SDK_CONTENT=$(find "$TEMP_INSTALL" -name "source" -type d | head -1)
-        if [ -d "$SDK_CONTENT" ]; then
-            cp -r "$SDK_CONTENT/.."/* "$SDK_DIR/"
         fi
+        SDK_ROOT="$(dirname "$SDK_CONTENT")"
+        cp -r "$SDK_ROOT/source" "$SDK_DIR/"
+        cp -r "$SDK_ROOT/kernel" "$SDK_DIR/"
         rm -rf "$TEMP_INSTALL"
         ;;
 
+    *.zip)
+        echo "Detected ZIP archive."
+        unzip -o "$SDK_ARCHIVE" "source/**" "kernel/**" -d "$SDK_DIR" 2>&1 | tail -5
+        ;;
+
     *.exe)
-        echo "ERROR: Windows .exe installer not supported on this platform."
-        echo "Download the .zip variant from the same TI.com page instead."
+        echo "ERROR: Windows .exe installer not supported."
+        echo "Download the .zip or .run variant instead."
         exit 1
         ;;
 
     *)
-        echo "ERROR: Unknown archive format. Expected .zip or .run"
+        echo "ERROR: Unknown archive format. Expected .run or .zip"
         exit 1
         ;;
 esac
@@ -130,25 +85,24 @@ esac
 echo ""
 echo "=== Verifying extraction ==="
 
-# Check for the critical ROM jump table header (the one file everything depends on)
-ROM_JT="$SDK_DIR/source/ti/blestack/rom/r2/agama_r1/ble_rom_jt.h"
+ROM_JT="$SDK_DIR/source/ti/ble5stack/rom/rom_jt.h"
 if [ -f "$ROM_JT" ]; then
-    echo "  OK  ble_rom_jt.h (ROM symbol table)"
+    echo "  OK  rom_jt.h (ROM symbol table)"
 else
-    echo "  MISSING  ble_rom_jt.h — SDK extraction may have failed"
-    echo "  Expected at: $ROM_JT"
+    echo "  MISSING  rom_jt.h — SDK version may be wrong"
+    echo "  Expected: $ROM_JT"
 fi
 
-DRIVERLIB=$(find "$SDK_DIR" -name "driverlib" -type d 2>/dev/null | head -1)
-if [ -n "$DRIVERLIB" ]; then
-    echo "  OK  driverlib/ (peripheral register defs)"
+if [ -d "$SDK_DIR/kernel/tirtos/packages" ]; then
+    echo "  OK  TI-RTOS kernel headers"
 else
-    echo "  MISSING  driverlib/ — SDK extraction may be incomplete"
+    echo "  MISSING  kernel/ directory"
 fi
 
 echo ""
 echo "=== Done ==="
-echo "SDK files extracted to: $SDK_DIR"
+echo "SDK extracted to: $SDK_DIR"
 echo ""
-echo "Now run 'make TI_SDK=$SDK_DIR' to build with the SDK."
-echo "Or set TI_SDK in your environment: export TI_SDK=$SDK_DIR"
+echo "  make TI_SDK=$SDK_DIR          — build with SDK headers"
+echo "  make                          — build with weak stubs (no SDK needed)"
+echo "  make compare OEM_IMAGE=...     — byte-level diff against OEM binary"
