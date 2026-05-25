@@ -22,6 +22,9 @@ void gpio_bit_write(uint32_t gpio_base, uint16_t pin_bit, uint8_t value);
 /* GPIO input read: returns true if pin is high */
 bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit);
 
+/* GPIO pin reset — reset multiple pins to input mode */
+void gpio_pin_reset(uint32_t *gpio_base, uint32_t pin_mask);
+
 /* Busy-wait millisecond delay */
 void delay_ms(uint32_t ms);
 
@@ -124,6 +127,7 @@ void fg_read_loop(void *ctx);
 /* Shipping mode */
 void shipping_mode_check(void);
 void rsoc_lookup(void);
+void rsoc_set(uint8_t percent);
 
 /* Modbus command response helpers */
 void cmd_counter_inc(uint16_t frame_word);
@@ -135,6 +139,9 @@ void cmd_send_8byte(void);
 /* BMS configuration */
 void bms_configure(uint8_t cfg);
 void bms_set_state(uint8_t state);
+
+/* Main entry point */
+void batteryware_main(void);
 
 /* State machine handlers */
 void state_handler_01(void);
@@ -173,6 +180,7 @@ uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);
 uint32_t get_tick_ms(uint32_t *out);
 uint32_t tick_get(void);
 uint32_t tick_counter_read(void);
+int32_t  clock_prescaler_val(void);
 
 /* NVIC interrupt enable */
 void nvic_enable_irq(uint8_t irqn);

@@ -15,9 +15,6 @@ static volatile uint32_t * const s_modem_timeout = (volatile uint32_t *)0x200047
 /* Modem context struct */
 static volatile uint32_t * const s_modem_ctx     = (volatile uint32_t *)0x20002BA4;
 
-/* GPIO pin reset helper — declared externally (FUN_0800fae0) */
-extern void gpio_pin_reset(uint32_t gpio_base, uint32_t pin_mask);
-
 /*
  * Configure USART2/modem for communication.
  *
@@ -233,7 +230,6 @@ void modem_init(void)
 
     RCC_INIT[0x34 / 4] &= 0xFFFFFDFF;
 
-    extern void gpio_pin_reset(uint32_t gpio_base, uint32_t pin_mask);
     gpio_pin_reset(0x50000000, 0xE0);
 
     *s_dma_ctx_init = 0;

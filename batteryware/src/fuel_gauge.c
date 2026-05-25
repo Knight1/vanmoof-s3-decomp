@@ -274,6 +274,25 @@ static volatile uint32_t * const s_rsoc_register  = (volatile uint32_t *)0x20002
 static volatile uint32_t * const s_capacity       = (volatile uint32_t *)0x200029A8;
 
 /*
+ * Relative State-of-Charge setter.
+ *
+ * If percent < 101 (valid range): stores it at s_capacity[0x36],
+ * zeroes the RSOC register, then adds the full capacity
+ * (s_capacity[0x28]) and multiplies by percent * 0x90.
+ * Same formula as rsoc_lookup but driven by an external percent value.
+ */
+void rsoc_set(uint8_t percent)
+{
+    if (percent < 0x65) {
+        *(volatile uint8_t *)(s_capacity + 0x36 / 4) = percent;
+        s_capacity[0x24 / 4] = 0;
+        s_capacity[0x24 / 4] += s_capacity[0x28 / 4];
+        s_capacity[0x24 / 4] *= (uint32_t)percent;
+        s_capacity[0x24 / 4] *= 0x90;
+    }
+}
+
+/*
  * Saturating capacity decrement.
  *
  * Decrements the capacity counter at 0x200029A8+0x24 by 'amount'.
