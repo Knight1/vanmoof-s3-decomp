@@ -26,20 +26,20 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      | 272 |
+| pending      | 251 |
 | in-progress  |   0 |
 | named        |   9 |
-| decomp-c     |   0 |
+| decomp-c     |  21 |
 | byte-eq      |   0 |
 | deferred     |   0 |
 
-_Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
+_Total functions: 281. 30 decomp-c/named, 251 pending (`FUN_*`)._
 
 ## Functions
 
 | Addr | Size | Name | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `0x08000130` | — | `__aeabi_uidivmod` | named | ARM runtime unsigned division + modulo (binary long division) |
+| `0x08000130` | — | `__aeabi_uidivmod` | decomp-c | ARM runtime unsigned division + modulo (binary long division) |
 | `0x0800023c` | — | `FUN_0800023c` | pending | Division wrapper with zero-check (→ `__aeabi_uidiv`) |
 | `0x08000244` | — | `FUN_08000244` | pending | Null subroutine (trap redirect) |
 | `0x08000248` | — | `FUN_08000248` | pending | 64-bit div-by-zero handler (`__aeabi_ldiv0`) |
@@ -49,7 +49,7 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x08000488` | — | `FUN_08000488` | pending | |
 | `0x08000658` | — | `FUN_08000658` | pending | |
 | `0x0800080c` | — | `FUN_0800080c` | pending | |
-| `0x08000850` | — | `FUN_08000850` | pending | |
+| `0x08000850` | 34 | `dma_stop` | named | Disable DMA + call stop |
 | `0x08000880` | — | `FUN_08000880` | pending | |
 | `0x08001060` | — | `FUN_08001060` | pending | |
 | `0x080010b4` | — | `FUN_080010b4` | pending | |
@@ -75,9 +75,9 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x08002bac` | — | `FUN_08002bac` | pending | |
 | `0x08002bc8` | — | `FUN_08002bc8` | pending | |
 | `0x08002cb8` | — | `FUN_08002cb8` | pending | |
-| `0x08002d50` | — | `FUN_08002d50` | pending | |
+| `0x08002d50` | 106 | `charge_mosfet_set` | decomp-c | Charge MOSFET on/off via GPIOB pin 9 with idempotent state tracking |
 | `0x08002dc4` | — | `FUN_08002dc4` | pending | |
-| `0x08003188` | — | `FUN_08003188` | pending | |
+| `0x08003188` | 60 | `ymodem_send_byte` | decomp-c | Send YMODEM response byte + reset protocol state |
 | `0x080031d8` | — | `FUN_080031d8` | pending | |
 | `0x0800325c` | — | `FUN_0800325c` | pending | |
 | `0x080039c2` | — | `FUN_080039c2` | pending | |
@@ -88,18 +88,18 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x08004a18` | — | `FUN_08004a18` | pending | |
 | `0x08004d04` | — | `FUN_08004d04` | pending | |
 | `0x080050ac` | — | `FUN_080050ac` | pending | |
-| `0x0800527c` | — | `led_flash` | named | LED GPIO toggle with configurable fast/slow timing |
+| `0x0800527c` | — | `led_flash` | decomp-c | LED GPIO toggle with configurable fast/slow timing |
 | `0x080052d8` | — | `FUN_080052d8` | pending | |
 | `0x0800537c` | — | `FUN_0800537c` | pending | |
 | `0x08005388` | — | `FUN_08005388` | pending | |
 | `0x080054cc` | — | `FUN_080054cc` | pending | |
 | `0x080055a8` | — | `FUN_080055a8` | pending | |
 | `0x08005738` | — | `FUN_08005738` | pending | |
-| `0x0800578c` | — | `FUN_0800578c` | pending | |
+| `0x0800578c` | 26 | `nvic_system_reset` | decomp-c | CMSIS __NVIC_SystemReset — SCB AIRCR system reset |
 | `0x080057b0` | — | `FUN_080057b0` | pending | |
 | `0x08005b34` | — | `FUN_08005b34` | pending | |
 | `0x08006328` | — | `FUN_08006328` | pending | |
-| `0x08006336` | — | `FUN_08006336` | pending | |
+| `0x08006336` | 10 | `system_reset` | decomp-c | Wrapper around nvic_system_reset |
 | `0x08006340` | — | `FUN_08006340` | pending | |
 | `0x080063e0` | — | `FUN_080063e0` | pending | |
 | `0x08006748` | — | `FUN_08006748` | pending | |
@@ -115,12 +115,12 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x08006f68` | — | `FUN_08006f68` | pending | |
 | `0x08006fbc` | — | `FUN_08006fbc` | pending | |
 | `0x080070f8` | — | `FUN_080070f8` | pending | |
-| `0x08007158` | — | `FUN_08007158` | pending | |
+| `0x08007158` | 20 | `system_reset_with_arg` | decomp-c | Wrapper — takes arg, calls system_reset |
 | `0x0800716c` | — | `FUN_0800716c` | pending | |
 | `0x08007178` | — | `FUN_08007178` | pending | |
 | `0x0800721c` | — | `FUN_0800721c` | pending | |
-| `0x08007228` | — | `FUN_08007228` | pending | |
-| `0x0800724c` | — | `FUN_0800724c` | pending | |
+| `0x08007228` | 26 | `nvic_system_reset_dup` | decomp-c | Duplicate of nvic_system_reset from a different translation unit |
+| `0x0800724c` | 36 | `uart_check_parity_error` | decomp-c | USART1 parity error detection + flag set |
 | `0x08007278` | — | `FUN_08007278` | pending | |
 | `0x080072a8` | — | `FUN_080072a8` | pending | |
 | `0x08007368` | — | `FUN_08007368` | pending | |
@@ -135,7 +135,7 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x080081a8` | — | `FUN_080081a8` | pending | |
 | `0x08008998` | — | `FUN_08008998` | pending | |
 | `0x08008f28` | — | `FUN_08008f28` | pending | |
-| `0x08008f6c` | — | `FUN_08008f6c` | pending | |
+| `0x08008f6c` | 56 | `hex_to_nibble` | decomp-c | ASCII hex char → nibble (reverse of nibble_to_hex) |
 | `0x08008fa4` | — | `FUN_08008fa4` | pending | |
 | `0x08009084` | — | `FUN_08009084` | pending | |
 | `0x080090dc` | — | `FUN_080090dc` | pending | |
@@ -144,7 +144,7 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x080092b8` | — | `FUN_080092b8` | pending | |
 | `0x080093a6` | — | `FUN_080093a6` | pending | |
 | `0x08009412` | — | `FUN_08009412` | pending | |
-| `0x0800946c` | — | `delay_ms` | named | Busy-wait SysTick-polling millisecond delay |
+| `0x0800946c` | — | `delay_ms` | decomp-c | Busy-wait SysTick-polling millisecond delay |
 | `0x080094d4` | — | `FUN_080094d4` | pending | |
 | `0x080094ec` | — | `FUN_080094ec` | pending | |
 | `0x08009520` | — | `FUN_08009520` | pending | |
@@ -174,19 +174,20 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x0800ab28` | — | `FUN_0800ab28` | pending | |
 | `0x0800ab7c` | — | `FUN_0800ab7c` | pending | |
 | `0x0800ad00` | — | `FUN_0800ad00` | pending | |
-| `0x0800ad64` | — | `FUN_0800ad64` | pending | |
+| `0x0800ad64` | 74 | `uart_putchar` | decomp-c | UART TX ring buffer write with 0x1400-byte circular buffer |
 | `0x0800adbc` | — | `FUN_0800adbc` | pending | |
 | `0x0800aee4` | — | `FUN_0800aee4` | pending | |
-| `0x0800af80` | — | `FUN_0800af80` | pending | |
+| `0x0800aee4` | 130 | `uart_tx_isr` | decomp-c | TXE interrupt — drains TX ring buffer to USART data register |
+| `0x0800af80` | 28 | `uart_tx_flush` | decomp-c | Blocks until TX buffer fully drained |
 | `0x0800afa4` | — | `FUN_0800afa4` | pending | |
 | `0x0800b328` | 3690 | `HardFault_Handler` | named | Vector table slot 3 — real HardFault handler |
 | `0x0800c24c` | 44 | `EXTI0_1_IRQHandler` | named | Vector IRQ handler — EXTI lines 0 and 1 |
 | `0x0800c278` | 2970 | `EXTI4_15_IRQHandler` | named | Vector IRQ handler — EXTI lines 4-15 |
 | `0x0800ce9e` | — | `FUN_0800ce9e` | pending | |
-| `0x0800d75e` | — | `FUN_0800d75e` | pending | |
-| `0x0800d780` | — | `FUN_0800d780` | pending | |
-| `0x0800d7fc` | — | `FUN_0800d7fc` | pending | |
-| `0x0800d81e` | — | `FUN_0800d81e` | pending | |
+| `0x0800d75e` | 34 | `cmd_counter_inc` | named | Increment command counter |
+| `0x0800d780` | 34 | `cmd_counter_inc_v2` | named | Counter increment variant 2 |
+| `0x0800d7fc` | 34 | `cmd_counter_inc_v3` | named | Counter increment variant 3 |
+| `0x0800d81e` | 40 | `cmd_write_and_inc` | named | Write to struct field + counter increment |
 | `0x0800d846` | — | `FUN_0800d846` | pending | |
 | `0x0800d84a` | — | `FUN_0800d84a` | pending | |
 | `0x0800d850` | — | `FUN_0800d850` | pending | |
@@ -215,13 +216,13 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x0800ea44` | — | `FUN_0800ea44` | pending | |
 | `0x0800eb04` | — | `FUN_0800eb04` | pending | |
 | `0x0800eb90` | — | `FUN_0800eb90` | pending | |
-| `0x0800ebd0` | — | `FUN_0800ebd0` | pending | |
-| `0x0800ec04` | — | `FUN_0800ec04` | pending | |
+| `0x0800ebd0` | 48 | `nvic_enable_irq` | decomp-c | NVIC ISER bit set |
+| `0x0800ec04` | 60 | `nvic_enable_irq_dsb` | decomp-c | NVIC ISER bit set + DSB/ISB |
 | `0x0800ec48` | — | `FUN_0800ec48` | pending | |
 | `0x0800ed24` | — | `FUN_0800ed24` | pending | |
 | `0x0800ed6c` | — | `FUN_0800ed6c` | pending | |
-| `0x0800ed96` | — | `FUN_0800ed96` | pending | |
-| `0x0800edb6` | — | `FUN_0800edb6` | pending | |
+| `0x0800ed96` | 32 | `nvic_enable_irq_s` | decomp-c | NVIC IRQ enable (signed char wrapper) |
+| `0x0800edb6` | 32 | `nvic_enable_irq_s_dsb` | decomp-c | NVIC IRQ enable + DSB/ISB (signed char) |
 | `0x0800edd6` | — | `FUN_0800edd6` | pending | |
 | `0x0800edf0` | — | `FUN_0800edf0` | pending | |
 | `0x0800eebc` | — | `FUN_0800eebc` | pending | |
@@ -242,15 +243,16 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x0800f7e4` | — | `FUN_0800f7e4` | pending | |
 | `0x0800fae0` | — | `FUN_0800fae0` | pending | |
 | `0x0800fca4` | — | `FUN_0800fca4` | pending | |
-| `0x0800fcde` | — | `gpio_bit_write` | named | Atomic GPIO bit set/clear via BSRR/BRR registers |
+| `0x0800fcde` | 58 | `gpio_bit_write` | decomp-c | Atomic GPIO bit set/clear via BSRR/BRR |
+| `0x0800fca4` | 36 | `gpio_bit_read` | decomp-c | GPIO input read via IDR register |
 | `0x0800fd18` | — | `FUN_0800fd18` | pending | |
 | `0x0800fdac` | — | `FUN_0800fdac` | pending | |
 | `0x0801053e` | — | `FUN_0801053e` | pending | |
 | `0x08010554` | — | `FUN_08010554` | pending | |
 | `0x080107e4` | — | `FUN_080107e4` | pending | |
 | `0x08010930` | — | `FUN_08010930` | pending | |
-| `0x08010944` | — | `FUN_08010944` | pending | |
-| `0x08010970` | — | `FUN_08010970` | pending | |
+| `0x08010944` | 34 | `fg_read_field_8` | named | Fuel gauge register field read (shift 8) |
+| `0x08010970` | 34 | `fg_read_field_11` | named | Fuel gauge register field read (shift 11) |
 | `0x0801099c` | — | `FUN_0801099c` | pending | |
 | `0x08010c48` | — | `FUN_08010c48` | pending | |
 | `0x08010d84` | — | `FUN_08010d84` | pending | |
@@ -310,7 +312,7 @@ _Total functions: 281. 9 renamed in Ghidra, 272 auto-named (`FUN_*`)._
 | `0x080150ac` | — | `FUN_080150ac` | pending | |
 | `0x0801518c` | — | `FUN_0801518c` | pending | |
 | `0x08015294` | — | `FUN_08015294` | pending | |
-| `0x08015340` | — | `FUN_08015340` | pending | |
+| `0x08015340` | 26 | `get_tick_ms` | decomp-c | Read system tick counter (ms since boot) from SRAM |
 | `0x08015360` | — | `FUN_08015360` | pending | |
 | `0x08015434` | — | `FUN_08015434` | pending | |
 | `0x0801556c` | — | `FUN_0801556c` | pending | |
