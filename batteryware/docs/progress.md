@@ -51,13 +51,13 @@ _Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
 | `0x08000850` | 34 | `dma_stop` | decomp-c | Disable DMA + call stop |
 | `0x08000880` | — | `cell_balance_update` | decomp-c | Cell balancing algorithm: voltage averaging + threshold |
 | `0x08001060` | 72 | `state_handler_0b` | decomp-c | State machine handler → bms_set_state(0x0B) |
-| `0x080010b4` | — | `FUN_080010b4` | pending | |
+| `0x080010b4` | — | `state_timer_0b` | decomp-c | State timer handler for state 0x0B |
 | `0x080011d8` | 72 | `state_handler_0c` | decomp-c | State machine handler → bms_set_state(0x0C) |
 | `0x0800122c` | — | `state_timer_0c` | decomp-c | State timer handler for state 0x0C |
 | `0x080013e0` | 72 | `state_handler_12` | decomp-c | State machine handler → bms_set_state(0x12) |
 | `0x08001434` | — | `state_timer_12` | decomp-c | State timer handler for state 0x12 |
 | `0x080015e8` | 72 | `state_handler_13` | decomp-c | State machine handler → bms_set_state(0x13) |
-| `0x0800163c` | — | `FUN_0800163c` | pending | |
+| `0x0800163c` | — | `state_timer_13` | decomp-c | State timer handler for state 0x13 |
 | `0x08001898` | 72 | `state_handler_02` | decomp-c | State machine handler (MOSFET on variant) → bms_set_state(0x02) |
 | `0x080018ec` | 46 | `capacity_decrement` | decomp-c | Saturating counter decrement |
 | `0x08001920` | 132 | `rsoc_lookup` | decomp-c | SoC lookup table (100-entry descending search) |

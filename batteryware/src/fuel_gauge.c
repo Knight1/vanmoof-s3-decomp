@@ -771,15 +771,242 @@ void fg_coulomb_update(void)
 /*
  * Cell balancing voltage update algorithm.
  *
- * Computes cell voltage averages, clips outliers by ±5 counts,
- * updates voltage thresholds and stores results via memcmp_verify.
+ * Runs a multi-phase cell balancing measurement cycle:
+ *
+ * Phase 1 — ADC acquisition (triggered by state timers):
+ *   The function is called repeatedly (once per main-loop iteration).
+ *   A cycle counter at 0x200024E0 counts 0–99. On each call:
+ *     - Counter 0: pulses GPIO PA15 high (start of balance cycle)
+ *     - Counter 10: calls dma_stop() (end of ADC DMA capture)
+ *     - Counter 11+: checks flags byte (bit 0 at 0x20002554).
+ *       When bit 0 is set, a sub-cycle counter at 0x20002550 is
+ *       incremented. After 5 sub-cycles, the voltage computation
+ *       phase runs.
+ *
+ * Phase 2 — Voltage computation:
+ *   Reads 5 cells × 3 phases = 15 ADC values from the 30-byte array
+ *   at 0x20002558 (uint16 per cell/phase). Each ADC value is
+ *   converted to a voltage via:
+ *     step1 = ADC * 610 * 610 / 10000
+ *     step2 = (2500000 - step1) / 10000
+ *   The result is scored against a 146-entry threshold lookup table
+ *   at 0x08017698 (descending search, scoring 0–0x91).
+ *
+ * Phase 3 — Averaging and outlier rejection:
+ *   Per-phase averages are computed across the 5 cells. Cells
+ *   deviating by >5 from the average are clipped to the mean.
+ *   A second-pass read of the corrected array computes per-phase
+ *   mean voltages. Signed corrections (from 0x200025BE, 0x200025C4,
+ *   0x200025BC) are applied.
+ *
+ * Phase 4 — EEPROM persistence:
+ *   The computed phase voltages are compared against stored thresholds
+ *   at 0x200029A8+0x44/0x45/0x46. If 5 consecutive readings exceed
+ *   the threshold, the stored value is updated and written to data
+ *   EEPROM at 0x08080C44/0x08080C45/0x08080C46 via memcmp_verify.
  */
 void cell_balance_update(void)
 {
-    /* Complex cell voltage balancing algorithm — dispatched from state timers.
-     * Full implementation requires 150+ lines of averaging filters,
-     * threshold comparisons, and memcmp_verify persistence.
-     * Deemed non-critical for initial decompilation.
-     */
-    (void)0;
+    volatile uint32_t * const s_trigger  = (volatile uint32_t *)0x200024F4;
+    volatile uint32_t * const s_adc_dr   = (volatile uint32_t *)0x40012400;
+    volatile uint8_t  * const s_cycle    = (volatile uint8_t  *)0x200024E0;
+    volatile uint8_t  * const s_flags    = (volatile uint8_t  *)0x20002554;
+    volatile uint32_t * const s_subcnt   = (volatile uint32_t *)0x20002550;
+    const uint32_t * const s_thresh_lut  = (const uint32_t *)0x08017698;
+    extern void memcmp_verify(char *actual, uint32_t len, char *expected);
+
+    /* Only run when trigger register matches ADC data register */
+    if (*s_trigger != *s_adc_dr) {
+        return;
+    }
+
+    uint8_t cycle = *s_cycle + 1;
+    *s_cycle = cycle;
+    if (cycle > 99) {
+        *s_cycle = 0;
+    }
+
+    /* Phase boundaries */
+    if (*s_cycle == 0) {
+        gpio_bit_write(0x50000400, 0x8000, 1);
+        return;
+    } else if (*s_cycle == 10) {
+        dma_stop();
+        return;
+    } else if ((*s_cycle > 10) && ((*s_flags & 1) != 0)) {
+        *s_flags &= ~1U;
+        gpio_bit_write(0x50000400, 0x8000, 0);
+
+        uint8_t sub = (uint8_t)(*s_subcnt + 1);
+        *s_subcnt = sub;
+
+        if (sub < 5) {
+            return;
+        }
+        *s_subcnt = 0;
+
+        /* --- Voltage computation phase (sub-cycle 5+) --- */
+        volatile uint16_t * const s_adc_buf = (volatile uint16_t *)0x20002558;
+        volatile uint8_t  * const s_scores  = (volatile uint8_t  *)0x200024E4;
+        const uint32_t MUL_FACTOR  = 610;
+        const uint32_t DIV_FACTOR  = 10000;
+        const uint32_t VREF_MV     = 2500000;
+
+        uint8_t cell, phase;
+
+        /* Step 1: score each of 5 cells × 3 phases */
+        for (cell = 0; cell < 5; cell++) {
+            for (phase = 0; phase < 3; phase++) {
+                uint32_t adc  = s_adc_buf[cell * 4 + phase];
+                uint32_t step = (adc * MUL_FACTOR * MUL_FACTOR) / DIV_FACTOR;
+                uint32_t result = (VREF_MV - step) / DIV_FACTOR;
+
+                uint8_t score = 0x91;
+                /* Score against 146-entry descending threshold LUT */
+                uint8_t s;
+                for (s = 0x91; s != 0; s--) {
+                    if (result <= s_thresh_lut[s]) {
+                        score = s;
+                        break;
+                    }
+                }
+                s_scores[cell * 3 + phase] = score;
+            }
+        }
+
+        /* Step 2: per-phase averaging with outlier rejection */
+        volatile uint8_t * const s_scores2 = (volatile uint8_t *)0x200024E4;
+        volatile uint8_t * const s_avg     = (volatile uint8_t *)0x20002588;
+
+        uint16_t sum;
+        uint8_t  mean;
+
+        for (phase = 0; phase < 3; phase++) {
+            sum = 0;
+            for (cell = 0; cell < 5; cell++) {
+                sum += s_scores2[cell * 3 + phase];
+            }
+            mean = (uint8_t)(sum / 5);
+
+            /* Clip outliers: cells deviating by >5 from mean */
+            for (cell = 0; cell < 5; cell++) {
+                uint8_t val = s_scores2[cell * 3 + phase];
+                if (mean < val) {
+                    if ((int32_t)(val - mean) > 5) {
+                        s_scores2[cell * 3 + phase] = mean;
+                    }
+                } else if (val < mean) {
+                    if ((int32_t)(mean - val) > 5) {
+                        s_scores2[cell * 3 + phase] = mean;
+                    }
+                }
+            }
+
+            /* Second-pass average of corrected values */
+            sum = 0;
+            for (cell = 0; cell < 5; cell++) {
+                sum += s_scores2[cell * 3 + phase];
+            }
+            s_avg[phase] = (uint8_t)(sum / 5);
+        }
+
+        /* Step 3: apply per-phase corrections */
+        volatile int8_t  * const s_corr0 = (volatile int8_t  *)0x200025BE;
+        volatile int8_t  * const s_corr1 = (volatile int8_t  *)0x200025C4;
+        volatile int8_t  * const s_corr2 = (volatile int8_t  *)0x200025BC;
+
+        if (*s_corr0 != 0) {
+            if (*s_corr0 < 0) {
+                s_avg[0] = (uint8_t)((int8_t)s_avg[0] - (int8_t)(~*s_corr0 + 1));
+            } else {
+                s_avg[0] = (uint8_t)((int8_t)s_avg[0] + *s_corr0);
+            }
+        }
+        if (*s_corr1 != 0) {
+            if (*s_corr1 < 0) {
+                s_avg[1] = (uint8_t)((int8_t)s_avg[1] - (int8_t)(~*s_corr1 + 1));
+            } else {
+                s_avg[1] = (uint8_t)((int8_t)s_avg[1] + *s_corr1);
+            }
+        }
+        if (*s_corr2 != 0) {
+            if (*s_corr2 < 0) {
+                s_avg[2] = (uint8_t)((int8_t)s_avg[2] - (int8_t)(~*s_corr2 + 1));
+            } else {
+                s_avg[2] = (uint8_t)((int8_t)s_avg[2] + *s_corr2);
+            }
+        }
+
+        /* Step 4: EEPROM persistence — update stored thresholds */
+        volatile uint8_t  * const s_bms_cfg  = (volatile uint8_t  *)0x200029A8;
+        volatile uint8_t  * const s_cnt_p0   = (volatile uint8_t  *)0x20002580;
+        volatile uint8_t  * const s_cnt_p1   = (volatile uint8_t  *)0x2000258B;
+        volatile uint8_t  * const s_cnt_p2   = (volatile uint8_t  *)0x20002581;
+
+        /* Phase 0 threshold */
+        if (s_bms_cfg[0x46] < s_avg[0]) {
+            uint8_t c = *s_cnt_p0 + 1;
+            *s_cnt_p0 = c;
+            if (c > 5) {
+                s_bms_cfg[0x46] = s_avg[0];
+                volatile uint8_t * const s_buf_p0 = (volatile uint8_t *)0x200029EE;
+                *s_buf_p0 = s_avg[0];
+                memcmp_verify((char *)s_buf_p0, 1, (char *)0x08080C46);
+            }
+        } else {
+            *s_cnt_p0 = 0;
+        }
+
+        /* Phase 1/2 thresholds — use larger of the two adjacent phases */
+        uint8_t *s_phase1_thresh = &s_bms_cfg[0x44]; /* stored threshold for phase 1 */
+        uint8_t *s_phase2_thresh = &s_bms_cfg[0x45]; /* stored threshold for phase 2 */
+
+        if (s_avg[1] < s_avg[2] || s_avg[1] <= *s_phase1_thresh) {
+            if (*s_phase1_thresh < s_avg[2]) {
+                uint8_t c = *s_cnt_p1 + 1;
+                *s_cnt_p1 = c;
+                if (c > 5) {
+                    *s_phase1_thresh = s_avg[2];
+                    volatile uint8_t * const s_buf_p1 = (volatile uint8_t *)0x200029EC;
+                    *s_buf_p1 = s_avg[2];
+                    memcmp_verify((char *)s_buf_p1, 1, (char *)0x08080C44);
+                }
+            } else {
+                *s_cnt_p1 = 0;
+            }
+        } else {
+            uint8_t c = *s_cnt_p1 + 1;
+            *s_cnt_p1 = c;
+            if (c > 5) {
+                *s_phase1_thresh = s_avg[1];
+                volatile uint8_t * const s_buf_p1 = (volatile uint8_t *)0x200029EC;
+                *s_buf_p1 = s_avg[1];
+                memcmp_verify((char *)s_buf_p1, 1, (char *)0x08080C44);
+            }
+        }
+
+        if (s_avg[2] < s_avg[1] || *s_phase2_thresh <= s_avg[1]) {
+            if (s_avg[2] < *s_phase2_thresh) {
+                uint8_t c = *s_cnt_p2 + 1;
+                *s_cnt_p2 = c;
+                if (c > 5) {
+                    *s_phase2_thresh = s_avg[2];
+                    volatile uint8_t * const s_buf_p2 = (volatile uint8_t *)0x200029ED;
+                    *s_buf_p2 = s_avg[2];
+                    memcmp_verify((char *)s_buf_p2, 1, (char *)0x08080C45);
+                }
+            } else {
+                *s_cnt_p2 = 0;
+            }
+        } else {
+            uint8_t c = *s_cnt_p2 + 1;
+            *s_cnt_p2 = c;
+            if (c > 5) {
+                *s_phase2_thresh = s_avg[1];
+                volatile uint8_t * const s_buf_p2 = (volatile uint8_t *)0x200029ED;
+                *s_buf_p2 = s_avg[1];
+                memcmp_verify((char *)s_buf_p2, 1, (char *)0x08080C45);
+            }
+        }
+    }
 }
