@@ -249,5 +249,7 @@ void nvic_enable_irq_dsb(uint8_t irqn);
 void nvic_enable_irq_s(int8_t irqn);
 void nvic_enable_irq_s_dsb(int8_t irqn);
 uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
+/* Flash unlock — alias for flash_unlock_both */
+void flash_unlock(void);
 
 #endif /* BATTERYWARE_H */

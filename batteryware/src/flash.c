@@ -875,3 +875,12 @@ uint32_t flash_unlock_both(void)
 
     return 0;
 }
+
+/*
+ * Flash unlock wrapper — calls flash_unlock_both.
+ * Compatible with callers expecting no arguments.
+ */
+void flash_unlock(void)
+{
+    flash_unlock_both();
+}
