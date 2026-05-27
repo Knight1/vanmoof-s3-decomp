@@ -16,6 +16,12 @@ uint16_t crc16_calc(uint8_t *data, int16_t len);
 /* CRC-8 for flash verification */
 uint8_t  crc8_calc(uint8_t *data, int8_t len);
 
+/* CRC-8/SMBus PEC (poly 0x07, init 0x00) — `crc8_verify` is the
+ * read-side helper; identical computation. OEM at FUN_080141E4 is
+ * 1834 B table-driven; this is bitwise. */
+uint32_t crc8_for_smbus(uint8_t *data, uint32_t len);
+uint8_t  crc8_verify(uint8_t *data, uint32_t len);
+
 /* GPIO bit write: atomic set (BSRR) or clear (BRR) */
 void gpio_bit_write(uint32_t gpio_base, uint16_t pin_bit, uint8_t value);
 

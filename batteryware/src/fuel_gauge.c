@@ -1,6 +1,32 @@
 #include "batteryware.h"
 
 /*
+ * BMS configuration — program FEDL5236 registers 3-9 via SMBus.
+ *
+ * Stores the config byte, checks a status flag and GPIOC pin 13,
+ * conditionally resets registers 3-4, then writes registers 5-9
+ * with the stored config value on register 9.
+ */
+void bms_configure(uint8_t cfg)
+{
+    *(volatile uint8_t *)0x2000287A = 0;
+    *(volatile uint8_t *)0x20002870 = cfg;
+    delay_ms(3);
+
+    if (((*(volatile uint8_t *)0x20002BFC & 1) != 0) ||
+        !gpio_bit_read(0x50000800, 0x2000)) {
+        smbus_write_reg(3, 0, 0xFF);
+        smbus_write_reg(4, 0, 0xFF);
+    }
+
+    smbus_write_reg(5,  0,     0xFF);
+    smbus_write_reg(6,  0,     0xFF);
+    smbus_write_reg(7,  0,     0xFF);
+    smbus_write_reg(8,  1,     0xFF);
+    smbus_write_reg(9,  cfg,   0xFF);
+}
+
+/*
  * Clear fuel gauge status registers.
  */
 void fg_clear_status(void)

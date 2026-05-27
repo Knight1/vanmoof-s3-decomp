@@ -1,9 +1,5 @@
 #include "batteryware.h"
 
-/* CRC8 helpers — extern until decompiled */
-extern uint8_t  crc8_verify(uint8_t *data, uint32_t len);
-extern uint32_t crc8_for_smbus(uint8_t *data, uint32_t len);
-
 /* SPI mutex and context */
 static volatile uint8_t  * const s_spi_mutex  = (volatile uint8_t *)0x200047E0;
 static volatile uint32_t * const s_spi_addr   = (volatile uint32_t *)0x200047E4;
