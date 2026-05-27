@@ -14,7 +14,7 @@ the VanMoof S3 battery management system (BMS) on an
 
 ## What it does
 
-The batteryware is the intelligence behind the VanMoof S3's removable
+The batteryware is the Software behind the VanMoof S3's
 battery pack. It communicates with a **FEDL5236** fuel-gauge IC over a
 bit-banged GPIO SMBus/I²C link, measures individual cell voltages,
 controls charge/discharge MOSFETs, and manages a 26-state safety
