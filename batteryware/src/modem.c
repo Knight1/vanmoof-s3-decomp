@@ -105,7 +105,6 @@ bool modem_deinit(void *ctx)
 void bootloader_entry(void)
 {
     extern volatile uint8_t * const s_protection_cfg;
-    extern void uart_printf(char *str);
     extern void charge_mosfet_off(void);
     extern void bms_set_state(uint8_t state);
     extern void memcmp_verify(char *a, uint32_t size, char *b);
@@ -113,13 +112,13 @@ void bootloader_entry(void)
 
     s_protection_cfg[5] = 1;
     *s_modem_ctx |= 0x20000;
-    uart_printf((char *)0x08007204);
+    uart_printf((uint8_t *)0x08007204);
     uart_tx_flush();
     charge_mosfet_off();
     gpio_bit_write(0x50000400, 0x200, 0);
     bms_configure(0);
     bms_set_state(6);
-    uart_printf((char *)0x0800720C);
+    uart_printf((uint8_t *)0x0800720C);
     uart_tx_flush();
 
     extern bool power_on_gpio_check(void);  /* FUN_080050ac */
@@ -312,4 +311,114 @@ uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count)
 
     *(volatile uint8_t *)(ctx + 0x14) = 0;
     return 0;
+}
+
+/*
+ * Modem command handler (modem_command_handler) — a duplicate/larger
+ * version of the command parser that handles commands received over
+ * the modem/USART interface, including flash programming commands.
+ *
+ * This handler processes commands with additional state tracking for
+ * the modem communication layer. It supports:
+ *   - Flash page programming commands (0x10, 0x11, 0x12)
+ *   - Configuration read/write commands
+ *   - Status query commands
+ *   - Reset/bootloader commands
+ *
+ * The command frame format is the same as uart_protocol_handler:
+ *   [0xAA] [cmd_byte] [data...] [CRC16]
+ *
+ * But this handler additionally tracks modem state and handles
+ * longer multi-packet exchanges for flash programming.
+ */
+void modem_command_handler(uint8_t byte)
+{
+    volatile uint8_t  * const s_state    = (volatile uint8_t  *)0x20002CF4;
+    volatile uint8_t  * const s_buf      = (volatile uint8_t  *)0x20002CF5;
+    volatile uint16_t * const s_rx_idx   = (volatile uint16_t *)0x20002CF8;
+    volatile uint16_t * const s_rx_total = (volatile uint16_t *)0x20002CFA;
+    volatile uint8_t  * const s_modem_st = (volatile uint8_t  *)0x20002CFC;
+
+    uint8_t state = *s_state;
+
+    if (state == 0) {
+        /* Waiting for sync byte 0xAA */
+        if (byte == 0xAA) {
+            *s_state = 1;
+            s_buf[0] = 0xAA;
+            *s_rx_idx = 1;
+        }
+        return;
+    }
+
+    if (state == 1) {
+        /* Got sync, store command byte */
+        s_buf[*s_rx_idx] = byte;
+        *s_rx_idx = 2;
+        *s_state = 2;
+        *s_modem_st = byte;
+
+        /* Command byte determines expected frame length */
+        if (byte < 0x80) {
+            *s_rx_total = 8;
+        } else if (byte == 0x80) {
+            *s_rx_total = 0x80;
+        } else {
+            *s_rx_total = byte & 0x7F;
+            if (*s_rx_total < 8) {
+                *s_rx_total = 8;
+            }
+        }
+        return;
+    }
+
+    /* State 2+: accumulating data */
+    if (*s_rx_idx < *s_rx_total) {
+        s_buf[*s_rx_idx] = byte;
+        *s_rx_idx += 1;
+    }
+
+    /* Check if frame is complete */
+    if (*s_rx_idx >= *s_rx_total) {
+        uint16_t frame_len = *s_rx_total;
+        uint16_t calc_crc = crc16_calc((uint8_t *)s_buf, (int16_t)(frame_len - 2));
+        uint16_t rx_crc   = (uint16_t)s_buf[frame_len - 1] << 8 | s_buf[frame_len - 2];
+
+        if (calc_crc == rx_crc) {
+            /* CRC OK — dispatch based on command byte */
+            uint8_t cmd = s_buf[1];
+
+            if (cmd == 0x10) {
+                /* Flash page program command */
+                extern void flash_program_handler(uint8_t *data, uint16_t len);
+                flash_program_handler((uint8_t *)s_buf, frame_len);
+            } else if (cmd == 0x11) {
+                /* Flash erase command */
+                extern void flash_erase_handler(uint8_t *data, uint16_t len);
+                flash_erase_handler((uint8_t *)s_buf, frame_len);
+            } else if (cmd == 0x12) {
+                /* Flash verify command */
+                extern void flash_verify_handler(uint8_t *data, uint16_t len);
+                flash_verify_handler((uint8_t *)s_buf, frame_len);
+            } else if (cmd < 0x10) {
+                /* Standard commands — dispatch to command_parser */
+                extern void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd);
+                command_parser((uint32_t)(uintptr_t)s_buf, (int)(frame_len - 2), cmd);
+            } else {
+                /* Unknown modem command */
+                extern void veneer_a6aa(void);
+                veneer_a6aa();
+            }
+        } else {
+            /* CRC error */
+            extern void veneer_a6aa(void);
+            veneer_a6aa();
+        }
+
+        /* Reset state machine */
+        *s_state = 0;
+        *s_rx_idx = 0;
+        *s_rx_total = 0;
+        *s_modem_st = 0;
+    }
 }

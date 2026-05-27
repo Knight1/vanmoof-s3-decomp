@@ -396,6 +396,233 @@ void dma_byte_done(int *ctx)
 }
 
 /*
+ * DMA channel initialization (FUN_0800edf0).
+ *
+ * Configures a DMA channel context. If ctx is NULL, returns 1.
+ * If status byte (ctx+0x1D) is 0: clears ctx[7] and calls nop_eebc.
+ * Sets status = 2, then:
+ *   - If ctx[1]==0: sets the DMA CPAR (peripheral address) to DAT_0800eeb8
+ *     and clears DMA CNDTR bits 5-7.
+ *   - Otherwise: calls dma_mem_config with ctx[2] and ctx[3].
+ * If ctx[5]==0: sets DMA CMAR (memory address) to -1, otherwise ctx[4].
+ * Merges ctx[5] and ctx[6] into DMA CCR, sets status = 1, returns 0.
+ */
+uint32_t dma_channel_init(int *ctx)
+{
+    if (ctx == NULL) {
+        return 1;
+    }
+
+    if (*(volatile uint8_t *)((uintptr_t)ctx + 0x1D) == 0) {
+        ctx[7] = 0;
+        extern void nop_eebc(int *);
+        nop_eebc(ctx);
+    }
+
+    *(volatile uint8_t *)((uintptr_t)ctx + 0x1D) = 2;
+
+    if (ctx[1] == 0) {
+        *(volatile uint32_t *)(*ctx + 0x14) = 0x0800eeb8;
+        *(volatile uint32_t *)(*ctx + 8) &= 0xFFFFFFE7;
+    } else {
+        int result = dma_mem_config(ctx, (uint32_t)ctx[2], (uint32_t)ctx[3]);
+        if (result != 0) {
+            return 1;
+        }
+    }
+
+    if (ctx[5] == 0) {
+        *(volatile uint32_t *)(*ctx + 0x10) = 0xFFFFFFFF;
+    } else {
+        *(volatile uint32_t *)(*ctx + 0x10) = (uint32_t)ctx[4];
+    }
+
+    *(volatile uint32_t *)(*ctx + 8) = (uint32_t)ctx[5] |
+        (*(volatile uint32_t *)(*ctx + 8) & 0xFFFFFF9F);
+    *(volatile uint32_t *)(*ctx + 8) = (uint32_t)ctx[6] |
+        (*(volatile uint32_t *)(*ctx + 8) & 0xFFFFFF7F);
+
+    *(volatile uint8_t *)((uintptr_t)ctx + 0x1D) = 1;
+    return 0;
+}
+
+/*
+ * DMA memory config (FUN_0800f188).
+ *
+ * Finds the highest set bit in param_2 (MSB position = 31 - clz).
+ * If param_3 matches a size encoding (24=6+1, 16=7+1, 0=any, 8=15+1),
+ * returns false and writes the config to DMA registers.
+ * Otherwise returns true (error).
+ */
+bool dma_mem_config(int *ctx, uint32_t mask, uint32_t size)
+{
+    uint32_t msb = 0x1F;
+    bool error;
+
+    do {
+        if (msb == 0) break;
+        msb--;
+    } while (((mask >> msb) & 1) == 0);
+
+    if (size == 0x18) {
+        error = (msb <= 6);
+    } else if (size < 0x19) {
+        if (size == 0x10) {
+            error = (msb <= 7);
+        } else if (size < 0x11) {
+            if (size == 0) {
+                error = false;
+            } else if (size == 8) {
+                error = (msb <= 0xF);
+            } else {
+                error = true;
+            }
+        } else {
+            error = true;
+        }
+    } else {
+        error = true;
+    }
+
+    if (!error) {
+        *(volatile uint32_t *)(*ctx + 0x14) = mask;
+        *(volatile uint32_t *)(*ctx + 8) = size |
+            (*(volatile uint32_t *)(*ctx + 8) & 0xFFFFFFE7);
+    }
+
+    return error;
+}
+
+/*
+ * DMA wait for ready (FUN_0800f3ac).
+ *
+ * Polls DMA status register at DAT_0800f48c+0x18 for bit 0 (TC).
+ * If timeout param_1 is non-zero and expires, returns 3.
+ * On TC (bit 1): clears it in the status register.
+ * On error flags (0x100, 0x200, 0x400, 0x800, 0x2000, 0x20000, 0x10000):
+ *   calls dma_error_clear and returns 1.
+ * Returns 0 on clean completion.
+ */
+uint32_t dma_wait_for_ready(uint32_t timeout)
+{
+    volatile uint32_t * const s_dma_stat = (volatile uint32_t *)0x40020020;
+    uint32_t start = tick_get();
+
+    while ((s_dma_stat[6] & 1) == 1) {
+        if ((timeout != 0xFFFFFFFF) &&
+            (timeout == 0 || tick_get() - start > timeout)) {
+            return 3;
+        }
+    }
+
+    if ((s_dma_stat[6] & 2) == 2) {
+        s_dma_stat[6] = 2;
+    }
+
+    if (((s_dma_stat[6] & 0x100) == 0x100) ||
+        ((s_dma_stat[6] & 0x200) == 0x200) ||
+        ((s_dma_stat[6] & 0x400) == 0x400) ||
+        ((s_dma_stat[6] & 0x800) == 0x800) ||
+        ((s_dma_stat[6] & 0x2000) == 0x2000) ||
+        ((s_dma_stat[6] & 0x20000) == 0x20000) ||
+        ((s_dma_stat[6] & 0x10000) == 0x10000)) {
+        extern void dma_error_clear(void);
+        dma_error_clear();
+        return 1;
+    }
+
+    return 0;
+}
+
+/*
+ * DMA error clear (FUN_0800f490) — clears error flags in DMA status register.
+ *
+ * Reads the status register at DAT_0800f5c0+0x18, for each set error
+ * bit (0x100, 0x200, 0x400, 0x800, 0x2000, 0x20000, 0x10000):
+ * sets the corresponding clear bit in the clear register at
+ * DAT_0800f5c4+0x14, then writes the accumulated mask back to clear.
+ */
+void dma_error_clear(void)
+{
+    volatile uint32_t * const s_dma_status  = (volatile uint32_t *)0x40020020;
+    volatile uint32_t * const s_dma_clear   = (volatile uint32_t *)0x40020020;
+    uint32_t clear_mask = 0;
+
+    if ((s_dma_status[6] & 0x100) == 0x100) {
+        s_dma_clear[5] |= 2;
+        clear_mask |= 0x100;
+    }
+    if ((s_dma_status[6] & 0x200) == 0x200) {
+        s_dma_clear[5] |= 1;
+        clear_mask |= 0x200;
+    }
+    if ((s_dma_status[6] & 0x400) == 0x400) {
+        s_dma_clear[5] |= 8;
+        clear_mask |= 0x400;
+    }
+    if ((s_dma_status[6] & 0x800) == 0x800) {
+        s_dma_clear[5] |= 4;
+        clear_mask |= 0x800;
+    }
+    if ((s_dma_status[6] & 0x2000) == 0x2000) {
+        s_dma_clear[5] |= 0x10;
+        clear_mask |= 0x2000;
+    }
+    if ((s_dma_status[6] & 0x20000) == 0x20000) {
+        s_dma_clear[5] |= 0x20;
+        clear_mask |= 0x20000;
+    }
+    if ((s_dma_status[6] & 0x10000) == 0x10000) {
+        s_dma_clear[5] |= 0x40;
+        clear_mask |= 0x10000;
+    }
+
+    s_dma_status[6] = clear_mask;
+}
+
+/*
+ * DMA error clear duplicate (FUN_08015434) — same as dma_error_clear
+ * but uses different SRAM base addresses for the DMA struct.
+ */
+void dma_error_clear_v2(void)
+{
+    volatile uint32_t * const s_dma_stat  = (volatile uint32_t *)0x40020040;
+    volatile uint32_t * const s_dma_clear = (volatile uint32_t *)0x40020040;
+    uint32_t clear_mask = 0;
+
+    if ((s_dma_stat[6] & 0x100) == 0x100) {
+        s_dma_clear[5] |= 2;
+        clear_mask |= 0x100;
+    }
+    if ((s_dma_stat[6] & 0x200) == 0x200) {
+        s_dma_clear[5] |= 1;
+        clear_mask |= 0x200;
+    }
+    if ((s_dma_stat[6] & 0x400) == 0x400) {
+        s_dma_clear[5] |= 8;
+        clear_mask |= 0x400;
+    }
+    if ((s_dma_stat[6] & 0x800) == 0x800) {
+        s_dma_clear[5] |= 4;
+        clear_mask |= 0x800;
+    }
+    if ((s_dma_stat[6] & 0x2000) == 0x2000) {
+        s_dma_clear[5] |= 0x10;
+        clear_mask |= 0x2000;
+    }
+    if ((s_dma_stat[6] & 0x20000) == 0x20000) {
+        s_dma_clear[5] |= 0x20;
+        clear_mask |= 0x20000;
+    }
+    if ((s_dma_stat[6] & 0x10000) == 0x10000) {
+        s_dma_clear[5] |= 0x40;
+        clear_mask |= 0x10000;
+    }
+
+    s_dma_stat[6] = clear_mask;
+}
+
+/*
  * Timeout poll v2 — status poll with (*ctx + 0x1C) as status register.
  * Used by dma_completion_handler. Has emergency cleanup on bit 2+11.
  */

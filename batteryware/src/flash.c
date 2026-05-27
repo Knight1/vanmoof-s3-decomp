@@ -164,7 +164,10 @@ uint32_t flash_timeout_check(uint32_t param)
     if (param < 4) {
         flash_opt_byte_op(0xFF, param);
         *s_output = param;
-    return 0;
+        return 0;
+    }
+
+    return 1;
 }
 
 /*
@@ -194,9 +197,6 @@ uint32_t flash_verify_header(void)
     uint32_t computed = crc32_mpeg2((uint8_t *)0x08000000, image_size);
 
     return (computed != crc) ? 1 : 0;
-}
-
-    return 1;
 }
 
 /*
@@ -677,16 +677,6 @@ uint32_t flash_program_start(void *ctx)
             if ((reg[0] & 1) == 1) {
                 return 0;
             }
-
-/*
- * Flash erase page wrapper (FUN_0800edd6).
- *
- * Thin wrapper around flash_page_erase — returns the result directly.
- */
-bool flash_erase_page_wrapper(uint32_t timeout_ticks)
-{
-    return flash_page_erase(timeout_ticks);
-}
         } while ((tick_get() - start) < 0xB);
 
         /* Timeout */
@@ -740,6 +730,58 @@ uint32_t flash_erase_start(void *ctx)
     }
 
     return 0;
+}
+
+/*
+ * Flash erase page wrapper (FUN_0800edd6).
+ *
+ * Thin wrapper around flash_page_erase — returns the result directly.
+ */
+bool flash_erase_page_wrapper(uint32_t timeout_ticks)
+{
+    return flash_page_erase(timeout_ticks);
+}
+
+/*
+ * Flash program handler (FUN_0800d8f0) — receives data over
+ * UART/modem and programs it to flash using DMA.
+ *
+ * Multi-packet flash programming: extracts address, programs in
+ * 128-byte blocks via flash_write_verify, validates with CRC-8.
+ */
+void flash_program_handler(uint8_t *frame, uint16_t frame_len)
+{
+    uint32_t dst_addr = (uint32_t)frame[0] | ((uint32_t)frame[1] << 8) |
+                        ((uint32_t)frame[2] << 16) | ((uint32_t)frame[3] << 24);
+    uint16_t data_len = frame_len - 6;
+    uint8_t  rx_crc8  = frame[frame_len - 1];
+
+    if ((dst_addr < 0x08000000 || dst_addr >= 0x08010000) &&
+        (dst_addr < 0x08080000 || dst_addr >= 0x08081000)) {
+        cmd_send_response();
+        return;
+    }
+
+    /* Program in 128-byte pages */
+    uint16_t offset = 0;
+    while (offset < data_len) {
+        uint16_t chunk = data_len - offset;
+        if (chunk > 128) chunk = 128;
+
+        if (flash_write_verify((volatile uint32_t *)(dst_addr + offset),
+                               chunk, (int)(frame + 4 + offset)) != 0) {
+            cmd_send_response();
+            return;
+        }
+        offset += chunk;
+    }
+
+    uint8_t calc_crc8 = crc8_calc(frame + 4, (int8_t)data_len);
+    if (calc_crc8 == rx_crc8) {
+        cmd_send_8byte();
+    } else {
+        cmd_send_response();
+    }
 }
 
 /*

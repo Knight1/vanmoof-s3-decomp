@@ -69,6 +69,7 @@ void modem_send_2bytes(uint8_t b1, uint8_t b2);
 void temp_offset_send(uint8_t raw_temp);
 uint8_t bus_ready_check(int ctx);
 uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count);
+void modem_command_handler(uint8_t byte);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -105,6 +106,7 @@ void flash_op_cleanup(void *ctx);
 uint32_t flash_page_program(int *ctx);
 void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
+void flash_program_handler(uint8_t *frame, uint16_t frame_len);
 void flash_program_init(void *ctx);
 uint32_t flash_prescaler_setup(int *ctx);
 uint8_t  usart1_dma_setup(int *ctx);
@@ -155,6 +157,7 @@ void cmd_counter_inc_v2(uint16_t frame_word);
 void cmd_counter_inc_v3(uint16_t frame_word);
 void cmd_send_response(void);
 void cmd_send_8byte(void);
+void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte);
 
 /* BMS configuration */
 void bms_configure(uint8_t cfg);
@@ -189,6 +192,12 @@ uint8_t  atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src);
 void dma_init(void);
 void dma_channel_reset(uint32_t dma_base);
 uint32_t dma_flash_start(void *ctx);
+uint32_t dma_channel_init(int *ctx);
+bool dma_mem_config(int *ctx, uint32_t mask, uint32_t size);
+uint32_t dma_wait_for_ready(uint32_t timeout);
+void dma_error_clear(void);
+void dma_error_clear_v2(void);
+uint32_t dma_get_status(uint32_t reg_val);
 
 /* DMA transfer handlers */
 void dma_byte_handler(int *ctx);
