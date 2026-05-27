@@ -31,6 +31,25 @@ void system_reset_with_arg(uint32_t arg)
 }
 
 /*
+ * System reset via SCB AIRCR with DSB barriers and NOP padding.
+ *
+ * Identical to nvic_system_reset but includes NOP (mov r8,r8) instructions
+ * between the DSB and AIRCR write. This is the "fault" variant called from
+ * error paths — the NOPs serve as alignment/padding for the exception
+ * return sequence.
+ */
+void system_reset_fault(void)
+{
+    __DSB();
+    __asm__ volatile("mov r8, r8");
+    *(volatile uint32_t *)0xE000ED0C = 0x05FA0004;
+    __DSB();
+    __asm__ volatile("mov r8, r8");
+    __asm__ volatile("mov r8, r8");
+    while (1) { }
+}
+
+/*
  * System initialization — early boot setup.
  *
  * Calls phase 1 init (GPIO clocks), modem config, phase 2 init
@@ -39,12 +58,12 @@ void system_reset_with_arg(uint32_t arg)
  */
 void system_init(void)
 {
-    extern void phase1_init(void);       /* FUN_08007d78 */
+    extern void gpio_init_buttons(void);  /* FUN_08007d78 */
     extern void phase2_init(void);       /* FUN_0800ab7c */
     extern void main_clock_setup(void);  /* FUN_08000658 */
     extern void irq_wait_handler(void);  /* FUN_08006fbc */
 
-    phase1_init();
+    gpio_init_buttons();
     modem_config();
     phase2_init();
     main_clock_setup();
