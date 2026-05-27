@@ -1010,3 +1010,650 @@ void cell_balance_update(void)
         }
     }
 }
+
+/*
+ * Calculate RSOC (FUN_08013860, 64 B) — convert raw accumulated charge
+ * to a 0..5000-ish "promille" reading.
+ *
+ * Reads the u16 raw counter at SRAM 0x20002B86 (stored as two bytes
+ * via byte loads in the OEM), scales it by 5000, then divides by
+ * 4095 (= 0x0FFF) via the `veneer_1557c` thunk — which preserves r0
+ * and tail-calls into the middle of another function that runs
+ * `__aeabi_uidivmod(r0, r1)`, returning the quotient in r0.
+ *
+ *     return (uint16_t)((raw * 5000) / 4095);
+ *
+ * The literal pool slots 0x080138A4 (= 5000) and 0x080138A8 (= 0x0FFF)
+ * are operands, not addresses — a previous decomp pass mistook them
+ * for pointers.
+ */
+uint16_t calculate_rsoc(void)
+{
+    extern uint32_t veneer_1557c(uint32_t numerator, uint32_t divisor);
+
+    uint16_t raw = *(volatile uint16_t *)0x20002B86;
+    return (uint16_t)veneer_1557c((uint32_t)raw * 5000U, 0x0FFFU);
+}
+
+/*
+ * coulomb_counter — signed charge/discharge accumulator + RSOC update.
+ *
+ * OEM: FUN_08013228, **~1496 B** (NOT 36 B as progress.md previously
+ * claimed; size revised to 0x5D8).
+ *
+ * Takes an `int32_t` (positive = charge accumulation, negative =
+ * discharge magnitude). Both branches share a long common tail at
+ * OEM 0x08013706 that re-computes the RSOC percent from the modular
+ * capacity counter.
+ *
+ *   Discharge path (arg < 0):
+ *     val = -arg
+ *     if val < cfg_b[+22] (mode threshold)             goto tail_short
+ *     coulomb_sum (0x200025AC) -= val   (clamp to 0)
+ *     if min_cell_volt (0x2000282A) <= 3020:
+ *       veneer_1556c(val) → reset-counter handler
+ *       if RSOC > 5:
+ *         debounce_counter (0x200025A8)++; if > 11: rsoc_set(5); reset
+ *       else: reset debounce
+ *     else (min_cell_volt > 3020):
+ *       reset debounce
+ *       if min_cell_volt <= 3100 and RSOC > 6:
+ *         veneer_1556c(val); decrement cfg[+0x24] by val (clamp to 0)
+ *       else (min_cell_volt > 3100) and RSOC > 7:
+ *         veneer_1556c(val); decrement cfg[+0x24] by val (clamp to 0)
+ *     if dispatch_flag (0x2000281C) is zero → tail
+ *     dispatch_flag = 0; *(u32)0x200025A4 = 0; *(u16)0x200025B4 = 0
+ *     goto tail
+ *
+ *   Charge path (arg >= 0):
+ *     val = arg
+ *     if val >= cfg_b[+22]: goto common
+ *     if val <= 49: goto tail_short
+ *     if *(u16)0x2000281C >= *(u32)0x200028C8: goto tail_short
+ *     common: stash val at [r7+16]
+ *       if dispatch_flag == 0 and RSOC <= 99: dispatch_flag = coulomb_sum
+ *       coulomb_sum += val
+ *       (further OEM logic past 0x80133B2 not yet fully traced; treat as
+ *        accumulate + various secondary updates)
+ *
+ *   Common tail (0x08013706):
+ *     1.  clamp *(u32)0x20002588 to <= cal_a (= 0x20002B50)
+ *     2.  clamp cfg[+0x24] to <= cal_a; if clamped, cfg[+0x28] = cfg_b[+6]
+ *     3.  cfg[+0x2c] = cfg[+0x24]; if cfg[+0x2c] >= 0x3840,
+ *         cfg[+0x2c] = cfg[+0x2c] / 0x3840 (via veneer_1557c); else 0
+ *     4.  if cfg[+0x2c] > cfg[+0x28]: cfg[+0x2c] = cfg[+0x28]
+ *     5.  RSOC = (cfg[+0x2c] * 100) / cfg[+0x28]
+ *     6.  if cfg[+0x2c] != 0: RSOC++
+ *     7.  RSOC clamped to <= 100
+ *
+ * The previous decomp used `uint32_t` and invented SRAM addresses
+ * (0x200028C0 / 0x20003C18 / …) that don't appear in OEM. This rewrite
+ * matches the OEM literal pool at 0x08013578..0x80135AC.
+ */
+void coulomb_counter(uint32_t val_u)
+{
+    extern uint32_t veneer_1557c(uint32_t numerator, uint32_t divisor);
+    extern uint32_t veneer_1556c(uint32_t arg);  /* deferred thunk */
+    extern void     rsoc_set(uint8_t percent);
+
+    /* OEM treats r0 as int32_t. */
+    int32_t arg = (int32_t)val_u;
+    uint32_t val;
+
+    volatile uint8_t  * const cfg_b      = (volatile uint8_t  *)0x200028D0;
+    volatile uint8_t  * const cfg        = (volatile uint8_t  *)0x200029A8;
+    volatile uint32_t * const coulomb    = (volatile uint32_t *)0x200025AC;
+    volatile uint16_t * const min_cellv  = (volatile uint16_t *)0x2000282A;
+    volatile uint8_t  * const debounce   = (volatile uint8_t  *)0x200025A8;
+    volatile uint32_t * const dispatch   = (volatile uint32_t *)0x2000281C;
+    volatile uint32_t * const aux32      = (volatile uint32_t *)0x200025A4;
+    volatile uint16_t * const aux16      = (volatile uint16_t *)0x200025B4;
+    volatile uint16_t * const flag281c   = (volatile uint16_t *)0x2000281C;
+    volatile uint32_t * const flag28c8   = (volatile uint32_t *)0x200028C8;
+    volatile uint32_t * const cap_high   = (volatile uint32_t *)0x20002588;
+    volatile uint32_t * const cal_a      = (volatile uint32_t *)0x20002B50;
+
+    const uint16_t MIN_THR_LO = 0x0BCC;        /* 3020 mV */
+    const uint16_t MIN_THR_HI = 0x0C1C;        /* 3100 mV */
+    const uint32_t MOD_DIVISOR = 0x3840U;      /* 14400  */
+
+    if (arg < 0) {
+        /* ---- Discharge ---- */
+        val = (uint32_t)-arg;
+
+        uint16_t mode_thr = *(volatile uint16_t *)(cfg_b + 22);
+        if (val < mode_thr) {
+            goto tail;
+        }
+
+        if (val > *coulomb) {
+            *coulomb = 0;
+        } else {
+            *coulomb -= val;
+        }
+
+        if (*min_cellv <= MIN_THR_LO) {
+            (void)veneer_1556c(val);
+            if (cfg[0x36] > 5) {
+                uint8_t c = (uint8_t)(*debounce + 1);
+                *debounce = c;
+                if (c > 11) {
+                    *debounce = 0;
+                    rsoc_set(5);
+                }
+            } else {
+                *debounce = 0;
+            }
+        } else {
+            *debounce = 0;
+            if (*min_cellv <= MIN_THR_HI) {
+                if (cfg[0x36] > 6) {
+                    (void)veneer_1556c(val);
+                    uint32_t cap = *(volatile uint32_t *)(cfg + 0x24);
+                    if (cap > *coulomb) {
+                        if (val <= cap) {
+                            *(volatile uint32_t *)(cfg + 0x24) = cap - val;
+                        } else {
+                            *(volatile uint32_t *)(cfg + 0x24) = 0;
+                        }
+                    }
+                }
+            } else {
+                if (cfg[0x36] > 7) {
+                    (void)veneer_1556c(val);
+                    uint32_t cap = *(volatile uint32_t *)(cfg + 0x24);
+                    if (cap > *coulomb) {
+                        if (val <= cap) {
+                            *(volatile uint32_t *)(cfg + 0x24) = cap - val;
+                        } else {
+                            *(volatile uint32_t *)(cfg + 0x24) = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (*dispatch != 0) {
+            *dispatch = 0;
+            *aux32 = 0;
+            *aux16 = 0;
+        }
+        goto tail;
+    }
+
+    /* ---- Charge path (arg >= 0) ---- */
+    val = (uint32_t)arg;
+
+    uint16_t mode_thr = *(volatile uint16_t *)(cfg_b + 22);
+    if (val < mode_thr) {
+        if (val <= 49U) goto tail;
+        if (*flag281c >= *flag28c8) goto tail;
+    }
+
+    /* Common accumulate: stash, gate, add. */
+    if (*dispatch == 0 && cfg[0x36] <= 99) {
+        *dispatch = *coulomb;
+    }
+    *coulomb += val;
+
+    /* (Further OEM logic past 0x080133B2 not yet fully traced. The
+     * unstudied tail there updates secondary capacity counters and
+     * some configuration bytes; landing it correctly will require
+     * another disasm pass through 0x080133BE..0x08013704.) */
+
+tail:
+    /* ---- Common tail (OEM 0x08013706) ---- */
+    if (*cap_high < *cal_a) {
+        /* no-op: only writes if cap_high >= cal_a (clamp down) */
+    } else {
+        *cap_high = *cal_a;
+    }
+
+    if (*(volatile uint32_t *)(cfg + 0x24) >= *cal_a) {
+        *(volatile uint32_t *)(cfg + 0x24) = *cal_a;
+        *(volatile uint32_t *)(cfg + 0x28) = *(volatile uint16_t *)(cfg_b + 6);
+    }
+
+    *(volatile uint32_t *)(cfg + 0x2C) = *(volatile uint32_t *)(cfg + 0x24);
+    if (*(volatile uint32_t *)(cfg + 0x2C) >= MOD_DIVISOR) {
+        *(volatile uint32_t *)(cfg + 0x2C) =
+            veneer_1557c(*(volatile uint32_t *)(cfg + 0x2C), MOD_DIVISOR);
+    } else {
+        *(volatile uint32_t *)(cfg + 0x2C) = 0;
+    }
+
+    if (*(volatile uint32_t *)(cfg + 0x2C) > *(volatile uint32_t *)(cfg + 0x28)) {
+        *(volatile uint32_t *)(cfg + 0x2C) = *(volatile uint32_t *)(cfg + 0x28);
+    }
+
+    uint32_t soc = *(volatile uint32_t *)(cfg + 0x2C) * 100U;
+    soc = veneer_1557c(soc, *(volatile uint32_t *)(cfg + 0x28));
+    cfg[0x36] = (uint8_t)soc;
+
+    if (*(volatile uint32_t *)(cfg + 0x2C) != 0) {
+        cfg[0x36]++;
+    }
+    if (cfg[0x36] > 100) {
+        cfg[0x36] = 100;
+    }
+}
+
+/*
+ * cell_voltage_scan — two-pass cell analysis + balance triggering.
+ *
+ * OEM: FUN_080138AC. progress.md previously claimed 940 B; the real
+ * body runs 0x080138AC..0x08013D58 = **1196 B**.
+ *
+ * Cell-table layout (10 u16 entries, one per cell, populated by
+ * `bms_init`):
+ *
+ *   0x200027D4   cell voltages, u16[N]   (N = cell_count = cfg_b[+4])
+ *   0x200027FE   cached cell_count
+ *
+ *   0x200027F0   fault-flag word (cell-pair mismatch bits)
+ *   0x200027FA   running max voltage  (second pass)
+ *   0x20002818   min index            (second pass)
+ *   0x2000281C   sum accumulator      (second pass)
+ *   0x2000282A   running min voltage  (second pass)
+ *   0x2000282C   max of the secondary table
+ *   0x2000286E   average of middle cells: (sum - max - min) >> 3
+ *   0x20002880   secondary cell-voltage table (u16[N])
+ *   0x2000289A   min of the secondary table
+ *   0x200028A4   tertiary copy table (u16[N])
+ *   0x200028CC   max index            (second pass)
+ *   0x200028D0   cfg_b (cell count at +4)
+ *
+ * The earlier decomp used a single-pass min/max scan over a wrong
+ * cell table (0x20002880, the *secondary* table, not the primary)
+ * with cell_count hard-coded to 10 and ignored the cell-pair fault
+ * marker, the middle-cell average, and the per-pair balance
+ * triggering. This rewrite implements the full OEM structure.
+ *
+ * Pass 1 (first-half analysis):
+ *   - reset many flags/maxes/mins to their sentinels
+ *   - cache cell_count
+ *   - scan cells, find max (with index) and min (with index) plus sum
+ *   - average = (sum - max - min) >> 3
+ *   - if (max - min) > 49: enter pass-1b balance loop
+ *
+ * Pass 1b (balance loop):
+ *   for i = 0 .. cell_count-2:
+ *     if i == 4 (middle cell, polarity flip in 10-cell pack):
+ *        require max_idx == i AND min_idx == i+1 AND v[i] < v[i+1]
+ *        → fg_cell_balance(i)
+ *     else:
+ *        require min_idx == i AND max_idx == i+1 AND v[i] > v[i+1]
+ *        → fg_cell_balance(i)
+ *
+ * Mismatch switch (cached_cell_count, fault-flag bit pairs):
+ *   case k (k in 0..8): set bits k and k+1 in *(u16)0x200027F0.
+ *   The jump table sits at 0x08017050 (past the .bin — bootloader
+ *   region). Implemented here as a switch since the body of each
+ *   case is just two bit-OR-and-store instructions.
+ *
+ * Outlier patch:
+ *   if min_idx == 0 and min_v >= 2000: cell[0] = cell[1]; flag bit 0
+ *   if min_idx == 9 and min_v >= 2000: cell[9] = cell[8]; flag bit 9
+ *
+ * Pass 2:
+ *   for i = 0 .. cell_count-1:
+ *     update running max/min (with idx) at 0x200027FA / 0x2000282A
+ *     update running max/min of secondary table at 0x2000282C / 0x2000289A
+ *     copy primary[i] to tertiary table at 0x200028A4 + 2*i
+ *     accumulate sum at 0x2000281C
+ */
+void cell_voltage_scan(void)
+{
+    extern void fg_cell_balance(uint8_t cell_idx);
+
+    volatile uint8_t  * const cfg_b          = (volatile uint8_t  *)0x200028D0;
+    volatile uint16_t * const cell_tbl       = (volatile uint16_t *)0x200027D4;
+    volatile uint16_t * const second_tbl     = (volatile uint16_t *)0x20002880;
+    volatile uint16_t * const third_tbl      = (volatile uint16_t *)0x200028A4;
+    volatile uint8_t  * const cached_count   = (volatile uint8_t  *)0x200027FE;
+    volatile uint16_t * const fault_flags    = (volatile uint16_t *)0x200027F0;
+    volatile uint16_t * const mid_average    = (volatile uint16_t *)0x2000286E;
+
+    volatile uint16_t * const max_volt_p2    = (volatile uint16_t *)0x200027FA;
+    volatile uint8_t  * const max_idx_p2     = (volatile uint8_t  *)0x200028CC;
+    volatile uint16_t * const min_volt_p2    = (volatile uint16_t *)0x2000282A;
+    volatile uint8_t  * const min_idx_p2     = (volatile uint8_t  *)0x20002818;
+    volatile uint16_t * const sec_max        = (volatile uint16_t *)0x2000282C;
+    volatile uint16_t * const sec_min        = (volatile uint16_t *)0x2000289A;
+    volatile uint16_t * const sum_accum      = (volatile uint16_t *)0x2000281C;
+
+    /* OEM stack locals (mirroring the [r7+N] uses): */
+    uint16_t pass1_sum  = 0;     /* [r7+12] */
+    uint16_t pass1_max  = 0;     /* [r7+10] */
+    uint8_t  pass1_maxi = 0;     /* [r7+9]  */
+    uint16_t pass1_min  = 0xFFFFu; /* [r7+6]  (init -1 → real min after scan) */
+    uint8_t  pass1_mini = 0;     /* [r7+5]  */
+    uint8_t  i;                  /* [r7+15] */
+
+    uint8_t cell_count = cfg_b[4];
+    *cached_count      = cell_count;
+    *fault_flags       = 0;
+    *mid_average       = 0;
+    *max_volt_p2       = 0;
+    /* OEM sets 0x2000282C := 0 and 0x200028CC := 0xFFFF as well, then
+     * idx markers, etc. */
+    *(volatile uint16_t *)0x2000282C = 0;
+    *(volatile uint8_t  *)0x200028CC = 0;
+    *(volatile uint16_t *)0x2000282A = 0xFFFFu;
+    *(volatile uint16_t *)0x2000289A = 0xFFFFu;
+    *(volatile uint8_t  *)0x20002818 = 0;
+    *(volatile uint16_t *)0x2000281C = 0;
+
+    /* --- Pass 1: max/min/sum -------------------------------- */
+    for (i = 0; i < cell_count; i++) {
+        uint16_t v = cell_tbl[i];
+        pass1_sum = (uint16_t)(pass1_sum + v);
+        if (v > pass1_max) {        /* OEM: bcs skip if max>=v, so update when max<v */
+            pass1_max  = v;
+            pass1_maxi = i;
+        }
+        if (v < pass1_min) {        /* OEM: bls skip if min<=v */
+            pass1_min  = v;
+            pass1_mini = i;
+        }
+    }
+
+    /* average of middle cells = (sum - max - min) >> 3 */
+    *mid_average = (uint16_t)(((uint32_t)pass1_sum - pass1_max - pass1_min) >> 3);
+
+    if ((uint32_t)pass1_max - pass1_min > 49U) {
+        /* --- Pass 1b: balance triggering ------------------- */
+        for (i = 0; i < (uint8_t)(cell_count - 1); i++) {
+            if (i == 4) {
+                if (pass1_maxi == i && pass1_mini == (uint8_t)(i + 1)) {
+                    uint16_t v0 = cell_tbl[i];
+                    uint16_t v1 = cell_tbl[i + 1];
+                    if (v0 < v1) {
+                        fg_cell_balance(i);
+                    }
+                }
+            } else {
+                if (pass1_mini == i && pass1_maxi == (uint8_t)(i + 1)) {
+                    uint16_t v0 = cell_tbl[i];
+                    uint16_t v1 = cell_tbl[i + 1];
+                    if (v0 > v1) {
+                        fg_cell_balance(i);
+                    }
+                }
+            }
+        }
+
+        /* --- Mismatch switch (cached_cc < cell_count cases) - */
+        if (cell_count != *cached_count) {
+            uint8_t k = *cached_count;
+            if (k <= 8) {
+                /* OEM jumps into a flash table at 0x08017050. Each case
+                 * sets bits k and k+1 in fault_flags. Open-coded: */
+                *fault_flags = (uint16_t)(*fault_flags | (1U << k) | (1U << (k + 1)));
+            }
+        }
+
+        /* --- Outlier patch: edge cells with min >= 2000 ----- */
+        if (cell_count == *cached_count && pass1_min >= 2000U) {
+            if (pass1_mini == 0) {
+                cell_tbl[0]   = cell_tbl[1];
+                *fault_flags |= 0x0001U;
+            } else if (pass1_mini == 9) {
+                cell_tbl[9]   = cell_tbl[8];
+                *fault_flags |= 0x0200U;
+            }
+        }
+    }
+
+    /* --- Pass 2: rebuild running max/min trackers ----------- */
+    for (i = 0; i < cell_count; i++) {
+        uint16_t v = cell_tbl[i];
+
+        if (v > *max_volt_p2) {
+            *max_volt_p2 = v;
+            *max_idx_p2  = i;
+        }
+        if (v < *min_volt_p2) {
+            *min_volt_p2 = v;
+            *min_idx_p2  = i;
+        }
+        if (second_tbl[i] > *sec_max) {
+            *sec_max = second_tbl[i];
+        }
+        if (second_tbl[i] < *sec_min) {
+            *sec_min = second_tbl[i];
+        }
+        third_tbl[i] = v;
+        *sum_accum   = (uint16_t)(*sum_accum + v);
+    }
+}
+
+/*
+ * config_init — load + validate the BMS context struct from EEPROM.
+ *
+ * OEM: FUN_08007368 (1220 B). Two SRAM structs participate:
+ *
+ *   s_ctx @ 0x200028D0  — primary configuration context (~208 B).
+ *                         Filled with hard-coded factory defaults
+ *                         throughout, with selected fields validated
+ *                         against EEPROM mirrors.
+ *   s_cfg @ 0x200029A8  — secondary 184-byte struct (zeroed up
+ *                         front, then a single byte at +0x39 set
+ *                         to 1; cfg[+0x40] / [+0x42] cleared during
+ *                         one of the recovery paths).
+ *
+ * The OEM does NOT compare SRAM↔EEPROM with `memcmp_verify` directly.
+ * For each EEPROM-mirrored field it follows a strict pattern:
+ *
+ *     1. `memcpy_oem(src=EEPROM, count, dst=&local_stack)` reads
+ *        the EEPROM bytes into a local stack slot.
+ *     2. Validate: usually `local == 0 || tmp32 != FW_MAGIC`. Some
+ *        fields use only the low byte (`ldrb`); the magic field is
+ *        a single u32.
+ *     3. If invalid: overwrite the local with the fallback default,
+ *        then `memcmp_verify(EEPROM, count, &local)` to persist
+ *        the new value back via SPI-poll write.
+ *     4. Either way, copy the (validated or fallback) local into
+ *        the corresponding `s_ctx` field.
+ *
+ * FW_MAGIC is the OEM 4-byte version stamp `0x011701B1` (= "1.17.1
+ * BMS"), originally read from EEPROM 0x0808002E into `tmp32` at the
+ * top of the function and re-persisted at the bottom if the EEPROM
+ * copy disagrees.
+ *
+ * The bulk of the body (offsets +6 .. +200 of `s_ctx`) is
+ * factory-default initialisation — large blocks of hard-coded
+ * `*(u16 *)(s_ctx + N) = LITERAL;` writes that are *not* read back
+ * from EEPROM. Five of the fields (+2, +14, +16, +18, +68/+69/+70)
+ * are EEPROM-validated.
+ */
+void config_init(void)
+{
+    uint32_t tmp32 = 0;
+    uint16_t tmp16 = 0;
+
+    volatile uint8_t  * const s_ctx = (volatile uint8_t *)0x200028D0;
+    volatile uint8_t  * const s_cfg = (volatile uint8_t *)0x200029A8;
+    const uint32_t FW_MAGIC = 0x011701B1U;
+
+    extern void memcmp_verify(char *actual, uint32_t len, char *expected);
+
+    *(volatile uint32_t *)0x20002C74 = 0;
+
+    for (uint16_t i = 0; i <= 0xB7; i++) {
+        s_cfg[i] = 0;
+    }
+
+    /* s_ctx[0..1] sentinel — OEM: `r2 = 24; r2 += 255; strh r2,[r3,#0]`. */
+    *(volatile uint16_t *)(s_ctx + 0) = 0x0117U;
+
+    /* --- 4-byte FW magic into tmp32 ---------------- */
+    memcpy_oem((const uint8_t *)0x0808002E, 4, (uint8_t *)&tmp32);
+
+    s_cfg[0x39] = 1;
+
+    /* --- s_ctx[+2] (u16) — EEPROM 0x08080006, fallback 0x310 ---- */
+    memcpy_oem((const uint8_t *)0x08080006, 2, (uint8_t *)&tmp16);
+    if (tmp16 == 0 || tmp32 != FW_MAGIC) {
+        tmp16 = 0x0310U;
+        memcmp_verify((char *)0x08080006, 2, (char *)&tmp16);
+    }
+    *(volatile uint16_t *)(s_ctx + 2) = tmp16;
+
+    s_ctx[4]                              = 10;
+    *(volatile uint16_t *)(s_ctx + 6)     = 0x3138U;
+    *(volatile uint16_t *)(s_ctx + 8)     = 0x9E34U;
+    *(volatile uint16_t *)(s_ctx + 10)    = 0x012CU;
+    *(volatile uint16_t *)(s_ctx + 12)    = 0x00F0U;
+
+    /* --- s_ctx[+14] (u16) — EEPROM 0x08080032, fallback 0x0D01 -- */
+    memcpy_oem((const uint8_t *)0x08080032, 2, (uint8_t *)&tmp16);
+    if (tmp16 == 0 || tmp32 != FW_MAGIC) {
+        tmp16 = 0x0D01U;
+        memcmp_verify((char *)0x08080032, 2, (char *)&tmp16);
+    }
+    *(volatile uint16_t *)(s_ctx + 14)    = tmp16;
+
+    /* --- s_ctx[+16] (u8) — EEPROM 0x08080034, fallback 7
+     * (OEM tests only the low byte via `ldrb`). */
+    memcpy_oem((const uint8_t *)0x08080034, 2, (uint8_t *)&tmp16);
+    if ((tmp16 & 0xFFU) == 0 || tmp32 != FW_MAGIC) {
+        tmp16 = (uint16_t)((tmp16 & 0xFF00U) | 7U);
+        memcmp_verify((char *)0x08080034, 2, (char *)&tmp16);
+    }
+    s_ctx[16]                             = (uint8_t)tmp16;
+
+    /* --- s_ctx[+18] (u16) — EEPROM 0x08080036, fallback 0x0C4E -- */
+    memcpy_oem((const uint8_t *)0x08080036, 2, (uint8_t *)&tmp16);
+    if (tmp16 == 0 || tmp32 != FW_MAGIC) {
+        tmp16 = 0x0C4EU;
+        memcmp_verify((char *)0x08080036, 2, (char *)&tmp16);
+    }
+    *(volatile uint16_t *)(s_ctx + 18)    = tmp16;
+
+    /* --- Hard-coded factory defaults, offsets +20 .. +200 ------- */
+    s_ctx[20]                             = 0;
+    *(volatile uint16_t *)(s_ctx + 22)    = 100;
+    *(volatile uint16_t *)(s_ctx + 24)    = 4000;
+    *(volatile uint32_t *)(s_ctx + 28)    = 0x000061A8U; /* 25000 */
+    *(volatile uint32_t *)(s_ctx + 36)    = 0x00002710U; /* 10000 */
+    *(volatile uint16_t *)(s_ctx + 42)    = 0x109AU;
+    *(volatile uint16_t *)(s_ctx + 44)    = 0x0BB8U;     /* 3000 */
+    *(volatile uint16_t *)(s_ctx + 46)    = 0x1036U;
+    *(volatile uint16_t *)(s_ctx + 48)    = 300;
+    *(volatile uint16_t *)(s_ctx + 50)    = 0x10CCU;
+    *(volatile uint16_t *)(s_ctx + 52)    = 300;
+    *(volatile uint16_t *)(s_ctx + 54)    = 0x1036U;
+    *(volatile uint16_t *)(s_ctx + 56)    = 300;
+    *(volatile uint16_t *)(s_ctx + 58)    = 0x0BB8U;
+    *(volatile uint16_t *)(s_ctx + 60)    = 0x1770U;     /* 6000 */
+    *(volatile uint16_t *)(s_ctx + 62)    = 0x0CE4U;     /* 3300 */
+    *(volatile uint16_t *)(s_ctx + 64)    = 300;
+    *(volatile uint16_t *)(s_ctx + 66)    = 0x0AF0U;     /* 2800 */
+    *(volatile uint16_t *)(s_ctx + 68)    = 0x03E8U;     /* 1000 (overridden below) */
+    *(volatile uint16_t *)(s_ctx + 70)    = 0x0CE4U;     /* 3300 (overridden below) */
+    *(volatile uint16_t *)(s_ctx + 72)    = 300;
+    *(volatile uint16_t *)(s_ctx + 74)    = 0x1194U;     /* 4500 */
+    *(volatile uint16_t *)(s_ctx + 76)    = 0x07D0U;     /* 2000 */
+    *(volatile uint16_t *)(s_ctx + 78)    = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 80)    = 0x1770U;
+    *(volatile uint16_t *)(s_ctx + 82)    = 300;
+    *(volatile uint16_t *)(s_ctx + 84)    = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 86)    = 0x7530U;     /* 30000 */
+    *(volatile uint16_t *)(s_ctx + 88)    = 0x07D0U;
+    *(volatile uint16_t *)(s_ctx + 90)    = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 92)    = 0xC350U;     /* 50000 */
+    *(volatile uint16_t *)(s_ctx + 94)    = 300;
+    *(volatile uint16_t *)(s_ctx + 96)    = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 98)    = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 100)   = 150;
+    *(volatile uint16_t *)(s_ctx + 102)   = 0x0BB8U;
+    *(volatile uint16_t *)(s_ctx + 104)   = 0x1194U;
+    *(volatile uint16_t *)(s_ctx + 106)   = 300;
+    *(volatile uint16_t *)(s_ctx + 108)   = 500;
+    s_ctx[110]                            = 0x55;
+    *(volatile uint16_t *)(s_ctx + 112)   = 0x0BB8U;
+    s_ctx[114]                            = 0x52;
+    *(volatile uint16_t *)(s_ctx + 116)   = 0x05DCU;     /* 1500 */
+    s_ctx[118]                            = 40;
+    *(volatile uint16_t *)(s_ctx + 120)   = 0x0BB8U;
+    s_ctx[122]                            = 43;
+    *(volatile uint16_t *)(s_ctx + 124)   = 0x05DCU;
+    s_ctx[126]                            = 110;
+    *(volatile uint16_t *)(s_ctx + 128)   = 0x0BB8U;
+    s_ctx[130]                            = 100;
+    *(volatile uint16_t *)(s_ctx + 132)   = 0x05DCU;
+    s_ctx[134]                            = 20;
+    *(volatile uint16_t *)(s_ctx + 136)   = 0x0BB8U;
+    s_ctx[138]                            = 23;
+    *(volatile uint16_t *)(s_ctx + 140)   = 0x05DCU;
+    s_ctx[142]                            = 135;
+    *(volatile uint16_t *)(s_ctx + 144)   = 0x0BB8U;
+    s_ctx[146]                            = 125;
+    *(volatile uint16_t *)(s_ctx + 148)   = 0x05DCU;
+    *(volatile uint16_t *)(s_ctx + 150)   = 0x07D0U;
+    *(volatile uint16_t *)(s_ctx + 152)   = 500;
+    *(volatile uint16_t *)(s_ctx + 154)   = 500;
+    s_ctx[156]                            = 10;
+    *(volatile uint16_t *)(s_ctx + 158)   = 0x1081U;
+    *(volatile uint16_t *)(s_ctx + 160)   = 0x0BB8U;
+    *(volatile uint16_t *)(s_ctx + 162)   = 0x0C80U;     /* 3200 */
+    *(volatile uint16_t *)(s_ctx + 164)   = 0x0BB8U;
+    /* +166 / +168 — OEM skips. s_ctx is not zeroed beforehand. */
+    *(volatile uint16_t *)(s_ctx + 170)   = 0xC350U;
+    *(volatile uint16_t *)(s_ctx + 172)   = 0x0BB8U;
+    *(volatile uint16_t *)(s_ctx + 174)   = 0x61A8U;
+    *(volatile uint16_t *)(s_ctx + 176)   = 0x0BB8U;
+    *(volatile uint16_t *)(s_ctx + 178)   = 120;
+    *(volatile uint16_t *)(s_ctx + 180)   = 0x02BCU;     /* 700 */
+    s_ctx[182]                            = 0x52;
+    *(volatile uint16_t *)(s_ctx + 184)   = 0x0BB8U;
+    s_ctx[186]                            = 0x2B;
+    *(volatile uint16_t *)(s_ctx + 188)   = 0x0BB8U;
+    s_ctx[190]                            = 0x69;
+    *(volatile uint16_t *)(s_ctx + 192)   = 0x0BB8U;
+    s_ctx[194]                            = 0x1E;
+    *(volatile uint16_t *)(s_ctx + 196)   = 0x0BB8U;
+    s_ctx[198]                            = 0x7D;
+    *(volatile uint16_t *)(s_ctx + 200)   = 0x0BB8U;
+
+    s_ctx[5] = 0;
+
+    /* --- s_ctx[+70] (u8) — EEPROM 0x08080C46, fallback 'A' ------- */
+    memcpy_oem((const uint8_t *)0x08080C46, 1, (uint8_t *)&tmp16);
+    if ((tmp16 & 0xFFU) == 0) {
+        tmp16 = (uint16_t)((tmp16 & 0xFF00U) | 0x41U);
+        memcmp_verify((char *)0x08080C46, 1, (char *)&tmp16);
+    }
+    s_ctx[70]                             = (uint8_t)tmp16;
+
+    /* --- s_ctx[+68] (u8) — EEPROM 0x08080C44, fallback 'A'.
+     * The "missing" path also zeroes cfg[+0x40] / cfg[+0x42] and
+     * persists those zeros to EEPROM at 0x08080C40 / 0x08080C42. */
+    memcpy_oem((const uint8_t *)0x08080C44, 1, (uint8_t *)&tmp16);
+    if ((tmp16 & 0xFFU) == 0) {
+        tmp16 = (uint16_t)((tmp16 & 0xFF00U) | 0x41U);
+        memcmp_verify((char *)0x08080C44, 1, (char *)&tmp16);
+
+        *(volatile uint16_t *)(s_cfg + 0x40) = 0;
+        memcmp_verify((char *)0x08080C40, 2, (char *)(s_cfg + 0x40));
+        *(volatile uint16_t *)(s_cfg + 0x42) = 0;
+        memcmp_verify((char *)0x08080C42, 2, (char *)(s_cfg + 0x42));
+    }
+    s_ctx[68]                             = (uint8_t)tmp16;
+
+    /* --- s_ctx[+69] (u8) — EEPROM 0x08080C45, fallback 'A' ------- */
+    memcpy_oem((const uint8_t *)0x08080C45, 1, (uint8_t *)&tmp16);
+    if ((tmp16 & 0xFFU) == 0) {
+        tmp16 = (uint16_t)((tmp16 & 0xFF00U) | 0x41U);
+        memcmp_verify((char *)0x08080C45, 1, (char *)&tmp16);
+    }
+    s_ctx[69]                             = (uint8_t)tmp16;
+
+    /* If EEPROM FW magic didn't match, persist the canonical stamp. */
+    if (tmp32 != FW_MAGIC) {
+        tmp32 = FW_MAGIC;
+        memcmp_verify((char *)0x0808002E, 4, (char *)&tmp32);
+    }
+}
+

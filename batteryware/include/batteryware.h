@@ -114,7 +114,10 @@ uint32_t flash_op_start(int *ctx);
 
 /* Fuel gauge status */
 bool fg_status_flag_get(void);
+bool fg_status_flag2_get(void);
 void fg_clear_status(void);
+void fg_threshold_check(void);
+uint16_t calculate_rsoc(void);
 
 /* Fault flags — central protection status register at 0x20002C44 */
 extern volatile uint32_t * const g_fault_flags;
