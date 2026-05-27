@@ -129,3 +129,86 @@ void cmd_send_8byte(void)
     cmd_send_8bytes();
     epilogue_thunk();
 }
+
+/*
+ * Command parser (command_parser) — "KEY=VALUE" string command
+ * dispatcher.
+ *
+ * Receives a null-terminated or length-delimited command string.
+ * Parses the command by comparing against a dispatch table of up to
+ * 0x18 (24) commands stored in flash. Each table entry is:
+ *   [1 byte: name_length] [N bytes: command_name] [1 byte: action_code]
+ *
+ * The action_code indexes into a jump table at DAT_0800a080 (flash)
+ * which dispatches to the appropriate command handler.
+ *
+ * On unrecognized commands, calls veneer_a6aa (error handler).
+ */
+void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte)
+{
+    /* Command dispatch table in flash */
+    static const uint8_t * const s_cmd_table = (const uint8_t *)0x08009FC0;
+    /* Jump table for command handlers */
+    void (* const * const s_jump_table)(uint32_t, int, uint8_t) =
+        (void (* const * const)(uint32_t, int, uint8_t))0x0800A080;
+
+    const uint8_t *cmd = (const uint8_t *)buf_addr;
+    uint8_t  cmd_name[24];
+    uint8_t  name_len;
+    uint8_t  i;
+    bool     found;
+
+    (void)cmd_byte;
+
+    /* Extract command name (up to first '=' or end of buffer) */
+    name_len = 0;
+    for (i = 0; i < buf_len && i < 23; i++) {
+        uint8_t c = cmd[i];
+        if (c == '=' || c == '\0' || c == '\r' || c == '\n') {
+            break;
+        }
+        cmd_name[i] = c;
+    }
+    name_len = i;
+    cmd_name[name_len] = '\0';
+
+    /* Search the command table */
+    found = false;
+    const uint8_t *entry = s_cmd_table;
+    for (i = 0; i < 24; i++) {
+        uint8_t entry_len = *entry;
+
+        if (entry_len == 0) {
+            break;  /* end of table */
+        }
+
+        if (entry_len == name_len) {
+            uint8_t j;
+            bool match = true;
+            for (j = 0; j < name_len; j++) {
+                if (entry[1 + j] != cmd_name[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                /* Found — dispatch via jump table using action byte */
+                uint8_t action = entry[1 + entry_len];
+                if (action < 24) {
+                    s_jump_table[action](buf_addr, buf_len, action);
+                }
+                found = true;
+                break;
+            }
+        }
+
+        /* Advance to next entry: 1 (len) + len (name) + 1 (action) */
+        entry += entry_len + 2;
+    }
+
+    if (!found) {
+        /* Unrecognized command — error */
+        extern void veneer_a6aa(void);
+        veneer_a6aa();
+    }
+}
