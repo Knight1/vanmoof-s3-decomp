@@ -677,6 +677,16 @@ uint32_t flash_program_start(void *ctx)
             if ((reg[0] & 1) == 1) {
                 return 0;
             }
+
+/*
+ * Flash erase page wrapper (FUN_0800edd6).
+ *
+ * Thin wrapper around flash_page_erase — returns the result directly.
+ */
+bool flash_erase_page_wrapper(uint32_t timeout_ticks)
+{
+    return flash_page_erase(timeout_ticks);
+}
         } while ((tick_get() - start) < 0xB);
 
         /* Timeout */

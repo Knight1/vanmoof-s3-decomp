@@ -222,3 +222,140 @@ uint32_t tick_timeout_get(void)
 {
     return *(volatile uint32_t *)0x20004814;
 }
+
+/*
+ * Clock configuration function (FUN_08010554).
+ *
+ * Configures the system clock based on a parameter struct: checks
+ * the clock source register, switches SWS if needed, configures
+ * PLL, APB prescalers, and flash wait states.
+ * Returns 0 on success, 1 on error, 3 on timeout.
+ */
+int8_t clock_config(uint32_t *param, uint32_t clk_src)
+{
+    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000;
+    volatile uint32_t * const PWR = (volatile uint32_t *)0x40007000;
+    const int8_t * const s_shifts = (const int8_t *)0x080107D8;
+    volatile uint32_t * const s_out = (volatile uint32_t *)0x20002C00;
+
+    if (param == NULL) {
+        return 1;
+    }
+
+    if ((RCC[0x13 / 4] & 1) < clk_src) {
+        RCC[0x13 / 4] = clk_src | (RCC[0x13 / 4] & 0xFFFFFFFE);
+        uint32_t start = tick_get();
+        do {
+            if (clk_src == (RCC[0x13 / 4] & 1)) goto clock_switch_done;
+        } while ((tick_get() - start) <= 1000);
+        return 3;
+    }
+
+clock_switch_done:
+    if ((*param & 2) != 0) {
+        RCC[0x13 / 4] = param[2] | (RCC[0x13 / 4] & 0xFFFFFF0F);
+    }
+
+    if ((*param & 1) == 0) {
+        /* Clock config phase 2 */
+        if (clk_src < (RCC[0x13 / 4] & 1)) {
+            RCC[0x13 / 4] = clk_src | (RCC[0x13 / 4] & 0xFFFFFFFE);
+            uint32_t start = tick_get();
+            do {
+                if (clk_src == (RCC[0x13 / 4] & 1)) goto phase2_done;
+            } while ((tick_get() - start) <= 1000);
+            return 3;
+        }
+
+phase2_done:
+        if ((*param & 4) != 0) {
+            RCC[0x13 / 4] = param[3] | (RCC[0x13 / 4] & 0xFFFFFF0F);
+        }
+        if ((*param & 8) != 0) {
+            RCC[0x13 / 4] = (param[4] << 3) | (RCC[0x13 / 4] & 0xFFFFCFFF);
+        }
+
+        uint32_t divisor = (uint32_t)clock_prescaler_val();
+        int8_t shift = s_shifts[(RCC[0x13 / 4] >> 4) & 0xF];
+        *s_out = divisor >> shift;
+
+        return flash_timeout_check(3);
+    }
+
+    /* Phase 1: switch clock source */
+    if (param[1] == 2) {
+        if ((RCC[0x13 / 4] & 0x20000) == 0) return 1;
+    } else if (param[1] == 3) {
+        if ((RCC[0x13 / 4] & 0x2000000) == 0) return 1;
+    } else if (param[1] == 1) {
+        if ((RCC[0x13 / 4] & 4) == 0) return 1;
+    } else {
+        if ((RCC[0x13 / 4] & 0x200) == 0) return 1;
+    }
+
+    RCC[0x13 / 4] = param[1] | (RCC[0x13 / 4] & 0xFFFFFFFC);
+    uint32_t start = tick_get();
+    if (param[1] == 2) {
+        do {
+            if ((RCC[0x13 / 4] & 0xC) == 8) goto phase1_done;
+        } while ((tick_get() - start) <= 1000);
+        return 3;
+    } else if (param[1] == 3) {
+        do {
+            if ((RCC[0x13 / 4] & 0xC) == 0xC) goto phase1_done;
+        } while ((tick_get() - start) <= 1000);
+        return 3;
+    } else if (param[1] == 1) {
+        do {
+            if ((RCC[0x13 / 4] & 0xC) == 4) goto phase1_done;
+        } while ((tick_get() - start) <= 1000);
+        return 3;
+    } else {
+        do {
+            if ((RCC[0x13 / 4] & 0xC) == 0) goto phase1_done;
+        } while ((tick_get() - start) <= 1000);
+        return 3;
+    }
+
+phase1_done:
+    return 0;
+}
+
+/*
+ * Timer scheduler (FUN_08014af8) — periodic timer with divisors.
+ *
+ * Increments two counters. At 1000ms: sets all flag bits (0x3F).
+ * At 500ms: sets bits 0, 1, 3.
+ * At 250ms: sets bits 0, 1, 2.
+ * At 100ms: sets bits 0, 1.
+ * At 10ms: sets bit 0.
+ * Otherwise sets bit 0.
+ */
+void timer_scheduler(void)
+{
+    volatile uint32_t * const s_cnt = (volatile uint32_t *)0x20002B40;
+    volatile uint16_t * const s_ms  = (volatile uint16_t *)0x20002B44;
+    volatile uint32_t * const s_flags = (volatile uint32_t *)0x20002B48;
+
+    *s_cnt += 1;
+    uint16_t ms = *s_ms + 1;
+    *s_ms = ms;
+
+    if (ms < 1000) {
+        extern uint32_t veneer_1558c(uint32_t, uint32_t);
+        if ((uint32_t)(veneer_1558c(*s_ms, 500) & 0xFFFF) == 0) {
+            *s_flags |= 0x1F;
+        } else if ((uint32_t)(veneer_1558c(*s_ms, 250) & 0xFFFF) == 0) {
+            *s_flags |= 0xB;
+        } else if ((uint32_t)(veneer_1558c(*s_ms, 100) & 0xFFFF) == 0) {
+            *s_flags |= 0x7;
+        } else if ((uint32_t)(veneer_1558c(*s_ms, 10) & 0xFFFF) == 0) {
+            *s_flags |= 0x3;
+        } else {
+            *s_flags |= 0x1;
+        }
+    } else {
+        *s_ms = 0;
+        *s_flags |= 0x3F;
+    }
+}

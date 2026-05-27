@@ -76,8 +76,12 @@ void uart_check_parity_error(void);
 void uart_check_overrun_error(void);
 void uart_puthex_byte(uint8_t b);
 void uart_puthex_16(uint16_t val);
+void uart_puthex_32(uint32_t val);
 void uart_puts(char *str);
+void uart_putdec_64(uint32_t lo, uint32_t hi, uint8_t digits);
 void uart_resp_handler(void);
+void uart_protocol_handler(uint8_t byte);
+void uart_printf(uint8_t *fmt);
 
 /* Flash controller operations */
 uint32_t flash_enable_prefetch(void);
@@ -90,6 +94,7 @@ uint32_t flash_verify_header(void);
 
 /* Flash page erase + interrupt priority setup */
 bool flash_page_erase(uint32_t timeout_ticks);
+bool flash_erase_page_wrapper(uint32_t timeout_ticks);
 void interrupt_set_priority(uint8_t irqn, uint32_t priority);
 void flash_opt_byte_op(uint8_t op, uint32_t val);
 uint32_t flash_program_start(void *ctx);
@@ -223,9 +228,11 @@ uint32_t tick_get(void);
 uint32_t tick_counter_read(void);
 int32_t  clock_prescaler_val(void);
 uint32_t rcc_reconfigure(uint32_t *param);
+int8_t   clock_config(uint32_t *param, uint32_t clk_src);
 uint32_t tick_val_get(void);
 uint32_t tick_ms_get(void);
 uint32_t tick_timeout_get(void);
+void     timer_scheduler(void);
 
 /* NVIC interrupt enable */
 void nvic_enable_irq(uint8_t irqn);
