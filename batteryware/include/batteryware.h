@@ -148,6 +148,7 @@ void fg_read_loop(void *ctx);
 void fg_scan(void);
 void fg_coulomb_update(void);
 void cell_balance_update(void);
+void bms_init(void);
 
 /* Shipping mode */
 void shipping_mode_check(void);
