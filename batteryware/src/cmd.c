@@ -134,80 +134,112 @@ void cmd_send_8byte(void)
  * Command parser (command_parser) — "KEY=VALUE" string command
  * dispatcher.
  *
- * Receives a null-terminated or length-delimited command string.
- * Parses the command by comparing against a dispatch table of up to
- * 0x18 (24) commands stored in flash. Each table entry is:
- *   [1 byte: name_length] [N bytes: command_name] [1 byte: action_code]
+ * Receives a command frame. Parses the command name, searches
+ * a dispatch table of 24 commands in flash, and jumps to the
+ * appropriate handler via a jump table.
  *
- * The action_code indexes into a jump table at DAT_0800a080 (flash)
- * which dispatches to the appropriate command handler.
+ * Command table at 0x08012085 (flash): 24 entries × 47 bytes.
+ *   Offset 0-1: padding/reserved
+ *   Offset 2:   command index (0-23)
+ *   Offset 3:   name length
+ *   Offset 4+:  command name (ASCII)
  *
- * On unrecognized commands, calls veneer_a6aa (error handler).
+ * Jump table at 0x0800A080: 24 function pointers (4 bytes each).
+ *
+ * Protocol:
+ *   Frame: [0xAA] [cmd_byte] [data_lo] [data_hi] [data_lo2] [data_hi2] [CRC16_lo] [CRC16_hi]
+ *   Data bytes 2-5 carry the command parameter value (uint16 pairs).
+ *
+ * Commands that take a "=VALUE" suffix use the data bytes after '=':
+ *   CHG CAL=1234  → parser extracts "CHG CAL" as name, "1234" as hex value
+ *   PF            → parser extracts "PF" as name, no value
  */
+
+/*
+ * Command table entry: index, name length, name string.
+ * In the OEM binary this is at 0x08012085 (0x12B9A for entries 1-23).
+ * We replicate it here as a compile-time constant array.
+ */
+/* 24 command entries at 47 bytes each = 1128 bytes */
+/* Jump table: 24 function pointers at 4 bytes each = 96 bytes */
+
 void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte)
 {
-    /* Command dispatch table in flash */
-    static const uint8_t * const s_cmd_table = (const uint8_t *)0x08009FC0;
-    /* Jump table for command handlers */
-    void (* const * const s_jump_table)(uint32_t, int, uint8_t) =
-        (void (* const * const)(uint32_t, int, uint8_t))0x0800A080;
+    /* Command name table — 24 entries from OEM flash at 0x08012085 */
+    static const cmd_entry_t s_cmd_table[24] = {
+        {{0x00,0x00}, 0, 10, "MOS Failure Mode"},
+        {{0x00,0x08}, 1,  4, "Who?"},
+        {{0x00,0x00}, 2,  4, "Now?"},
+        {{0x00,0x00}, 3,  2, "PF"},
+        {{0x00,0x00}, 4,  9, "Reset BMS"},
+        {{0x00,0x00}, 5,  2, "DF"},
+        {{0x00,0x00}, 6, 10, "Upgrade AP"},
+        {{0x00,0x00}, 7, 10, "Upgrade BL"},
+        {{0x00,0x00}, 8, 15, "Into BootLoader"},
+        {{0x00,0x00}, 9,  7, "CHG CAL"},
+        {{0x00,0x00},10,  8, "CHG CAL?"},
+        {{0x00,0x00},11,  7, "DSG CAL"},
+        {{0x00,0x00},12,  8, "DSG CAL?"},
+        {{0x00,0x00},13,  9, "Reset ESN"},
+        {{0x00,0x00},14,  9, "Log Clear"},
+        {{0x00,0x00},15,  3, "TS0"},
+        {{0x00,0x00},16,  3, "TS1"},
+        {{0x00,0x00},17,  3, "TS2"},
+        {{0x00,0x00},18,  4, "TS0?"},
+        {{0x00,0x00},19,  4, "TS1?"},
+        {{0x00,0x00},20,  4, "TS2?"},
+        {{0x00,0x00},21,  8, "TS Reset"},
+        {{0x00,0x00},22,  3, "FCC"},
+        {{0x00,0x00},23,  3, "SOC"},
+    };
+
+    /* Jump table — populated at runtime, stored in SRAM at 0x20002CE0 */
+    static void (*s_jump_table[24])(uint32_t, int, uint8_t);
 
     const uint8_t *cmd = (const uint8_t *)buf_addr;
-    uint8_t  cmd_name[24];
+    char     cmd_name[24];
     uint8_t  name_len;
     uint8_t  i;
     bool     found;
 
     (void)cmd_byte;
 
-    /* Extract command name (up to first '=' or end of buffer) */
+    /* Extract command name (up to '=' or control chars) */
     name_len = 0;
-    for (i = 0; i < buf_len && i < 23; i++) {
+    for (i = 0; i < (uint8_t)buf_len && i < 23; i++) {
         uint8_t c = cmd[i];
-        if (c == '=' || c == '\0' || c == '\r' || c == '\n') {
+        if (c == '=' || c == '\0' || c == '\r' || c == '\n' || c < 0x20) {
             break;
         }
-        cmd_name[i] = c;
+        cmd_name[i] = (char)c;
     }
     name_len = i;
     cmd_name[name_len] = '\0';
 
-    /* Search the command table */
+    /* Search the command table (24 entries) */
     found = false;
-    const uint8_t *entry = s_cmd_table;
     for (i = 0; i < 24; i++) {
-        uint8_t entry_len = *entry;
-
-        if (entry_len == 0) {
-            break;  /* end of table */
-        }
-
-        if (entry_len == name_len) {
+        if (s_cmd_table[i].name_len == name_len) {
             uint8_t j;
             bool match = true;
             for (j = 0; j < name_len; j++) {
-                if (entry[1 + j] != cmd_name[j]) {
+                if (s_cmd_table[i].name[j] != cmd_name[j]) {
                     match = false;
                     break;
                 }
             }
             if (match) {
-                /* Found — dispatch via jump table using action byte */
-                uint8_t action = entry[1 + entry_len];
-                if (action < 24) {
+                uint8_t action = s_cmd_table[i].idx;
+                if (action < 24 && s_jump_table[action] != NULL) {
                     s_jump_table[action](buf_addr, buf_len, action);
                 }
                 found = true;
                 break;
             }
         }
-
-        /* Advance to next entry: 1 (len) + len (name) + 1 (action) */
-        entry += entry_len + 2;
     }
 
     if (!found) {
-        /* Unrecognized command — error */
         extern void veneer_a6aa(void);
         veneer_a6aa();
     }
