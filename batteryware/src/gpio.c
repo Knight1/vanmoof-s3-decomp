@@ -81,87 +81,88 @@ bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit)
  * with `bits[1:0]=mode, bits[5:4]=speed, bits[7:6]=pupd` per pin — that
  * was guesswork and doesn't match OEM at all.
  */
-void gpio_pin_config(uint32_t *gpio_base, uint32_t *cfg)
+void gpio_pin_config(uint32_t *gpio_base, gpio_pin_cfg_t *cfg)
 {
     volatile uint32_t * const SYSCFG       = (volatile uint32_t *)0x40010000;
     volatile uint32_t * const EXTI         = (volatile uint32_t *)0x40010400;
     volatile uint32_t * const RCC_APB2ENR  = (volatile uint32_t *)0x40021034;
 
     volatile uint32_t *gp = (volatile uint32_t *)gpio_base;
-    uint32_t i;
-    uint32_t scratch;
-    uint32_t pin_mask;
+    const uint32_t mode_lo4 = cfg->mode & 0xFU;
 
-    /* OEM literally zeroes scratch / pin_mask / i on entry. */
-    scratch  = 0;
-    pin_mask = 0;
-    (void)scratch;
-
-    for (i = 0; (cfg[0] >> i) != 0; i++) {
-        pin_mask = cfg[0] & (1U << i);
+    for (uint32_t i = 0; (cfg->pin_mask >> i) != 0; i++) {
+        const uint32_t pin_mask = cfg->pin_mask & (1U << i);
         if (pin_mask == 0) {
             continue;
         }
 
         const uint32_t shift2 = i * 2;
-        const uint32_t mode   = cfg[1];
 
-        /* --- OSPEEDR + OTYPER (output/AF modes, ± OTYPE flag) ------ */
-        if (mode == 1 || mode == 2 || mode == 17 || mode == 18) {
-            uint32_t v = gp[2];                       /* OSPEEDR (+0x08) */
+        /* --- OSPEEDR + OTYPER ---------------------------------------
+         * Only configured for output (1) / AF (2) modes, with or
+         * without the OTYPE_OD bit set (so {1, 2, 0x11, 0x12}).
+         * Other modes (input/analog) ignore both registers. */
+        if (mode_lo4 == GPIO_MODE_OUTPUT ||
+            mode_lo4 == GPIO_MODE_AF     ||
+            mode_lo4 == (GPIO_MODE_OUTPUT | GPIO_OTYPE_OD) ||
+            mode_lo4 == (GPIO_MODE_AF     | GPIO_OTYPE_OD)) {
+
+            uint32_t v = gp[2];                              /* OSPEEDR (+0x08) */
             v &= ~(3U << shift2);
-            v |=  (cfg[3] << shift2);
+            v |=  (cfg->speed << shift2);
             gp[2] = v;
 
-            v  = gp[1];                                /* OTYPER  (+0x04) */
+            v  = gp[1];                                       /* OTYPER  (+0x04) */
             v &= ~(1U << i);
-            v |= (((mode >> 4) & 1U) << i);
+            v |= (((cfg->mode & GPIO_OTYPE_OD) ? 1U : 0U) << i);
             gp[1] = v;
         }
 
-        /* --- PUPDR (always) ---------------------------------------- */
+        /* --- PUPDR (always) ----------------------------------------- */
         {
-            uint32_t v = gp[3];                        /* PUPDR (+0x0C) */
+            uint32_t v = gp[3];                               /* PUPDR (+0x0C) */
             v &= ~(3U << shift2);
-            v |=  (cfg[2] << shift2);
+            v |=  (cfg->pupd << shift2);
             gp[3] = v;
         }
 
-        /* --- AFRL / AFRH (alternate-function modes only) ----------- */
-        if (mode == 2 || mode == 18) {
-            uint32_t afr_idx   = (i >> 3) + 8;        /* AFRL=8 (+0x20), AFRH=9 (+0x24) */
-            uint32_t afr_shift = (i & 7) * 4;
+        /* --- AFRL / AFRH (alternate-function modes only) ------------ */
+        if (mode_lo4 == GPIO_MODE_AF ||
+            mode_lo4 == (GPIO_MODE_AF | GPIO_OTYPE_OD)) {
+
+            const uint32_t afr_idx   = (i >> 3) + 8;           /* AFRL=8 (+0x20), AFRH=9 (+0x24) */
+            const uint32_t afr_shift = (i & 7) * 4;
             uint32_t v = gp[afr_idx];
             v &= ~(0xFU << afr_shift);
-            v |=  (cfg[4] << afr_shift);
+            v |=  (cfg->af << afr_shift);
             gp[afr_idx] = v;
         }
 
-        /* --- MODER (always) ---------------------------------------- */
+        /* --- MODER (always) ----------------------------------------- */
         {
-            uint32_t v = gp[0];                        /* MODER (+0x00) */
+            uint32_t v = gp[0];                                /* MODER (+0x00) */
             v &= ~(3U << shift2);
-            v |=  ((mode & 3U) << shift2);
+            v |=  ((cfg->mode & 3U) << shift2);
             gp[0] = v;
         }
 
-        /* --- EXTI / SYSCFG (cfg[1] bit 28 enables this whole block) - */
-        if ((mode & 0x10000000U) == 0) {
+        /* --- SYSCFG_EXTICRx + EXTI ---------------------------------- */
+        if ((cfg->mode & GPIO_EXTI_ENABLE) == 0) {
             continue;
         }
 
-        *RCC_APB2ENR |= 1U;                            /* SYSCFG clock */
+        *RCC_APB2ENR |= 1U;                                    /* SYSCFG clock */
 
         uint32_t port_code;
-        if      (gpio_base == (uint32_t *)0x50000000) port_code = 0;
-        else if (gpio_base == (uint32_t *)0x50000400) port_code = 1;
-        else if (gpio_base == (uint32_t *)0x50000800) port_code = 2;
-        else if (gpio_base == (uint32_t *)0x50000C00) port_code = 3;
-        else if (gpio_base == (uint32_t *)0x50001000) port_code = 4;
-        else if (gpio_base == (uint32_t *)0x50001C00) port_code = 5;
+        if      (gpio_base == (uint32_t *)0x50000000) port_code = 0;  /* GPIOA */
+        else if (gpio_base == (uint32_t *)0x50000400) port_code = 1;  /* GPIOB */
+        else if (gpio_base == (uint32_t *)0x50000800) port_code = 2;  /* GPIOC */
+        else if (gpio_base == (uint32_t *)0x50000C00) port_code = 3;  /* GPIOD */
+        else if (gpio_base == (uint32_t *)0x50001000) port_code = 4;  /* GPIOE */
+        else if (gpio_base == (uint32_t *)0x50001C00) port_code = 5;  /* GPIOH */
         else                                          port_code = 6;
 
-        const uint32_t exticr_idx   = (i >> 2) + 2;    /* EXTICR1..4 at SYSCFG[2..5] */
+        const uint32_t exticr_idx   = (i >> 2) + 2;            /* EXTICR1..4 at SYSCFG[2..5] */
         const uint32_t exticr_shift = (i & 3) * 4;
         {
             uint32_t v = SYSCFG[exticr_idx];
@@ -171,29 +172,17 @@ void gpio_pin_config(uint32_t *gpio_base, uint32_t *cfg)
         }
 
         /* EXTI->IMR / EMR / RTSR / FTSR — clear-then-conditionally-set */
-        {
-            uint32_t v = EXTI[0];
+        struct { uint32_t bit; volatile uint32_t *reg; } trig[] = {
+            { GPIO_EXTI_IMR,  &EXTI[0] },
+            { GPIO_EXTI_EMR,  &EXTI[1] },
+            { GPIO_EXTI_RTSR, &EXTI[2] },
+            { GPIO_EXTI_FTSR, &EXTI[3] },
+        };
+        for (uint32_t k = 0; k < 4; k++) {
+            uint32_t v = *trig[k].reg;
             v &= ~pin_mask;
-            if (mode & 0x00010000U) v |= pin_mask;
-            EXTI[0] = v;
-        }
-        {
-            uint32_t v = EXTI[1];
-            v &= ~pin_mask;
-            if (mode & 0x00020000U) v |= pin_mask;
-            EXTI[1] = v;
-        }
-        {
-            uint32_t v = EXTI[2];
-            v &= ~pin_mask;
-            if (mode & 0x00100000U) v |= pin_mask;
-            EXTI[2] = v;
-        }
-        {
-            uint32_t v = EXTI[3];
-            v &= ~pin_mask;
-            if (mode & 0x00200000U) v |= pin_mask;
-            EXTI[3] = v;
+            if (cfg->mode & trig[k].bit) v |= pin_mask;
+            *trig[k].reg = v;
         }
     }
 }
@@ -402,11 +391,8 @@ uint32_t bytes_to_words(uint32_t **dst_pp, const uint8_t *src, uint32_t byte_cou
  */
 void gpio_init_buttons(void)
 {
-    uint32_t cfg[5];
-
-    extern void gpio_pin_config(uint32_t *gpio_base, uint32_t *cfg);
-
-    memset_byte_fill((uint8_t *)cfg, 0, 20);
+    gpio_pin_cfg_t cfg;
+    memset_byte_fill((uint8_t *)&cfg, 0, sizeof cfg);
 
     /* RCC->IOPENR (0x4002102C) — enable GPIOA(bit0), GPIOB(bit1),
      * GPIOC(bit2), GPIOH(bit7). The "store-bit-to-stack-then-read"
@@ -423,56 +409,58 @@ void gpio_init_buttons(void)
     }
 
     /* Initial pin drives — BEFORE pin-mode configuration. */
-    gpio_bit_write(0x50000000, 0x0010, 0);   /* GPIOA  PA4               LOW  */
+    gpio_bit_write(0x50000000, 0x0010, 0);   /* GPIOA  PA4                       LOW  */
     gpio_bit_write(0x50000000, 0x91CF, 1);   /* GPIOA  PA0/1/2/3/6/7/8/11/12/15  HIGH */
-    gpio_bit_write(0x50000400, 0x0287, 0);   /* GPIOB  PB0/1/2/7/9         LOW  */
-    gpio_bit_write(0x50000400, 0xF104, 1);   /* GPIOB  PB2/8/12/13/14/15   HIGH */
-    gpio_bit_write(0x50001C00, 0x0002, 1);   /* GPIOH  PH1                 HIGH */
+    gpio_bit_write(0x50000400, 0x0287, 0);   /* GPIOB  PB0/1/2/7/9               LOW  */
+    gpio_bit_write(0x50000400, 0xF104, 1);   /* GPIOB  PB2/8/12/13/14/15         HIGH */
+    gpio_bit_write(0x50001C00, 0x0002, 1);   /* GPIOH  PH1                       HIGH */
 
-    /* --- 7 pin-config calls, reusing the same cfg block ---------- */
+    /* The OEM reuses the same cfg buffer across all 7 calls, mutating
+     * fields between calls; calls 5 and 7 inherit `speed` from the
+     * preceding call (immaterial since both target input pins). */
 
-    /* Call 1 — GPIOC pin 13. */
-    cfg[0] = 0x2000;
-    cfg[1] = 0x10210000;
-    cfg[2] = 0;
-    gpio_pin_config((uint32_t *)0x50000800, cfg);
+    /* PC13 — power button (falling-edge EXTI). */
+    cfg.pin_mask = 0x2000;
+    cfg.mode     = GPIO_MODE_INPUT | GPIO_EXTI_ENABLE | GPIO_EXTI_IMR | GPIO_EXTI_FTSR;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    gpio_pin_config((uint32_t *)0x50000800, &cfg);
 
-    /* Call 2 — GPIOB pin 0. */
-    cfg[0] = 0x0001;
-    cfg[1] = 0x10210000;
-    cfg[2] = 0;
-    gpio_pin_config((uint32_t *)0x50000400, cfg);
+    /* PB0 — second button (falling-edge EXTI). */
+    cfg.pin_mask = 0x0001;
+    cfg.mode     = GPIO_MODE_INPUT | GPIO_EXTI_ENABLE | GPIO_EXTI_IMR | GPIO_EXTI_FTSR;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    gpio_pin_config((uint32_t *)0x50000400, &cfg);
 
-    /* Call 3 — GPIOB pin 1, mode 1, pull 3. */
-    cfg[0] = 0x0002;
-    cfg[1] = 1;
-    cfg[2] = 0;
-    cfg[3] = 3;
-    gpio_pin_config((uint32_t *)0x50000400, cfg);
+    /* PB1 — output (very-high speed). */
+    cfg.pin_mask = 0x0002;
+    cfg.mode     = GPIO_MODE_OUTPUT;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    cfg.speed    = GPIO_SPEED_VHIGH;
+    gpio_pin_config((uint32_t *)0x50000400, &cfg);
 
-    /* Call 4 — GPIOA pin mask 0x911F, mode 1, pull 3. */
-    cfg[0] = 0x911F;
-    cfg[1] = 1;
-    cfg[2] = 0;
-    cfg[3] = 3;
-    gpio_pin_config((uint32_t *)0x50000000, cfg);
+    /* GPIOA mask 0x911F — outputs (very-high speed). */
+    cfg.pin_mask = 0x911F;
+    cfg.mode     = GPIO_MODE_OUTPUT;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    cfg.speed    = GPIO_SPEED_VHIGH;
+    gpio_pin_config((uint32_t *)0x50000000, &cfg);
 
-    /* Call 5 — GPIOA pin mask 0x0C00, mode 0 (cfg[3] stays 3 from call 4). */
-    cfg[0] = 0x0C00;
-    cfg[1] = 0;
-    cfg[2] = 0;
-    gpio_pin_config((uint32_t *)0x50000000, cfg);
+    /* GPIOA mask 0x0C00 — inputs; .speed inherits from previous call. */
+    cfg.pin_mask = 0x0C00;
+    cfg.mode     = GPIO_MODE_INPUT;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    gpio_pin_config((uint32_t *)0x50000000, &cfg);
 
-    /* Call 6 — GPIOB pin mask 0xF387, mode 1, pull 3. */
-    cfg[0] = 0xF387;
-    cfg[1] = 1;
-    cfg[2] = 0;
-    cfg[3] = 3;
-    gpio_pin_config((uint32_t *)0x50000400, cfg);
+    /* GPIOB mask 0xF387 — outputs (very-high speed). */
+    cfg.pin_mask = 0xF387;
+    cfg.mode     = GPIO_MODE_OUTPUT;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    cfg.speed    = GPIO_SPEED_VHIGH;
+    gpio_pin_config((uint32_t *)0x50000400, &cfg);
 
-    /* Call 7 — GPIOB pin mask 0x0C40, mode 0 (cfg[3] stays 3). */
-    cfg[0] = 0x0C40;
-    cfg[1] = 0;
-    cfg[2] = 0;
-    gpio_pin_config((uint32_t *)0x50000400, cfg);
+    /* GPIOB mask 0x0C40 — inputs; .speed inherits from previous call. */
+    cfg.pin_mask = 0x0C40;
+    cfg.mode     = GPIO_MODE_INPUT;
+    cfg.pupd     = GPIO_PUPD_NONE;
+    gpio_pin_config((uint32_t *)0x50000400, &cfg);
 }

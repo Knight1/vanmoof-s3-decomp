@@ -161,6 +161,21 @@ void shipping_mode_check(void);
 void rsoc_lookup(void);
 void rsoc_set(uint8_t percent);
 
+/* Command dispatch table entry.
+ *
+ * OEM layout (per 47-byte slot at 0x08012b9c..0x08012fd5):
+ *     byte 0     : idx (1..23)
+ *     byte 1     : name_len
+ *     byte 2..   : name (zero-padded to 47 bytes total)
+ *
+ * Our decomp uses a smaller pointer-based form since we can reference
+ * the names directly from `strings.c`. */
+typedef struct {
+    uint8_t      idx;
+    uint8_t      name_len;
+    const char  *name;
+} cmd_entry_t;
+
 /* Modbus command response helpers */
 void cmd_counter_inc(uint16_t frame_word);
 void cmd_counter_inc_v2(uint16_t frame_word);
@@ -261,6 +276,51 @@ void nvic_enable_irq_s_dsb(int8_t irqn);
 uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
 /* Flash unlock — alias for flash_unlock_both */
 void flash_unlock(void);
+/* USART bus config — configure USART for SMBus */
+int usart_bus_config(void *cfg, uint8_t param);
+
+/* GPIO pin configuration struct passed to gpio_pin_config.
+ *
+ * Layout matches the OEM 5×u32 buffer at offsets {0, 4, 8, 12, 16}.
+ * Callers may reuse a single instance across multiple calls (OEM
+ * does this — see gpio_init_buttons); fields that aren't explicitly
+ * re-assigned inherit their value from the previous call. */
+typedef struct {
+    uint32_t pin_mask;   /* which pins of the GPIO port to configure  */
+    uint32_t mode;       /* mode word — bitfield (see GPIO_MODE_* etc.) */
+    uint32_t pupd;       /* PUPDR value: GPIO_PUPD_NONE / _UP / _DOWN  */
+    uint32_t speed;      /* OSPEEDR value: GPIO_SPEED_LOW .. _VHIGH    */
+    uint32_t af;         /* alternate-function number 0..15            */
+} gpio_pin_cfg_t;
+
+/* gpio_pin_cfg_t.mode bit layout (note: bits combine — e.g. an EXTI
+ * falling-edge input is `INPUT | EXTI_ENABLE | EXTI_IMR | EXTI_FTSR`).
+ *   bits[1:0]  MODER  (input/output/AF/analog)
+ *   bit  4     OTYPER (push-pull/open-drain — only honoured for output and AF modes)
+ *   bits[16,17,20,21] EXTI line enables (only honoured when EXTI_ENABLE is set)
+ *   bit  28    EXTI block enable — gates the entire SYSCFG/EXTI path
+ */
+#define GPIO_MODE_INPUT     0x00000000U
+#define GPIO_MODE_OUTPUT    0x00000001U
+#define GPIO_MODE_AF        0x00000002U
+#define GPIO_MODE_ANALOG    0x00000003U
+#define GPIO_OTYPE_OD       0x00000010U  /* bit 4 — open-drain (default push-pull) */
+#define GPIO_EXTI_IMR       0x00010000U  /* bit 16 — unmask interrupt           */
+#define GPIO_EXTI_EMR       0x00020000U  /* bit 17 — unmask event               */
+#define GPIO_EXTI_RTSR      0x00100000U  /* bit 20 — rising-edge trigger        */
+#define GPIO_EXTI_FTSR      0x00200000U  /* bit 21 — falling-edge trigger       */
+#define GPIO_EXTI_ENABLE    0x10000000U  /* bit 28 — enable the EXTI block      */
+
+/* PUPDR values */
+#define GPIO_PUPD_NONE      0U
+#define GPIO_PUPD_UP        1U
+#define GPIO_PUPD_DOWN      2U
+
+/* OSPEEDR values */
+#define GPIO_SPEED_LOW      0U
+#define GPIO_SPEED_MED      1U
+#define GPIO_SPEED_HIGH     2U
+#define GPIO_SPEED_VHIGH    3U
 /* OEM rodata strings (src/strings.c). See that file for layout +
  * the per-string OEM address. */
 extern const char s_chg_cal_ok[];
