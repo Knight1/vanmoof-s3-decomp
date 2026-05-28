@@ -158,7 +158,7 @@ void peripheral_init(bool arg)
  *   0x20002C60  g_cmp1             voltage comparator 1 (uint16)
  *   0x20002C64  g_cmp2             voltage comparator 2 (uint16)
  */
-void main_loop(void)
+int main(void)
 {
     extern void bms_setup(void);
 
@@ -255,7 +255,7 @@ void main_loop(void)
             ((*g_flags >> 2) & 1) == 0) {
             if (*g_state < 0x1A) {
                 g_state_jump_table[*g_state]();
-                return;
+                return 0;
             }
             state_handler_01();
         }

@@ -196,7 +196,7 @@ void bms_set_state(uint8_t state);
 void batteryware_main(void);
 void peripheral_init(bool arg);
 void main_clock_setup(void);
-void main_loop(void);
+int  main(void);
 
 /* State machine handlers */
 void state_handler_01(void);
@@ -278,6 +278,7 @@ void nvic_enable_irq_s_dsb(int8_t irqn);
 uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
 /* Flash unlock — alias for flash_unlock_both */
 void flash_unlock(void);
+
 /* CRC peripheral — HAL_CRC_Init / HAL_CRCEx_Polynomial_Set / MspInit.
  * Defined in crc.c. The crc_handle_t struct is module-local; callers
  * pass an opaque `void *` matching the HAL layout. */
