@@ -82,58 +82,60 @@ void batteryware_main(void)
 }
 
 /*
- * Peripheral init — 3-phase USART/DMA/GPIO startup.
+ * Peripheral init — classic HAL clock bring-up sequence.
  *
- * Phase 1: zero 3 local structs, set RCC bit 0x800,
- *   fill DMA/bus-fault params after memset, then call bus_fault_reset.
- *   system_reset on failure.
+ * Phase 1: oscillators (rcc_osc_config / HAL_RCC_OscConfig).
+ * Phase 2: clock tree   (rcc_configure / HAL_RCC_ClockConfig).
+ * Phase 3: peripheral clocks (rcc_reconfigure / HAL_RCCEx_PeriphCLKConfig).
  *
- * Phase 2: fill RCC_ClkInitTypeDef (ClockType=0x0F covering all four
- *   AHB/APB/SYSCLK domains, SYSCLKSource=HSI16, AHBCLKDivider=SYSCLK/2),
- *   call rcc_configure with FLatency=0. reset on failure.
- *
- * Phase 3: configure RCC struct, call rcc_reconfigure, reset on failure.
+ * The three local cfg buffers are zeroed first (so unset fields read
+ * as the HAL "off / div1" defaults), then the few fields the OEM cares
+ * about are filled in before each call. The previous decomp labelled
+ * these `dma_cfg` / `usart_cfg` / `rcc_cfg` and routed Phase 1 through
+ * a `bus_fault_reset` stub — both names were leftover from when the
+ * three calls were thought to be DMA / USART / fault setup.
  */
 void peripheral_init(bool arg)
 {
-    uint32_t dma_cfg[14];       /* 0x38 bytes — DMA/bus config */
-    uint8_t  usart_cfg[20];     /* 0x14 bytes — USART clock config */
-    uint32_t rcc_cfg[9];        /* 0x24 bytes — RCC config */
+    uint32_t osc_cfg[14];       /* 0x38 bytes — rcc_osc_init_t */
+    uint8_t  clk_cfg[20];       /* 0x14 bytes — rcc_clk_init_t */
+    uint32_t periphclk_cfg[9];  /* 0x24 bytes — peripheral-clock cfg */
 
     (void)arg;
 
-    memset_byte_fill((uint8_t *)dma_cfg,   0, 0x38);
-    memset_byte_fill(usart_cfg,            0, 0x14);
-    memset_byte_fill((uint8_t *)rcc_cfg,   0, 0x24);
+    memset_byte_fill((uint8_t *)osc_cfg,       0, 0x38);
+    memset_byte_fill(clk_cfg,                  0, 0x14);
+    memset_byte_fill((uint8_t *)periphclk_cfg, 0, 0x24);
 
     volatile uint32_t *s_rcc = (volatile uint32_t *)0x20002C6C;
     *s_rcc = (*s_rcc & 0xFFFFFFF7) | 0x800;
 
-    dma_cfg[0] = 10;
-    *(uint32_t *)((uint8_t *)dma_cfg + 0x30) = 1;     /* bit-banding / flags */
-    *(uint32_t *)((uint8_t *)dma_cfg + 0x2C) = 0x10;  /* prescaler / period */
-    *(uint32_t *)((uint8_t *)dma_cfg + 0x28) = 1;     /* enable */
-    *(uint32_t *)((uint8_t *)dma_cfg + 0x14) = 1;     /* direction / mode */
+    /* Oscillator request: HSI + LSI, plus PLL configured from HSI. */
+    osc_cfg[0] = 10;                                            /* OscType: HSI|LSI */
+    *(uint32_t *)((uint8_t *)osc_cfg + 0x0C) = 1;               /* HSIState     = ON   */
+    *(uint32_t *)((uint8_t *)osc_cfg + 0x14) = 1;               /* LSIState     = ON   */
+    *(uint32_t *)((uint8_t *)osc_cfg + 0x28) = 2;               /* PLLState     = ON   */
+    *(uint32_t *)((uint8_t *)osc_cfg + 0x2C) = 0x10;            /* PLLSource           */
+    *(uint32_t *)((uint8_t *)osc_cfg + 0x30) = 1;               /* PLLMUL              */
 
-    extern int bus_fault_reset(void *);
-    if (bus_fault_reset(dma_cfg) != 0) {
+    if (rcc_osc_config(osc_cfg) != 0) {
         system_reset();
     }
 
-    usart_cfg[0] = 0x0F;        /* ClockType = SYSCLK|HCLK|PCLK1|PCLK2 */
-    usart_cfg[4] = 1;           /* SYSCLKSource = HSI16              */
-    usart_cfg[8] = 0x80;        /* AHBCLKDivider = SYSCLK / 2        */
+    clk_cfg[0] = 0x0F;          /* ClockType = SYSCLK|HCLK|PCLK1|PCLK2 */
+    clk_cfg[4] = 1;             /* SYSCLKSource = HSI16              */
+    clk_cfg[8] = 0x80;          /* AHBCLKDivider = SYSCLK / 2        */
     /* bytes 1-3, 5-7, 9-19 stay 0 from memset (APB1/2 div = 1) */
 
     extern uint32_t rcc_configure(void *cfg, uint32_t flatency);
-    if (rcc_configure(usart_cfg, 0) != 0) {
+    if (rcc_configure(clk_cfg, 0) != 0) {
         system_reset();
     }
 
-    rcc_cfg[0] = 1;
-    rcc_cfg[1] = 2;
+    periphclk_cfg[0] = 1;       /* PeriphClockSelection = USART1 */
+    periphclk_cfg[2] = 2;       /* Usart1ClockSelection = HSI16  */
 
-    if (rcc_reconfigure(rcc_cfg) != 0) {
+    if (rcc_reconfigure(periphclk_cfg) != 0) {
         system_reset();
     }
 }
