@@ -131,116 +131,186 @@ void cmd_send_8byte(void)
 }
 
 /*
- * Command parser (command_parser) — "KEY=VALUE" string command
- * dispatcher.
+ * command_parser — "KEY=VALUE" Modbus/UART command dispatcher.
  *
- * Receives a command frame. Parses the command name, searches
- * a dispatch table of 24 commands in flash, and jumps to the
- * appropriate handler via a jump table.
+ * OEM: FUN_08009AC4 (820 B). Receives a parsed frame body, extracts
+ * a name token, optionally extracts a hex/digit value after `=`, and
+ * dispatches to a flash-resident function pointer table.
  *
- * Command table at 0x08012085 (flash): 24 entries × 47 bytes.
- *   Offset 0-1: padding/reserved
- *   Offset 2:   command index (0-23)
- *   Offset 3:   name length
- *   Offset 4+:  command name (ASCII)
+ * State machine (`parse_state`, [r7+0x67]):
+ *   0  reading name
+ *   3  saw `=`, expect value
+ *   4  name truncated (control char or high-bit, or > 20 chars)
+ *   5  value complete
+ *   6  invalid value char or value > 20 chars
  *
- * Jump table at 0x0800A080: 24 function pointers (4 bytes each).
+ * Name extraction: accepts byte if `c > 0x1F && c < 0x80 && c != '='`,
+ *   storing into `name_buf[name_pos]` (cap 20). `=` flips to state 3.
  *
- * Protocol:
- *   Frame: [0xAA] [cmd_byte] [data_lo] [data_hi] [data_lo2] [data_hi2] [CRC16_lo] [CRC16_hi]
- *   Data bytes 2-5 carry the command parameter value (uint16 pairs).
+ * Value extraction (state 3): accepts only ASCII `'0'..'9'` and
+ *   `'A'..'F'` (uppercase hex), storing into `value_buf[value_pos]`
+ *   (cap 20). Anything else → state 6.
  *
- * Commands that take a "=VALUE" suffix use the data bytes after '=':
- *   CHG CAL=1234  → parser extracts "CHG CAL" as name, "1234" as hex value
- *   PF            → parser extracts "PF" as name, no value
+ * Matching (first-match-wins prefix scan):
+ *   For each table entry, count chars of name_buf that equal the
+ *   entry's name[0..name_pos-1]. If `match_count == name_pos`, take
+ *   the entry's `idx` byte and break (first match wins).
+ *   Failed match calls `veneer_a6aa()` then continues anyway — that
+ *   thunk is OEM logging, not a fatal abort.
+ *
+ * Dispatch: `jump_table[best_action](...)`. OEM jump table lives at
+ *   0x08017FD8 — past the end of this .bin (image size 0x15610), so
+ *   we stub the dispatch with NULL pointers. The 23 entries here
+ *   exactly mirror the OEM 47-byte slots at 0x08012B9C..0x08012FD5.
  */
+static const cmd_entry_t s_cmd_table[] = {
+    {  1,  4, cmd_who             },  /* 0x08012b9c */
+    {  2,  4, cmd_now             },  /* 0x08012bcb */
+    {  3,  2, cmd_pf              },  /* 0x08012bfa */
+    {  4,  9, cmd_reset_bms       },  /* 0x08012c29 */
+    {  5,  2, cmd_df              },  /* 0x08012c58 */
+    {  6, 10, cmd_upgrade_ap      },  /* 0x08012c87 */
+    {  7, 10, cmd_upgrade_bl      },  /* 0x08012cb6 */
+    {  8, 15, cmd_into_bootloader },  /* 0x08012ce5 */
+    {  9,  7, cmd_chg_cal_set     },  /* 0x08012d14 */
+    { 10,  8, cmd_chg_cal_get     },  /* 0x08012d43 */
+    { 11,  7, cmd_dsg_cal_set     },  /* 0x08012d72 */
+    { 12,  8, cmd_dsg_cal_get     },  /* 0x08012da1 */
+    { 13,  9, cmd_reset_esn       },  /* 0x08012dd0 */
+    { 14,  9, cmd_log_clear       },  /* 0x08012dff */
+    { 15,  3, cmd_ts0_set         },  /* 0x08012e2e */
+    { 16,  3, cmd_ts1_set         },  /* 0x08012e5d */
+    { 17,  3, cmd_ts2_set         },  /* 0x08012e8c */
+    { 18,  4, cmd_ts0_get         },  /* 0x08012ebb */
+    { 19,  4, cmd_ts1_get         },  /* 0x08012eea */
+    { 20,  4, cmd_ts2_get         },  /* 0x08012f19 */
+    { 21,  8, cmd_ts_reset        },  /* 0x08012f48 */
+    { 22,  3, cmd_fcc             },  /* 0x08012f77 */
+    { 23,  3, cmd_soc             },  /* 0x08012fa6 */
+};
 
-/*
- * Command table entry: index, name length, name string.
- * In the OEM binary this is at 0x08012085 (0x12B9A for entries 1-23).
- * We replicate it here as a compile-time constant array.
- */
-/* 24 command entries at 47 bytes each = 1128 bytes */
-/* Jump table: 24 function pointers at 4 bytes each = 96 bytes */
+#define CMD_TABLE_LEN  (sizeof(s_cmd_table) / sizeof(s_cmd_table[0]))
+
+/* Jump table — OEM stores 24 function pointers at flash 0x08017FD8,
+ * indexed by entry.idx. That address is past the end of this .bin
+ * (0x15610), so the table contents are unknown to this decomp.
+ * Indices 1..23 are valid; 0 is unused. */
+static void (* const s_jump_table[24])(uint32_t, int, uint8_t) = {
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+};
+
+extern void veneer_a6aa(void);  /* OEM parse-error log hook */
+extern void veneer_a6e0(void);  /* OEM dispatch-error log hook */
 
 void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte)
 {
-    /* Command name table — 24 entries from OEM flash at 0x08012085 */
-    static const cmd_entry_t s_cmd_table[24] = {
-        {{0x00,0x00}, 0, 10, "MOS Failure Mode"},
-        {{0x00,0x08}, 1,  4, "Who?"},
-        {{0x00,0x00}, 2,  4, "Now?"},
-        {{0x00,0x00}, 3,  2, "PF"},
-        {{0x00,0x00}, 4,  9, "Reset BMS"},
-        {{0x00,0x00}, 5,  2, "DF"},
-        {{0x00,0x00}, 6, 10, "Upgrade AP"},
-        {{0x00,0x00}, 7, 10, "Upgrade BL"},
-        {{0x00,0x00}, 8, 15, "Into BootLoader"},
-        {{0x00,0x00}, 9,  7, "CHG CAL"},
-        {{0x00,0x00},10,  8, "CHG CAL?"},
-        {{0x00,0x00},11,  7, "DSG CAL"},
-        {{0x00,0x00},12,  8, "DSG CAL?"},
-        {{0x00,0x00},13,  9, "Reset ESN"},
-        {{0x00,0x00},14,  9, "Log Clear"},
-        {{0x00,0x00},15,  3, "TS0"},
-        {{0x00,0x00},16,  3, "TS1"},
-        {{0x00,0x00},17,  3, "TS2"},
-        {{0x00,0x00},18,  4, "TS0?"},
-        {{0x00,0x00},19,  4, "TS1?"},
-        {{0x00,0x00},20,  4, "TS2?"},
-        {{0x00,0x00},21,  8, "TS Reset"},
-        {{0x00,0x00},22,  3, "FCC"},
-        {{0x00,0x00},23,  3, "SOC"},
-    };
+    const uint8_t *buf = (const uint8_t *)(uintptr_t)buf_addr;
 
-    /* Jump table — populated at runtime, stored in SRAM at 0x20002CE0 */
-    static void (*s_jump_table[24])(uint32_t, int, uint8_t);
-
-    const uint8_t *cmd = (const uint8_t *)buf_addr;
-    char     cmd_name[24];
-    uint8_t  name_len;
+    char     name_buf[21];
+    char     value_buf[21];
+    uint8_t  name_pos    = 0;
+    uint8_t  value_pos   = 0;
+    uint8_t  read_idx    = 0;
+    uint8_t  parse_state = 0;
     uint8_t  i;
-    bool     found;
 
     (void)cmd_byte;
+    (void)value_buf;
 
-    /* Extract command name (up to '=' or control chars) */
-    name_len = 0;
-    for (i = 0; i < (uint8_t)buf_len && i < 23; i++) {
-        uint8_t c = cmd[i];
-        if (c == '=' || c == '\0' || c == '\r' || c == '\n' || c < 0x20) {
+    if (buf_len == 0) {
+        veneer_a6aa();
+        return;
+    }
+
+    /* --- Name extraction ------------------------------------ */
+    while (read_idx < (uint8_t)buf_len && parse_state == 0) {
+        uint8_t c = buf[read_idx];
+
+        if (c == '=') {
+            read_idx++;
+            parse_state = 3;
             break;
         }
-        cmd_name[i] = (char)c;
+        /* OEM: reject c <= 31 or c with high bit set (sxtb < 0). */
+        if (c <= 31 || (int8_t)c < 0) {
+            parse_state = 4;
+            break;
+        }
+        name_buf[name_pos++] = (char)c;
+        if (name_pos > 20) {
+            parse_state = 4;
+            break;
+        }
+        read_idx++;
+        if (read_idx >= (uint8_t)buf_len && parse_state == 0) {
+            /* OEM falls through to state 3 check; with state still 0
+             * the matching phase proceeds with whatever name has so far. */
+            break;
+        }
     }
-    name_len = i;
-    cmd_name[name_len] = '\0';
 
-    /* Search the command table (24 entries) */
-    found = false;
-    for (i = 0; i < 24; i++) {
-        if (s_cmd_table[i].name_len == name_len) {
-            uint8_t j;
-            bool match = true;
-            for (j = 0; j < name_len; j++) {
-                if (s_cmd_table[i].name[j] != cmd_name[j]) {
-                    match = false;
-                    break;
-                }
+    /* --- Value extraction (only if we saw '=') -------------- */
+    if (parse_state == 3) {
+        parse_state = 0;
+        if (read_idx >= (uint8_t)buf_len) {
+            parse_state = 5;
+        }
+        while (read_idx < (uint8_t)buf_len && parse_state == 0) {
+            uint8_t c = buf[read_idx];
+
+            /* Accept '0'..'9' OR 'A'..'F'. */
+            int is_digit = (c >= '0' && c <= '9');
+            int is_hex   = (c >= 'A' && c <= 'F');
+            if (!(is_digit || is_hex)) {
+                parse_state = 6;
+                break;
             }
-            if (match) {
-                uint8_t action = s_cmd_table[i].idx;
-                if (action < 24 && s_jump_table[action] != NULL) {
-                    s_jump_table[action](buf_addr, buf_len, action);
-                }
-                found = true;
+            value_buf[value_pos++] = (char)c;
+            if (value_pos > 20) {
+                parse_state = 6;
+                break;
+            }
+            read_idx++;
+            if (read_idx >= (uint8_t)buf_len) {
+                parse_state = 5;
                 break;
             }
         }
+
+        /* OEM: if state != 5 after the value loop, log the error,
+         * but continue into matching anyway. */
+        if (parse_state != 5) {
+            veneer_a6aa();
+        }
     }
 
-    if (!found) {
-        extern void veneer_a6aa(void);
+    /* --- Matching (first prefix match wins) ----------------- */
+    uint8_t best_action = 0;
+    uint8_t matched     = 0;
+    for (i = 0; i < CMD_TABLE_LEN; i++) {
+        uint8_t score = 0;
+        for (uint8_t j = 0; j < name_pos; j++) {
+            if (j < s_cmd_table[i].name_len &&
+                name_buf[j] == s_cmd_table[i].name[j]) {
+                score++;
+            }
+        }
+        if (score == name_pos) {
+            best_action = s_cmd_table[i].idx;
+            matched = 1;
+            break;
+        }
+    }
+
+    /* --- Dispatch ------------------------------------------- */
+    if (!matched) {
         veneer_a6aa();
+    }
+    if (best_action > 23) {
+        veneer_a6e0();
+    } else if (s_jump_table[best_action] != NULL) {
+        s_jump_table[best_action](buf_addr, buf_len, best_action);
     }
 }
