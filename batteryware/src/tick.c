@@ -98,21 +98,28 @@ int32_t clock_prescaler_val(void)
 }
 
 /*
- * RCC (Reset & Clock Control) peripheral reconfiguration.
+ * HAL_RCCEx_PeriphCLKConfig — peripheral-clock source selection.
  *
- * Applies a configuration struct pointed to by 'param' to the RCC
- * and PWR peripheral registers. The param bitmask selects which
- * fields to update:
- *   - bit 5 (0x20): Clock switch sequence — sets PWR DBP bit,
- *     updates RCC CR, waits for PWR ready, handles USART1/USART2
- *     switchback (bits 16-17 vs 20-21).
- *     On mismatch with bit 17 set and USART1 lock active → returns 1.
- *     On prescaler change (bits 16-17) with active transfer →
- *       saves/restores with 5000-tick timeout via PWR status bit.
- *   - bits 0-7: Direct RCC CFGR field updates (SWS, HPRE, PPRE1,
- *     PPRE2, MCO) using mask-based read-modify-write.
+ * 'param' points to a 9-word config struct: param[0] is a selection
+ * bitmask (RCC_PERIPHCLK_*), param[1] is the RTC clock selection, and
+ * param[2..8] carry the per-peripheral clock-source fields.
+ *
+ *   - param[0] & 0x20 (RTC): enables PWREN (APB1ENR bit 28) and the
+ *     PWR DBP bit (100-tick timeout), then drives the RTC clock domain
+ *     in RCC_CSR (offset 0x50): if RTCSEL (bits 16-17) is already set
+ *     to a different source, performs a backup-domain reset (RTCRST
+ *     bit 19) and re-waits LSE (LSEON bit 8 / LSERDY bit 9, 5000-tick
+ *     timeout). RTCPRE (CR bits 20-21) and RTCSEL are then written. If
+ *     this routine enabled PWREN, it clears it again on the way out.
+ *     Returns 1 if RTCSEL already differs while RTCPRE is locked.
+ *   - param[0] bits 0/1/2/3/8/0x40/0x80: masked writes into RCC_CCIPR
+ *     (offset 0x4C) for USART1, USART2, LPUART1, I2C1, LPTIM1, the
+ *     bit-26 clk source, and bits 18-19 respectively.
  *
  * Returns 0 on success, 1 on immediate error, 3 on timeout.
+ *
+ * Register word offsets (RCC base 0x40021000): CR 0x00, APB1ENR 0x38,
+ * CCIPR 0x4C, CSR 0x50; PWR_CR at 0x40007000.
  */
 uint32_t rcc_reconfigure(uint32_t *param)
 {
@@ -121,9 +128,9 @@ uint32_t rcc_reconfigure(uint32_t *param)
     bool dbp_was_clear = false;
 
     if ((*param & 0x20) != 0) {
-        dbp_was_clear = (RCC[0x0E / 4] & 0x10000000) == 0;
+        dbp_was_clear = (RCC[0x38 / 4] & 0x10000000) == 0;
         if (dbp_was_clear) {
-            RCC[0x0E / 4] |= 0x10000000;
+            RCC[0x38 / 4] |= 0x10000000;
         }
 
         if ((PWR[0] & 0x100) == 0) {
@@ -143,18 +150,18 @@ uint32_t rcc_reconfigure(uint32_t *param)
             return 1;
         }
 
-        if ((((RCC[0x14 / 4] & 0x30000) != 0) &&
-             ((RCC[0x14 / 4] & 0x30000) != (param[1] & 0x30000))) &&
+        if ((((RCC[0x50 / 4] & 0x30000) != 0) &&
+             ((RCC[0x50 / 4] & 0x30000) != (param[1] & 0x30000))) &&
             ((*param & 0x20) != 0)) {
 
-            uint32_t saved = RCC[0x14 / 4] & 0xFFFCFFFF;
-            RCC[0x14 / 4] |= 0x80000;
-            RCC[0x14 / 4] &= 0xFFF7FFFF;
-            RCC[0x14 / 4] = saved;
+            uint32_t saved = RCC[0x50 / 4] & 0xFFFCFFFF;
+            RCC[0x50 / 4] |= 0x80000;
+            RCC[0x50 / 4] &= 0xFFF7FFFF;
+            RCC[0x50 / 4] = saved;
 
             if ((saved & 0x100) != 0) {
                 uint32_t t1 = tick_get();
-                while ((RCC[0x14 / 4] & 0x200) == 0) {
+                while ((RCC[0x50 / 4] & 0x200) == 0) {
                     uint32_t t2 = tick_get();
                     if ((t2 - t1) > 5000) {
                         return 3;
@@ -166,34 +173,34 @@ uint32_t rcc_reconfigure(uint32_t *param)
         if ((param[1] & 0x30000) == 0x30000) {
             RCC[0] = (param[1] & 0x300000) | (RCC[0] & 0xFFCFFFFF);
         }
-        RCC[0x14 / 4] = (param[1] & 0x30000) | RCC[0x14 / 4];
+        RCC[0x50 / 4] = (param[1] & 0x30000) | RCC[0x50 / 4];
 
         if (dbp_was_clear) {
-            RCC[0x0E / 4] &= 0xEFFFFFFF;
+            RCC[0x38 / 4] &= 0xEFFFFFFF;
         }
     }
 
     /* Direct field updates via bitmask in *param */
     if ((*param & 1) != 0) {
-        RCC[0x13 / 4] = param[2] | (RCC[0x13 / 4] & 0xFFFFFFFC);
+        RCC[0x4C / 4] = param[2] | (RCC[0x4C / 4] & 0xFFFFFFFC);
     }
     if ((*param & 2) != 0) {
-        RCC[0x13 / 4] = param[3] | (RCC[0x13 / 4] & 0xFFFFFFF3);
+        RCC[0x4C / 4] = param[3] | (RCC[0x4C / 4] & 0xFFFFFFF3);
     }
     if ((*param & 4) != 0) {
-        RCC[0x13 / 4] = param[4] | (RCC[0x13 / 4] & 0xFFFFF3FF);
+        RCC[0x4C / 4] = param[4] | (RCC[0x4C / 4] & 0xFFFFF3FF);
     }
     if ((*param & 8) != 0) {
-        RCC[0x13 / 4] = param[5] | (RCC[0x13 / 4] & 0xFFFFCFFF);
+        RCC[0x4C / 4] = param[5] | (RCC[0x4C / 4] & 0xFFFFCFFF);
     }
     if ((*param & 0x100) != 0) {
-        RCC[0x13 / 4] = param[6] | (RCC[0x13 / 4] & 0xFFFCFFFF);
+        RCC[0x4C / 4] = param[6] | (RCC[0x4C / 4] & 0xFFFCFFFF);
     }
     if ((*param & 0x40) != 0) {
-        RCC[0x13 / 4] = param[8] | (RCC[0x13 / 4] & 0xFBFFFFFF);
+        RCC[0x4C / 4] = param[8] | (RCC[0x4C / 4] & 0xFBFFFFFF);
     }
     if ((*param & 0x80) != 0) {
-        RCC[0x13 / 4] = param[7] | (RCC[0x13 / 4] & 0xFFF3FFFF);
+        RCC[0x4C / 4] = param[7] | (RCC[0x4C / 4] & 0xFFF3FFFF);
     }
 
     return 0;
@@ -242,41 +249,41 @@ int8_t clock_config(uint32_t *param, uint32_t clk_src)
         return 1;
     }
 
-    if ((RCC[0x13 / 4] & 1) < clk_src) {
-        RCC[0x13 / 4] = clk_src | (RCC[0x13 / 4] & 0xFFFFFFFE);
+    if ((RCC[0x4C / 4] & 1) < clk_src) {
+        RCC[0x4C / 4] = clk_src | (RCC[0x4C / 4] & 0xFFFFFFFE);
         uint32_t start = tick_get();
         do {
-            if (clk_src == (RCC[0x13 / 4] & 1)) goto clock_switch_done;
+            if (clk_src == (RCC[0x4C / 4] & 1)) goto clock_switch_done;
         } while ((tick_get() - start) <= 1000);
         return 3;
     }
 
 clock_switch_done:
     if ((*param & 2) != 0) {
-        RCC[0x13 / 4] = param[2] | (RCC[0x13 / 4] & 0xFFFFFF0F);
+        RCC[0x4C / 4] = param[2] | (RCC[0x4C / 4] & 0xFFFFFF0F);
     }
 
     if ((*param & 1) == 0) {
         /* Clock config phase 2 */
-        if (clk_src < (RCC[0x13 / 4] & 1)) {
-            RCC[0x13 / 4] = clk_src | (RCC[0x13 / 4] & 0xFFFFFFFE);
+        if (clk_src < (RCC[0x4C / 4] & 1)) {
+            RCC[0x4C / 4] = clk_src | (RCC[0x4C / 4] & 0xFFFFFFFE);
             uint32_t start = tick_get();
             do {
-                if (clk_src == (RCC[0x13 / 4] & 1)) goto phase2_done;
+                if (clk_src == (RCC[0x4C / 4] & 1)) goto phase2_done;
             } while ((tick_get() - start) <= 1000);
             return 3;
         }
 
 phase2_done:
         if ((*param & 4) != 0) {
-            RCC[0x13 / 4] = param[3] | (RCC[0x13 / 4] & 0xFFFFFF0F);
+            RCC[0x4C / 4] = param[3] | (RCC[0x4C / 4] & 0xFFFFFF0F);
         }
         if ((*param & 8) != 0) {
-            RCC[0x13 / 4] = (param[4] << 3) | (RCC[0x13 / 4] & 0xFFFFCFFF);
+            RCC[0x4C / 4] = (param[4] << 3) | (RCC[0x4C / 4] & 0xFFFFCFFF);
         }
 
         uint32_t divisor = (uint32_t)clock_prescaler_val();
-        int8_t shift = s_shifts[(RCC[0x13 / 4] >> 4) & 0xF];
+        int8_t shift = s_shifts[(RCC[0x4C / 4] >> 4) & 0xF];
         *s_out = divisor >> shift;
 
         return flash_timeout_check(3);
@@ -284,35 +291,35 @@ phase2_done:
 
     /* Phase 1: switch clock source */
     if (param[1] == 2) {
-        if ((RCC[0x13 / 4] & 0x20000) == 0) return 1;
+        if ((RCC[0x4C / 4] & 0x20000) == 0) return 1;
     } else if (param[1] == 3) {
-        if ((RCC[0x13 / 4] & 0x2000000) == 0) return 1;
+        if ((RCC[0x4C / 4] & 0x2000000) == 0) return 1;
     } else if (param[1] == 1) {
-        if ((RCC[0x13 / 4] & 4) == 0) return 1;
+        if ((RCC[0x4C / 4] & 4) == 0) return 1;
     } else {
-        if ((RCC[0x13 / 4] & 0x200) == 0) return 1;
+        if ((RCC[0x4C / 4] & 0x200) == 0) return 1;
     }
 
-    RCC[0x13 / 4] = param[1] | (RCC[0x13 / 4] & 0xFFFFFFFC);
+    RCC[0x4C / 4] = param[1] | (RCC[0x4C / 4] & 0xFFFFFFFC);
     uint32_t start = tick_get();
     if (param[1] == 2) {
         do {
-            if ((RCC[0x13 / 4] & 0xC) == 8) goto phase1_done;
+            if ((RCC[0x4C / 4] & 0xC) == 8) goto phase1_done;
         } while ((tick_get() - start) <= 1000);
         return 3;
     } else if (param[1] == 3) {
         do {
-            if ((RCC[0x13 / 4] & 0xC) == 0xC) goto phase1_done;
+            if ((RCC[0x4C / 4] & 0xC) == 0xC) goto phase1_done;
         } while ((tick_get() - start) <= 1000);
         return 3;
     } else if (param[1] == 1) {
         do {
-            if ((RCC[0x13 / 4] & 0xC) == 4) goto phase1_done;
+            if ((RCC[0x4C / 4] & 0xC) == 4) goto phase1_done;
         } while ((tick_get() - start) <= 1000);
         return 3;
     } else {
         do {
-            if ((RCC[0x13 / 4] & 0xC) == 0) goto phase1_done;
+            if ((RCC[0x4C / 4] & 0xC) == 0) goto phase1_done;
         } while ((tick_get() - start) <= 1000);
         return 3;
     }

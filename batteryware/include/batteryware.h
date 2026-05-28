@@ -276,6 +276,12 @@ void nvic_enable_irq_dsb(uint8_t irqn);
 void nvic_enable_irq_s(int8_t irqn);
 void nvic_enable_irq_s_dsb(int8_t irqn);
 uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
+
+/* Oscillator config — HAL_RCC_OscConfig (FUN_0800FDAC). Defined in
+ * rcc.c. cfg points to a 14×u32 rcc_osc_init_t (OscillatorType plus
+ * per-oscillator State / Calibration / Range fields, then the 4-word
+ * PLL sub-struct). */
+uint32_t rcc_osc_config(void *cfg);
 /* Flash unlock — alias for flash_unlock_both */
 void flash_unlock(void);
 
