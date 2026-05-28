@@ -1,58 +1,82 @@
 #include "batteryware.h"
 
 /*
- * Batteryware main entry point — startup sequence after Reset_Handler.
+ * Batteryware main entry point — early boot setup.
  *
- * Configures NVIC, RCC, SRAM parity, VTOR redirect, then chains
- * through peripheral_init, fuel gauge init, DMA init, flash config,
- * and system_init before handing off to the main super-loop.
+ * Faithful translation of OEM FUN_080072A8 (156 B). Sequence:
+ *
+ *   1. Enable NVIC IRQ 27 (with DSB).
+ *   2. RCC->APB2ENR (0x40021034) &= ~bit14   — disable USART1 clock.
+ *   3. EXTI->PR (0x40010414) = 1             — clear pending EXTI line 0.
+ *   4. Enable NVIC IRQ 5 (with DSB).
+ *   5. cpsid i + nop                          — disable IRQs.
+ *   6. Copy 48-vector table (0xC0 bytes) from flash 0x08005028 to
+ *      SRAM 0x20000000 via memset_byte_copy.
+ *   7. SCB->VTOR (0xE000ED08) = 0x20000000.
+ *   8. dsb sy + nop + cpsie i + nop          — re-enable IRQs.
+ *   9. peripheral_reset()                     — return value discarded.
+ *  10. PWR->CR (0x40007000): clear LPDS bits (10/11), set DBP (bit 12).
+ *  11. RCC->APB2ENR |= 1                      — enable SYSCFG clock.
+ *  12. RCC->APB1ENR (0x40021038) |= bit28     — enable PWR clock.
+ *  13. peripheral_init()  (arg unused).
+ *  14. fg_clear_status().
+ *  15. dma_init().
+ *  16. Magic 0xAAAA via pointer at 0x20002C10: `**(u32 **)0x20002C10 = 0xAAAA`.
+ *  17. flash_enable_prefetch().
+ *  18. flash_unlock().
+ *  19. system_init().
+ *
+ * The OEM inlines `cpsid i` / `cpsie i` (no wrapper symbols), so this
+ * decomp drops the previous `disable_irqs`/`enable_irqs` helpers and
+ * uses the CMSIS-style inline asm directly. Same for the vector-table
+ * install — OEM has no `set_vector_table` symbol; it inlines the
+ * memset_byte_copy + VTOR sequence.
  */
 void batteryware_main(void)
 {
-    /* RCC base — clock control registers */
-    volatile uint32_t * const RCC    = (volatile uint32_t *)0x40021000;
-    /* NVIC/syscfg scratch */
-    volatile uint32_t *       s_cfg  = (volatile uint32_t *)0x20002C60;
-    /* USART/baud scratch */
-    volatile uint32_t *       s_regs = (volatile uint32_t *)0x20002C64;
-
     nvic_enable_irq_s_dsb(27);
 
-    RCC[0x34 / 4] &= 0xFFFFFDFF;       /* clear bit 9 in AHB2ENR? */
+    /* RCC->APB2ENR &= ~bit14 (USART1 clock off). */
+    *(volatile uint32_t *)0x40021034 &= 0xFFFFBFFFu;
 
-    s_cfg[0x14 / 4] = 1;               /* SRAM parity enable */
+    /* EXTI->PR = 1 — write-1-to-clear pending EXTI line 0. */
+    *(volatile uint32_t *)0x40010414 = 1U;
 
     nvic_enable_irq_s_dsb(5);
 
-    extern void disable_irqs(void);
-    disable_irqs();
+    __asm__ volatile ("cpsid i" : : : "memory");
+    __asm__ volatile ("nop");
 
-    extern void set_vector_table(uint32_t, uint32_t, uint32_t);
-    set_vector_table(0x20000000, 0x020000C0, 0xC0);   /* VTOR → SRAM */
+    /* Copy 48-entry vector table from flash to SRAM. */
+    memset_byte_copy((int)0x20000000, (int)0x08005028, (int)0xC0);
 
-    s_regs[2] = 0x20000000;            /* baud rate/scratch */
-
+    /* SCB->VTOR = SRAM base. */
+    *(volatile uint32_t *)0xE000ED08 = 0x20000000U;
     __DSB();
-    extern void enable_irqs(void);
-    enable_irqs();
+    __asm__ volatile ("nop");
+    __asm__ volatile ("cpsie i" : : : "memory");
+    __asm__ volatile ("nop");
 
-    bool reset_done = peripheral_reset();
+    (void)peripheral_reset();
 
-    *s_regs = (*s_regs & 0xFFFFEFFF) | 0x1000;
+    /* PWR->CR: clear LPDS (bits 10..11), set DBP (bit 12). */
+    *(volatile uint32_t *)0x40007000 =
+        (*(volatile uint32_t *)0x40007000 & 0xFFFFE7FFu) | 0x1000U;
 
-    RCC[0x34 / 4] |= 1;               /* IOPAEN */
-    RCC[0x38 / 4] |= 0x10000000;      /* USART2EN? */
+    /* RCC->APB2ENR |= 1 (SYSCFG en). */
+    *(volatile uint32_t *)0x40021034 |= 1U;
+    /* RCC->APB1ENR |= bit28 (PWR en). */
+    *(volatile uint32_t *)0x40021038 |= 0x10000000U;
 
-    peripheral_init(reset_done);
-    extern void fg_init(void);
-    fg_init();
+    peripheral_init(false);  /* arg unused inside */
+    fg_clear_status();
     dma_init();
 
-    volatile uint32_t *s_flash_cfg = (volatile uint32_t *)0x20002C68;
-    *s_flash_cfg = 0x00000005;
+    /* OEM: `ldr r3, [0x20002C10]; ldr r3, [r3]; str 0xAAAA, [r3]` —
+     * write 0xAAAA to wherever the pointer at 0x20002C10 points. */
+    **(volatile uint32_t **)0x20002C10 = 0x0000AAAAU;
 
-    flash_enable_prefetch();
-    extern void flash_unlock(void);
+    (void)flash_enable_prefetch();
     flash_unlock();
     system_init();
 }

@@ -29,6 +29,176 @@ bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit)
 }
 
 /*
+ * GPIO pin configuration.
+ *
+ * Configures GPIO pins using a 20-byte configuration array and a GPIO
+ * port base address. The config array contains per-pin settings packed
+ * as 2 bytes per pin (10 pins max).
+ *
+ * Writes the packed configuration to the GPIO port's MODER, OTYPER,
+ * OSPEEDR, and PUPDR registers.
+ */
+/*
+ * gpio_pin_config — multi-register GPIO pin programmer.
+ *
+ * OEM: FUN_0800F7E4 (732 B).
+ *
+ * Iterates over the bits set in `cfg[0]` (pin mask). For each selected
+ * pin index `i`, writes some or all of:
+ *   GPIOx_MODER     (always)
+ *   GPIOx_OTYPER    (if mode is 1, 2, 17, or 18 — i.e. output/AF
+ *                    with-or-without the OTYPE bit set)
+ *   GPIOx_OSPEEDR   (same condition as OTYPER)
+ *   GPIOx_PUPDR     (always)
+ *   GPIOx_AFRL/H    (if mode is 2 or 18 — alternate-function modes)
+ *   SYSCFG_EXTICRx  (if cfg[1] bit 28 — EXTI block enable)
+ *   EXTI->IMR/EMR/RTSR/FTSR  (each gated by its own bit in cfg[1])
+ *
+ * cfg layout (5×u32 = 20 bytes; same buffer reused by callers):
+ *   cfg[0]  pin mask (which pins to configure)
+ *   cfg[1]  mode word — see bitfield below
+ *   cfg[2]  PUPDR value (0/1/2)
+ *   cfg[3]  OSPEEDR value (0..3)
+ *   cfg[4]  AF number (0..15) — only used when cfg[1] selects an AF mode
+ *
+ * cfg[1] bitfield:
+ *   [1:0]   MODER bits  (00=input, 01=output, 10=AF, 11=analog)
+ *   [4]     OTYPER bit  (0=push-pull, 1=open-drain)
+ *   [16]    EXTI IMR enable
+ *   [17]    EXTI EMR enable
+ *   [20]    EXTI RTSR enable (rising)
+ *   [21]    EXTI FTSR enable (falling)
+ *   [28]    EXTI block-enable trigger (all of [16..21] are conditional
+ *           on this — when [28]=0 the EXTI/SYSCFG path is skipped)
+ *
+ * If [28] is set, the SYSCFG clock is enabled (RCC->APB2ENR |= 1),
+ * SYSCFG_EXTICRx is updated to point the relevant EXTI line at this
+ * GPIO port (port codes: A=0, B=1, C=2, D=3, E=4, H=5, other=6),
+ * then EXTI->IMR/EMR/RTSR/FTSR are each cleared at this line and
+ * re-set if the corresponding cfg[1] enable bit is on.
+ *
+ * The previous decomp interpreted cfg as a byte-packed 20-byte array
+ * with `bits[1:0]=mode, bits[5:4]=speed, bits[7:6]=pupd` per pin — that
+ * was guesswork and doesn't match OEM at all.
+ */
+void gpio_pin_config(uint32_t *gpio_base, uint32_t *cfg)
+{
+    volatile uint32_t * const SYSCFG       = (volatile uint32_t *)0x40010000;
+    volatile uint32_t * const EXTI         = (volatile uint32_t *)0x40010400;
+    volatile uint32_t * const RCC_APB2ENR  = (volatile uint32_t *)0x40021034;
+
+    volatile uint32_t *gp = (volatile uint32_t *)gpio_base;
+    uint32_t i;
+    uint32_t scratch;
+    uint32_t pin_mask;
+
+    /* OEM literally zeroes scratch / pin_mask / i on entry. */
+    scratch  = 0;
+    pin_mask = 0;
+    (void)scratch;
+
+    for (i = 0; (cfg[0] >> i) != 0; i++) {
+        pin_mask = cfg[0] & (1U << i);
+        if (pin_mask == 0) {
+            continue;
+        }
+
+        const uint32_t shift2 = i * 2;
+        const uint32_t mode   = cfg[1];
+
+        /* --- OSPEEDR + OTYPER (output/AF modes, ± OTYPE flag) ------ */
+        if (mode == 1 || mode == 2 || mode == 17 || mode == 18) {
+            uint32_t v = gp[2];                       /* OSPEEDR (+0x08) */
+            v &= ~(3U << shift2);
+            v |=  (cfg[3] << shift2);
+            gp[2] = v;
+
+            v  = gp[1];                                /* OTYPER  (+0x04) */
+            v &= ~(1U << i);
+            v |= (((mode >> 4) & 1U) << i);
+            gp[1] = v;
+        }
+
+        /* --- PUPDR (always) ---------------------------------------- */
+        {
+            uint32_t v = gp[3];                        /* PUPDR (+0x0C) */
+            v &= ~(3U << shift2);
+            v |=  (cfg[2] << shift2);
+            gp[3] = v;
+        }
+
+        /* --- AFRL / AFRH (alternate-function modes only) ----------- */
+        if (mode == 2 || mode == 18) {
+            uint32_t afr_idx   = (i >> 3) + 8;        /* AFRL=8 (+0x20), AFRH=9 (+0x24) */
+            uint32_t afr_shift = (i & 7) * 4;
+            uint32_t v = gp[afr_idx];
+            v &= ~(0xFU << afr_shift);
+            v |=  (cfg[4] << afr_shift);
+            gp[afr_idx] = v;
+        }
+
+        /* --- MODER (always) ---------------------------------------- */
+        {
+            uint32_t v = gp[0];                        /* MODER (+0x00) */
+            v &= ~(3U << shift2);
+            v |=  ((mode & 3U) << shift2);
+            gp[0] = v;
+        }
+
+        /* --- EXTI / SYSCFG (cfg[1] bit 28 enables this whole block) - */
+        if ((mode & 0x10000000U) == 0) {
+            continue;
+        }
+
+        *RCC_APB2ENR |= 1U;                            /* SYSCFG clock */
+
+        uint32_t port_code;
+        if      (gpio_base == (uint32_t *)0x50000000) port_code = 0;
+        else if (gpio_base == (uint32_t *)0x50000400) port_code = 1;
+        else if (gpio_base == (uint32_t *)0x50000800) port_code = 2;
+        else if (gpio_base == (uint32_t *)0x50000C00) port_code = 3;
+        else if (gpio_base == (uint32_t *)0x50001000) port_code = 4;
+        else if (gpio_base == (uint32_t *)0x50001C00) port_code = 5;
+        else                                          port_code = 6;
+
+        const uint32_t exticr_idx   = (i >> 2) + 2;    /* EXTICR1..4 at SYSCFG[2..5] */
+        const uint32_t exticr_shift = (i & 3) * 4;
+        {
+            uint32_t v = SYSCFG[exticr_idx];
+            v &= ~(0xFU << exticr_shift);
+            v |=  (port_code << exticr_shift);
+            SYSCFG[exticr_idx] = v;
+        }
+
+        /* EXTI->IMR / EMR / RTSR / FTSR — clear-then-conditionally-set */
+        {
+            uint32_t v = EXTI[0];
+            v &= ~pin_mask;
+            if (mode & 0x00010000U) v |= pin_mask;
+            EXTI[0] = v;
+        }
+        {
+            uint32_t v = EXTI[1];
+            v &= ~pin_mask;
+            if (mode & 0x00020000U) v |= pin_mask;
+            EXTI[1] = v;
+        }
+        {
+            uint32_t v = EXTI[2];
+            v &= ~pin_mask;
+            if (mode & 0x00100000U) v |= pin_mask;
+            EXTI[2] = v;
+        }
+        {
+            uint32_t v = EXTI[3];
+            v &= ~pin_mask;
+            if (mode & 0x00200000U) v |= pin_mask;
+            EXTI[3] = v;
+        }
+    }
+}
+
+/*
  * GPIO pin reset — reset mode for multiple pins.
  *
  * Iterates through each bit in pin_mask. For each bit set:
@@ -113,4 +283,196 @@ void word_to_bytes(uint32_t *src, uint16_t byte_count, int dst)
             offset++;
         }
     }
+}
+
+/*
+ * bytes_to_words — stream a byte buffer to a single destination as
+ * big-endian-packed 32-bit chunks (with partial-byte tail handling).
+ *
+ * OEM: FUN_0800EFF8 (290 B). Called by `dma_transfer_irq` to push a
+ * caller-supplied byte buffer into a peripheral data register (SPI or
+ * USART) one 4-byte big-endian chunk at a time.
+ *
+ * Signature:
+ *   `dst_pp` is a POINTER-TO-POINTER — `**dst_pp` is the actual write
+ *   target (caller stores a field address that itself points at e.g.
+ *   `SPI->DR`). OEM dereferences twice (`r3 = *(u32 *)dst_pp;
+ *   *(u32 *)r3 = word`) so the destination is **re-loaded every
+ *   iteration**, but the pointer in `*dst_pp` is never modified by
+ *   this function — every chunk hits the same target, which is the
+ *   key signal that the destination is a peripheral data register
+ *   that latches each write rather than a memory buffer.
+ *
+ * Packing is big-endian throughout:
+ *   - Full word:  `(src[i*4]<<24) | (src[i*4+1]<<16) | (src[i*4+2]<<8) | src[i*4+3]`
+ *   - 2-byte:     `(src[i*4]<<8)  | src[i*4+1]`  written as halfword
+ *   - 3-byte:     halfword as above, then `*(u8 *)dst = src[i*4+2]`
+ *                 (overwrites the low byte of the halfword — OEM does
+ *                 this literally; the side-effect-on-peripheral-write
+ *                 model is what makes it sensible)
+ *   - 1-byte:     `*(u8 *)dst = src[i*4]`
+ *
+ * Returns `**dst_pp` (the final word/halfword/byte latched).
+ *
+ * The previous decomp had two bugs:
+ *   1. signature took `uint32_t *dst` instead of `uint32_t **dst_pp`
+ *   2. case 2/3 used **little-endian** halfword packing while the
+ *      full-word path used big-endian — inconsistent, and wrong vs OEM
+ */
+uint32_t bytes_to_words(uint32_t **dst_pp, const uint8_t *src, uint32_t byte_count)
+{
+    uint32_t i;
+
+    for (i = 0; i < (byte_count >> 2); i++) {
+        uint32_t word =
+            ((uint32_t)src[i * 4    ] << 24) |
+            ((uint32_t)src[i * 4 + 1] << 16) |
+            ((uint32_t)src[i * 4 + 2] << 8 ) |
+            ((uint32_t)src[i * 4 + 3]      );
+        *(volatile uint32_t *)(*dst_pp) = word;
+    }
+
+    if ((byte_count & 3) != 0) {
+        if ((byte_count & 3) == 1) {
+            *(volatile uint8_t *)(*dst_pp) = src[i * 4];
+        }
+        if ((byte_count & 3) == 2) {
+            uint16_t halfword =
+                (uint16_t)(((uint32_t)src[i * 4    ] << 8) |
+                            (uint32_t)src[i * 4 + 1]);
+            *(volatile uint16_t *)(*dst_pp) = halfword;
+        }
+        if ((byte_count & 3) == 3) {
+            uint16_t halfword =
+                (uint16_t)(((uint32_t)src[i * 4    ] << 8) |
+                            (uint32_t)src[i * 4 + 1]);
+            *(volatile uint16_t *)(*dst_pp) = halfword;
+            *(volatile uint8_t  *)(*dst_pp) = src[i * 4 + 2];
+        }
+    }
+
+    return *(volatile uint32_t *)(*dst_pp);
+}
+
+/*
+ * gpio_init_buttons — GPIO power-on configuration.
+ *
+ * OEM: FUN_08007D78 (430 B). Faithful translation of the OEM sequence:
+ *
+ *   1. Zero a 20-byte stack `cfg` block (memset_byte_fill).
+ *   2. Enable GPIOA/GPIOB/GPIOC/GPIOH clocks via RCC->IOPENR (offset
+ *      0x2C from RCC base, **not** 0x34 — APB2ENR — as the previous
+ *      source had it). Each enable is followed by a verify-read dance
+ *      `RCC->IOPENR & bit` stored to a stack local — looks like
+ *      leftover scaffolding for a wait-for-clock pattern (the result
+ *      is never inspected). Replicated here for fidelity; GCC may
+ *      optimise the dead reads away.
+ *   3. Five `gpio_bit_write` calls drive initial pin states **before**
+ *      configuring pin modes:
+ *         GPIOA[ pin 4              ] = LOW
+ *         GPIOA[ 0x91CF mask        ] = HIGH (pins 0,1,2,3,6,7,8,11,12,15)
+ *         GPIOB[ 0x287 mask         ] = LOW  (pins 0,1,2,7,9)
+ *         GPIOB[ 0xF104 mask        ] = HIGH (pins 2,8,12,13,14,15)
+ *         GPIOH[ pin 1              ] = HIGH
+ *   4. Seven `gpio_pin_config` calls program MODER/OTYPER/OSPEEDR/PUPDR
+ *      using the SAME 20-byte cfg buffer with different fields:
+ *         cfg[0] = pin mask
+ *         cfg[1] = mode word (analog/output/AF; 0x10210000 is a
+ *                  multi-pin packed setting whose internal decoding
+ *                  belongs to gpio_pin_config)
+ *         cfg[2] = otype/speed
+ *         cfg[3] = pull bits (`3` = pull-down on most calls)
+ *      The cfg buffer is NOT re-zeroed between calls — later calls
+ *      inherit unchanged fields. The 7 calls target:
+ *         GPIOC pin 13       (cfg[1] = 0x10210000)
+ *         GPIOB pin 0        (cfg[1] = 0x10210000)
+ *         GPIOB pin 1        (cfg[1] = 1, cfg[3] = 3)
+ *         GPIOA mask 0x911F  (cfg[1] = 1, cfg[3] = 3)
+ *         GPIOA mask 0xC00   (cfg[1] = 0)
+ *         GPIOB mask 0xF387  (cfg[1] = 1, cfg[3] = 3)
+ *         GPIOB mask 0xC40   (cfg[1] = 0)
+ *
+ * The previous decomp was guesswork:
+ *   - Wrong RCC register (APB2ENR @ +0x34 instead of IOPENR @ +0x2C)
+ *   - Wrong ports (GPIOD instead of GPIOH)
+ *   - Only 4 calls instead of 7
+ *   - Identical templated cfg for all (OEM uses 5 different patterns)
+ *   - Missing the 5 initial gpio_bit_write calls
+ *   - Inline MODER/PUPDR writes for PB9/PB13/PA15 that don't appear in OEM
+ */
+void gpio_init_buttons(void)
+{
+    uint32_t cfg[5];
+
+    extern void gpio_pin_config(uint32_t *gpio_base, uint32_t *cfg);
+
+    memset_byte_fill((uint8_t *)cfg, 0, 20);
+
+    /* RCC->IOPENR (0x4002102C) — enable GPIOA(bit0), GPIOB(bit1),
+     * GPIOC(bit2), GPIOH(bit7). The "store-bit-to-stack-then-read"
+     * scaffolding is preserved for fidelity (it's dead code semantically
+     * but lives in OEM, possibly intended as a sync barrier). */
+    {
+        volatile uint32_t * const iopenr = (volatile uint32_t *)0x4002102C;
+        volatile uint32_t check_a, check_b, check_c, check_h;
+
+        *iopenr |= 0x01;  check_a = *iopenr & 0x01;  (void)check_a;
+        *iopenr |= 0x02;  check_b = *iopenr & 0x02;  (void)check_b;
+        *iopenr |= 0x04;  check_c = *iopenr & 0x04;  (void)check_c;
+        *iopenr |= 0x80;  check_h = *iopenr & 0x80;  (void)check_h;
+    }
+
+    /* Initial pin drives — BEFORE pin-mode configuration. */
+    gpio_bit_write(0x50000000, 0x0010, 0);   /* GPIOA  PA4               LOW  */
+    gpio_bit_write(0x50000000, 0x91CF, 1);   /* GPIOA  PA0/1/2/3/6/7/8/11/12/15  HIGH */
+    gpio_bit_write(0x50000400, 0x0287, 0);   /* GPIOB  PB0/1/2/7/9         LOW  */
+    gpio_bit_write(0x50000400, 0xF104, 1);   /* GPIOB  PB2/8/12/13/14/15   HIGH */
+    gpio_bit_write(0x50001C00, 0x0002, 1);   /* GPIOH  PH1                 HIGH */
+
+    /* --- 7 pin-config calls, reusing the same cfg block ---------- */
+
+    /* Call 1 — GPIOC pin 13. */
+    cfg[0] = 0x2000;
+    cfg[1] = 0x10210000;
+    cfg[2] = 0;
+    gpio_pin_config((uint32_t *)0x50000800, cfg);
+
+    /* Call 2 — GPIOB pin 0. */
+    cfg[0] = 0x0001;
+    cfg[1] = 0x10210000;
+    cfg[2] = 0;
+    gpio_pin_config((uint32_t *)0x50000400, cfg);
+
+    /* Call 3 — GPIOB pin 1, mode 1, pull 3. */
+    cfg[0] = 0x0002;
+    cfg[1] = 1;
+    cfg[2] = 0;
+    cfg[3] = 3;
+    gpio_pin_config((uint32_t *)0x50000400, cfg);
+
+    /* Call 4 — GPIOA pin mask 0x911F, mode 1, pull 3. */
+    cfg[0] = 0x911F;
+    cfg[1] = 1;
+    cfg[2] = 0;
+    cfg[3] = 3;
+    gpio_pin_config((uint32_t *)0x50000000, cfg);
+
+    /* Call 5 — GPIOA pin mask 0x0C00, mode 0 (cfg[3] stays 3 from call 4). */
+    cfg[0] = 0x0C00;
+    cfg[1] = 0;
+    cfg[2] = 0;
+    gpio_pin_config((uint32_t *)0x50000000, cfg);
+
+    /* Call 6 — GPIOB pin mask 0xF387, mode 1, pull 3. */
+    cfg[0] = 0xF387;
+    cfg[1] = 1;
+    cfg[2] = 0;
+    cfg[3] = 3;
+    gpio_pin_config((uint32_t *)0x50000400, cfg);
+
+    /* Call 7 — GPIOB pin mask 0x0C40, mode 0 (cfg[3] stays 3). */
+    cfg[0] = 0x0C40;
+    cfg[1] = 0;
+    cfg[2] = 0;
+    gpio_pin_config((uint32_t *)0x50000400, cfg);
 }
