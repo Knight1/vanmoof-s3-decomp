@@ -88,8 +88,9 @@ void batteryware_main(void)
  *   fill DMA/bus-fault params after memset, then call bus_fault_reset.
  *   system_reset on failure.
  *
- * Phase 2: fill USART-clock-struct (0xF prescaler, flag at +4=1,
- *   USART-enable at +8=0x80), call usart_bus_config. reset on failure.
+ * Phase 2: fill RCC_ClkInitTypeDef (ClockType=0x0F covering all four
+ *   AHB/APB/SYSCLK domains, SYSCLKSource=HSI16, AHBCLKDivider=SYSCLK/2),
+ *   call rcc_configure with FLatency=0. reset on failure.
  *
  * Phase 3: configure RCC struct, call rcc_reconfigure, reset on failure.
  */
@@ -119,13 +120,13 @@ void peripheral_init(bool arg)
         system_reset();
     }
 
-    usart_cfg[0] = 0x0F;        /* prescaler */
-    usart_cfg[4] = 1;           /* enable flag */
-    usart_cfg[8] = 0x80;        /* USART enable */
-    /* bytes 1-3,5-7,9-19 stay 0 from memset */
+    usart_cfg[0] = 0x0F;        /* ClockType = SYSCLK|HCLK|PCLK1|PCLK2 */
+    usart_cfg[4] = 1;           /* SYSCLKSource = HSI16              */
+    usart_cfg[8] = 0x80;        /* AHBCLKDivider = SYSCLK / 2        */
+    /* bytes 1-3, 5-7, 9-19 stay 0 from memset (APB1/2 div = 1) */
 
-    extern int usart_bus_config(void *, uint8_t);
-    if (usart_bus_config(usart_cfg, 0) != 0) {
+    extern uint32_t rcc_configure(void *cfg, uint32_t flatency);
+    if (rcc_configure(usart_cfg, 0) != 0) {
         system_reset();
     }
 

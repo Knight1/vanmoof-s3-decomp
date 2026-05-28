@@ -34,6 +34,9 @@ void gpio_pin_reset(uint32_t *gpio_base, uint32_t pin_mask);
 /* Word-to-bytes unpack */
 void word_to_bytes(uint32_t *src, uint16_t byte_count, int dst);
 
+/* Bytes-to-word pack (reverse of word_to_bytes) */
+uint32_t bytes_to_words(uint32_t **dst_pp, const uint8_t *src, uint32_t byte_count);
+
 /* Busy-wait millisecond delay */
 void delay_ms(uint32_t ms);
 
@@ -217,8 +220,6 @@ uint8_t  atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src);
 void dma_init(void);
 void dma_channel_reset(uint32_t dma_base);
 uint32_t dma_flash_start(void *ctx);
-uint32_t dma_channel_init(int *ctx);
-bool dma_mem_config(int *ctx, uint32_t mask, uint32_t size);
 uint32_t dma_wait_for_ready(uint32_t timeout);
 void dma_error_clear(void);
 void dma_error_clear_v2(void);
@@ -276,8 +277,20 @@ void nvic_enable_irq_s_dsb(int8_t irqn);
 uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
 /* Flash unlock — alias for flash_unlock_both */
 void flash_unlock(void);
-/* USART bus config — configure USART for SMBus */
-int usart_bus_config(void *cfg, uint8_t param);
+/* CRC peripheral — HAL_CRC_Init / HAL_CRCEx_Polynomial_Set / MspInit.
+ * Defined in crc.c. The crc_handle_t struct is module-local; callers
+ * pass an opaque `void *` matching the HAL layout. */
+uint32_t crc_init(void *hcrc);
+uint8_t  crcex_polynomial_set(void *hcrc, uint32_t poly, uint32_t length);
+void     crc_msp_init(void *hcrc);
+
+/* Clock-tree config — HAL_RCC_ClockConfig (FUN_08010554).
+ * Defined in rcc.c. cfg is a 5×u32 rcc_clk_init_t struct
+ * (ClockType, SYSCLKSource, AHB, APB1, APB2 dividers).
+ * flatency is the target FLASH_ACR.LATENCY (0 or 1). */
+uint32_t rcc_configure(void *cfg, uint32_t flatency);
+uint32_t rcc_get_sysclock_freq(void);
+uint8_t  hal_init_tick(uint32_t priority);
 
 /* GPIO pin configuration struct passed to gpio_pin_config.
  *

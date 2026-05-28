@@ -1,12 +1,15 @@
 #include "batteryware.h"
 
-/* USART2 base */
-static volatile uint32_t * const USART2 = (volatile uint32_t *)0x40023000;
+/* CRC peripheral base — STM32L0 has CRC at 0x40023000. The previous
+ * decomp labelled this USART2 because the wrapper below was thought
+ * to be a USART2 init; in fact it's a CRC handle setup (the OEM
+ * FUN_0800edf0 it forwards into is HAL_CRC_Init — see crc.c). */
+static volatile uint32_t * const CRC_PERIPH = (volatile uint32_t *)0x40023000;
 
 /* RCC base */
 static volatile uint32_t * const RCC    = (volatile uint32_t *)0x40021000;
 
-/* USART config struct in SRAM */
+/* CRC handle in SRAM (was mis-labelled s_modem_cfg). */
 static volatile uint32_t * const s_modem_cfg = (volatile uint32_t *)0x20002C20;
 
 /* Timeout counter */
@@ -25,20 +28,22 @@ static volatile uint32_t * const s_modem_ctx     = (volatile uint32_t *)0x20002B
  */
 void modem_config(void)
 {
-    s_modem_cfg[0] = (uint32_t)USART2;   /* base */
+    s_modem_cfg[0] = (uint32_t)CRC_PERIPH;   /* hcrc.Instance = CRC */
     *(volatile uint8_t *)(s_modem_cfg + 1) = 0;  /* field[1] = 0 */
     *(volatile uint8_t *)(s_modem_cfg + 5 / 4) = 0;  /* field[5] = 0 */
     s_modem_cfg[5 / 4] = 0;
     s_modem_cfg[6 / 4] = 0;
-    s_modem_cfg[8 / 4] = 3;              /* timeout = 3 */
+    s_modem_cfg[8 / 4] = 3;              /* CRCLength encoding */
 
-    /* Enable USART2 clock in RCC_APB1ENR */
+    /* Enable CRC clock in RCC_AHBENR (bit 12). The original comment
+     * here said "USART2 in APB1ENR" but the +0x30 offset is AHBENR on
+     * STM32L0, and bit 12 of AHBENR is CRCEN. */
     RCC[0x30 / 4] |= 0x1000;
 
     *s_modem_timeout = 0;
 
-    extern int modem_configure(void *cfg);  /* FUN_0800edf0 */
-    if (modem_configure((void *)s_modem_cfg) != 0) {
+    extern uint32_t crc_init(void *hcrc);  /* FUN_0800edf0 — see crc.c */
+    if (crc_init((void *)s_modem_cfg) != 0) {
         system_reset();
     }
 }
