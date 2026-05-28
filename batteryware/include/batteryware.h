@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "cmsis_intrinsics.h"
 
 /* Hex conversion helpers */
 char     nibble_to_hex(uint8_t nibble);
