@@ -167,9 +167,7 @@ int main(void)
     batteryware_main();
     bms_setup();
 
-    volatile uint32_t * const g_flags     = (volatile uint32_t *)0x20002C44; /* used by the dispatch loop below */
-    volatile uint32_t * const g_state     = (volatile uint32_t *)0x20002B58; /* used by the dispatch loop below */
-    volatile uint8_t  * const g_bms_state = (volatile uint8_t  *)0x20002B58; /* live state byte (handler index) */
+    volatile uint8_t  * const g_bms_state = (volatile uint8_t  *)0x20002B58; /* live state byte (dispatch index) */
 
     volatile uint32_t * const s_status    = (volatile uint32_t *)0x20002C00;
     volatile uint16_t * const s_prot      = (volatile uint16_t *)0x2000286C;
@@ -249,22 +247,44 @@ int main(void)
 
     uart_tx_flush();
 
-    /* Infinite state dispatch loop via jump table at 0x08005B30 */
-    void (* const * const g_state_jump_table)(void) =
-        (void (* const * const)(void))0x08005B30;
-
+    /* Super-loop (OEM 0x59f6..0x5ad2). While no busy/fault bit (s_bms_cfg
+     * bits 0/1/2) is asserted, run the periodic routine for the current state
+     * via the OEM jump table (runtime 0x0801757C), then service the UART.
+     * State 0 and any out-of-range value fall through to state_handler_01. */
     while (1) {
-        /* Check if any fault flag is active; if not, dispatch state timer */
-        if (((*g_flags >> 1) & 1) == 0 &&
-            ((*g_flags & 1) == 0) &&
-            ((*g_flags >> 2) & 1) == 0) {
-            if (*g_state < 0x1A) {
-                g_state_jump_table[*g_state]();
-                return 0;
+        if (((*s_status >> 1) & 1) == 0 &&
+            ((*s_status & 1) == 0) &&
+            ((*s_status >> 2) & 1) == 0) {
+            switch (*g_bms_state) {
+            case 1:  state_timer_05();            break;
+            case 2:  state_timer_13();            break;
+            case 3:  bms_state_machine();         break;
+            case 4:  nop_537c();                  break;
+            case 5:  nop_721c();                  break;
+            case 6:  nop_716c();                  break;
+            case 7:  state_timer_03();            break;
+            case 8:  state_timer_06();            break;
+            case 9:  state_timer_charge_a();      break;
+            case 10: state_timer_charge_b();      break;
+            case 11: state_timer_0a();            break;
+            case 12: state_timer_0b();            break;
+            case 13: state_timer_15();            break;
+            case 14: state_timer_0d();            break;
+            case 15: state_timer_07();            break;
+            case 16: state_timer_08();            break;
+            case 17: state_timer_09();            break;
+            case 18: state_timer_0c();            break;
+            case 19: state_timer_12();            break;
+            case 20: state_timer_0e();            break;
+            case 21: state_timer_14();            break;
+            case 22: can_transmit();              break;
+            case 23:
+            case 24:
+            case 25: state_flags_handler_timer(); break;
+            case 0:
+            default: state_handler_01();          break;
             }
-            state_handler_01();
         }
-        extern void uart_resp_handler(void);
         uart_resp_handler();
         uart_tx_isr();
     }
