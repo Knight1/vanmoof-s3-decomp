@@ -31,6 +31,7 @@ bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit);
 
 /* GPIO pin reset — reset multiple pins to input mode */
 void gpio_pin_reset(uint32_t *gpio_base, uint32_t pin_mask);
+void gpio_init_buttons(void);
 
 /* Word-to-bytes unpack */
 void word_to_bytes(uint32_t *src, uint16_t byte_count, int dst);
@@ -52,7 +53,12 @@ void fault_led_trigger(void);
 void nvic_system_reset(void);
 void system_reset(void);
 void system_reset_with_arg(uint32_t arg);
+void system_reset_fault(void);
 void system_init(void);
+
+/* NVIC interrupt control — OEM uses raw cpsid/cpsie inline; no
+ * separate helper symbols exist. Vector-table install is also inlined
+ * (memset_byte_copy + SCB->VTOR write) in batteryware_main. */
 
 /* Charge MOSFET control via GPIOB pin 9 */
 void charge_mosfet_set(bool on);
@@ -158,7 +164,14 @@ void fg_read_loop(void *ctx);
 void fg_scan(void);
 void fg_coulomb_update(void);
 void cell_balance_update(void);
+void coulomb_counter(uint32_t val);
+void cell_voltage_scan(void);
+void config_init(void);
 void bms_init(void);
+
+/* memcmp/verify helpers */
+void memcmp_verify(char *actual, uint32_t len, char *expected);
+void memcpy_oem(const uint8_t *src, uint16_t count, uint8_t *dst);
 
 /* Shipping mode */
 void shipping_mode_check(void);
@@ -211,6 +224,15 @@ void state_timer_13(void);
 void state_timer_0d(void);
 void state_timer_0e(void);
 void state_timer_14(void);
+void state_timer_03(void);
+void state_timer_05(void);
+void state_timer_06(void);
+void state_timer_07(void);
+void state_timer_08(void);
+void state_timer_09(void);
+void state_timer_10(void);
+void state_timer_charge_a(void);
+void state_timer_charge_b(void);
 void bms_state_machine(void);
 
 /* DMA operations */
@@ -239,6 +261,11 @@ uint32_t dma_completion_handler(uint32_t *ctx);
 uint32_t dma_wait_done(int timeout);
 uint32_t dma_usart_init(int *ctx);
 uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *src4);
+
+/* Coulomb counter deferred thunk — OEM "veneer" that resolves into
+ * an SRAM-installed routine; semantics here are a no-op. */
+uint32_t veneer_1556c(uint32_t arg);
+uint32_t veneer_1557c(uint32_t numerator, uint32_t divisor);
 
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
@@ -282,6 +309,19 @@ uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
  * per-oscillator State / Calibration / Range fields, then the 4-word
  * PLL sub-struct). */
 uint32_t rcc_osc_config(void *cfg);
+
+/* Phase 2 init — USART/DMA/GPIO initialization */
+void phase2_init(void);
+
+/* Main clock setup */
+void main_clock_setup(void);
+
+/* IRQ wait handler — alias for state_timer_10 */
+void irq_wait_handler(void);
+
+/* Fuel gauge init — alias for bms_init */
+void fg_init(void);
+
 /* Flash unlock — alias for flash_unlock_both */
 void flash_unlock(void);
 
@@ -342,6 +382,33 @@ typedef struct {
 #define GPIO_SPEED_MED      1U
 #define GPIO_SPEED_HIGH     2U
 #define GPIO_SPEED_VHIGH    3U
+
+void gpio_pin_config(uint32_t *gpio_base, gpio_pin_cfg_t *cfg);
+void nop_e774(void);
+void nop_e784(void);
+void nop_a6e0(void);
+void nop_2ba6(void);
+void nop_2bac(void);
+void nop_4764(void);
+void nop_537c(void);
+void epilogue(void);
+void veneer_a6aa(void);
+void veneer_a6ba(void);
+void veneer_a6be(void);
+/* nop_eebc removed — was FUN_0800eebc, now crc_msp_init in crc.c. */
+void cmd_send_response_stub(void);
+void cmd_send_response_stub2(void);
+void protocol_reset(void);
+void epilogue_e1ca(void);
+void thunk_e1bc(void);
+void thunk_e1c4(void);
+void nop_e1c8(void);
+void thunk_e1b4(void);
+void null_trap(void);
+void nop_716c(void);
+void nop_721c(void);
+uint64_t __aeabi_ldiv0(uint64_t dividend, uint64_t divisor);
+
 /* OEM rodata strings (src/strings.c). See that file for layout +
  * the per-string OEM address. */
 extern const char s_chg_cal_ok[];
