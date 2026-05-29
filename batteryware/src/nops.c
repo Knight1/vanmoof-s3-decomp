@@ -249,26 +249,6 @@ void veneer_11f88(void)          { }
  *     gated on PA10; decompiled in state_handlers.c as service_uart_init().
  */
 
-/*
- * s_jt_call — PENDING decomp. Placeholder for the USART1/USART2 baud-rate
- * (BRR) computation tail of flash_prescaler_setup() (which is really
- * STM32L0 UART_SetConfig). In the OEM that tail does a jump-table clock-
- * source lookup (tables @ 0x08011B0C / 0x08011B1C) feeding the OVER8/OVER16
- * BRR divisor formula, writing the result to handle[0xC] and returning an
- * error flag. The flash.c translation completed only the USART3 branch and
- * left the USART1/2 path calling this helper.
- *
- * It became reachable only when service_uart_init() went live (PA10-gated
- * USART1 bring-up). In normal operation PA10 is not asserted, so this path
- * is never executed. Returning 0 (success, BRR left at its reset value)
- * keeps HAL_UART_Init from tripping system_reset(); a faithful BRR
- * computation is deferred to the UART_SetConfig decomp.
- */
-uint32_t s_jt_call(uint32_t prescaler)
-{
-    (void)prescaler;
-    return 0;
-}
 
 /* FUN_0800eebc was decompiled here as `nop_eebc`. Re-identified as
  * HAL_CRC_MspInit (called from HAL_CRC_Init / FUN_0800edf0). Moved to

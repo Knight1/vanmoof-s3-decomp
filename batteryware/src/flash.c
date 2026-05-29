@@ -505,21 +505,31 @@ uint32_t flash_op_start(int *ctx)
  *   - 0x40004800 (USART3): from RCC CFGR bits 10-11
  *   - otherwise: 0x10 (error)
  *
- * Resolves prescaler divisor (0-8) with two jump tables:
- *   - ctx[7]==0x8000: table at 0x080181A0 (for USART1/2/3)
- *   - otherwise: table at 0x080181C4 (for USART1/2/3)
- * For USART3 base: directly calls fg_read_field_8/11, clock_prescaler_val
- * or uses fixed constants 0xF42400 / 0x003D0900.
- * Validates baud rate (BRR) via __aeabi_ldiv0 and range checks,
- * writes result to *ctx+0x0C.
+ * This is really STM32L0 HAL `UART_SetConfig`. The variable named
+ * `prescaler` is the kernel **clock-source code** read from RCC->CCIPR
+ * (RCC[0x13] = offset 0x4C): per instance it is mapped to one of
+ * {0=PCLK, 1=PCLK2, 2=HSI16, 4=SYSCLK, 8=LSE} (codes 3/5/6/7/0x10 = error).
  *
- * Returns 0 on success, 1 on error (bad range, null, etc).
+ * The kernel frequency is then resolved from that code:
+ *   - 0 -> fg_read_field_8()   (HAL_RCC_GetPCLK1Freq-shaped)
+ *   - 1 -> fg_read_field_11()  (HAL_RCC_GetPCLK2Freq-shaped)
+ *   - 2 -> 4 MHz / 16 MHz depending on RCC_CR HSI16 divider (bit 4)
+ *   - 4 -> clock_prescaler_val()  (SYSCLK)
+ *   - 8 -> 0x8000 (LSE, 32768 Hz)
+ *
+ * BRR is then computed and written to the instance's BRR (*ctx + 0x0C):
+ *   - USART3_BASE (0x40004800) is actually **LPUART1**: BRR = (256*freq +
+ *     baud/2) / baud (64-bit), valid range [0x300, 0xFFFFF].
+ *   - Otherwise a standard USART: OVER8 (ctx[7]==0x8000) uses BRR =
+ *     ((2*freq + baud/2)/baud) with the low-nibble fixup
+ *     `(brr & ~0xF) | ((brr>>1)&7)`; OVER16 uses BRR = (freq + baud/2)/baud.
+ *     Both require 0xF < BRR < 0x10000.
+ *
+ * Returns 0 on success, 1 on error (bad range, unknown clock source, null).
  */
 uint32_t flash_prescaler_setup(int *ctx)
 {
     volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000;
-    void (* const * const s_jt1)(void) = (void (* const * const)(void))0x080181A0;
-    void (* const * const s_jt2)(void) = (void (* const * const)(void))0x080181C4;
     const uint32_t USART1_BASE = 0x40013800;  /* DAT_080118AC */
     const uint32_t USART2_BASE = 0x40004400;  /* DAT_080118B4 */
     const uint32_t USART3_BASE = 0x40004800;  /* DAT_080118A4 */
@@ -568,18 +578,37 @@ uint32_t flash_prescaler_setup(int *ctx)
     }
 
     if (*ctx != USART3_BASE) {
-        if (ctx[7] == 0x8000) {
-            if (prescaler < 9) {
-                extern uint32_t s_jt_call(uint32_t);
-                return s_jt_call((uint32_t)prescaler);
+        /* Standard USART (USART1/USART2): resolve the kernel clock frequency
+         * from the clock-source code, then compute the BRR with the OVER8 or
+         * OVER16 formula (ctx[7] == 0x8000 selects OVER8). */
+        uint32_t freq;
+        switch (prescaler) {
+        case 0:  freq = fg_read_field_8();             break;  /* PCLK1  */
+        case 1:  freq = fg_read_field_11();            break;  /* PCLK2  */
+        case 2:  freq = (RCC[0] & 0x10) ? MAGIC_4MHZ : MAGIC_16MHZ; break;  /* HSI16 */
+        case 4:  freq = (uint32_t)clock_prescaler_val(); break;  /* SYSCLK */
+        case 8:  freq = 0x8000;                        break;  /* LSE 32768 Hz */
+        default: freq = 0; error = 1;                  break;  /* unknown source */
+        }
+
+        if (freq != 0) {
+            uint32_t baud = (uint32_t)ctx[1];
+            uint32_t brr;
+            if (ctx[7] == 0x8000) {                 /* OVER8 */
+                brr = (freq * 2 + baud / 2) / baud;
+                if ((brr <= 0xF) || (brr >= 0x10000)) {
+                    error = 1;
+                } else {
+                    reg[3] = (brr & ~0xFu) | ((brr >> 1) & 0x7u);
+                }
+            } else {                                /* OVER16 */
+                brr = (freq + baud / 2) / baud;
+                if ((brr <= 0xF) || (brr >= 0x10000)) {
+                    error = 1;
+                } else {
+                    reg[3] = brr;
+                }
             }
-            error = 1;
-        } else {
-            if (prescaler < 9) {
-                extern uint32_t s_jt_call(uint32_t);
-                return s_jt_call((uint32_t)prescaler);
-            }
-            error = 1;
         }
         goto done;
     }

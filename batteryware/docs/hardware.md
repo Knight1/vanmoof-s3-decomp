@@ -113,7 +113,9 @@ Addresses resolved from literal pool entries in the flash image.
 | --- | --- | --- |
 | GPIOA | `0x50000000` | Status "alive" pulse on PA4 (BSRR/BRR via `gpio_bit_write`) — see GPIO table |
 | GPIOB | `0x50000400` | PB9 = charge MOSFET enable (`"\nChargeOn_Off() --> PB9=0\r"`); **PB7 = secondary-protection fuse heater** (one-shot, OC-gated); PB1 charge-path control; PB12/PB15 misc |
-| USART1 | `0x40013800` | Serial comm with main module (IRQ 12 = USART1 at VT slot 28 → `0x080054C5`) |
+| USART1 | `0x40013800` | Serial comm with main module (IRQ 12 = USART1 at VT slot 28 → `0x080054C5`); also the PA9/PA10 PA10-gated service UART (`service_uart_init`) |
+| USART2 | `0x40004400` | Handled by `UART_SetConfig` (standard OVER8/OVER16 BRR); clock source from RCC->CCIPR |
+| LPUART1 | `0x40004800` | Low-power UART — `UART_SetConfig` gives it the LPUART BRR path (`256×freq/baud`, range `[0x300,0xFFFFF]`); the prior decomp called this base "USART3" |
 | TIM2 | `0x40000000` | IRQ 5 and 7 assigned (two TIM2 IRQs) |
 | SysTick | `0xE000E010` | 1 ms tick timer — polled by `delay_ms` |
 |FEDL5236 (communicates via SPI)1 | `0x40005400` | Likely FEDL5236 fuel gauge communication |
