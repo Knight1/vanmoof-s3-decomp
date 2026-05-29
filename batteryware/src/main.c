@@ -167,78 +167,81 @@ int main(void)
     batteryware_main();
     bms_setup();
 
-    volatile uint32_t * const g_timer        = (volatile uint32_t *)0x20002C00;
-    volatile uint32_t * const g_flags         = (volatile uint32_t *)0x20002C44;
-    volatile uint32_t * const g_state        = (volatile uint32_t *)0x20002B58;
-    volatile uint8_t  * const g_bms_state    = (volatile uint8_t  *)0x20002B58;
+    volatile uint32_t * const g_flags     = (volatile uint32_t *)0x20002C44; /* used by the dispatch loop below */
+    volatile uint32_t * const g_state     = (volatile uint32_t *)0x20002B58; /* used by the dispatch loop below */
+    volatile uint8_t  * const g_bms_state = (volatile uint8_t  *)0x20002B58; /* live state byte (handler index) */
 
-    *g_timer = 0;
+    volatile uint32_t * const s_status    = (volatile uint32_t *)0x20002C00;
+    volatile uint16_t * const s_prot      = (volatile uint16_t *)0x2000286C;
+    volatile uint8_t  * const cfg_blk     = (volatile uint8_t  *)0x200028D0;
+    volatile uint16_t * const thr_uvp     = (volatile uint16_t *)0x2000282A;
+    volatile uint16_t * const thr_ovp     = (volatile uint16_t *)0x200027FA;
+    volatile uint8_t  * const g_boot_mode = (volatile uint8_t  *)0x20002C48;
 
-    /* Print boot banner */
-    uart_puts("I am VanMoof AP\r\n");
+    *(volatile uint16_t *)0x20002C70 = 0;
+
+    /* Boot banner. The OEM prints from one byte past the shared
+     * " \nI am VanMoof AP\r" string, i.e. without the leading space. */
+    uart_printf((uint8_t *)&s_i_am_vanmoof_ap_lead[1]);
     uart_tx_flush();
 
-    /* Load pending faults */
-    *g_flags = *(volatile uint32_t *)0x20002C50;
+    /* Latch the power-on mode persisted in external flash. */
+    *g_boot_mode = *(volatile uint8_t *)0x08080001;
 
-    /* Startup state check: UVP/OVP power-on vs normal boot */
-    if (*g_bms_state == 0x17 || *g_bms_state == 0x18) {
-        /* UVP/OVP power-on path */
-        if (*g_bms_state == 0x17) {
-            volatile uint32_t *g_fault_shadow = (volatile uint32_t *)0x20002C48;
-            *g_fault_shadow |= 0x40;     /* mark UVP detected */
+    extern void state_handler_07(void);
+    extern void state_handler_08(void);
+    extern void state_handler_09(void);
+    extern void state_handler_0a(void);
+
+    if (*g_boot_mode == 0x17 || *g_boot_mode == 0x18) {
+        /* Hard "MOS Failure" power-on path. */
+        if (*g_boot_mode == 0x17) {
+            *(volatile uint16_t *)0x20002C44 |= 0x40;   /* g_fault_flags bit 6 */
         }
-        volatile uint32_t *g_state_flags = (volatile uint32_t *)0x20002C54;
-        *g_state_flags |= 0x8000;
+        *s_status |= 0x8000;
         state_handler_17_19();
-
-        uart_puts("Power On Detect Mode\r\n");
+        uart_printf((uint8_t *)s_mos_failure_mode);
     } else {
-        /* Normal boot — check button GPIO */
-        bool button_pressed = gpio_bit_read(0x50000000, 0x800);
-        volatile uint32_t *g_state_flags = (volatile uint32_t *)0x20002C54;
-
-        if (button_pressed) {
-            *g_state_flags |= 8;
-            uart_puts("DP Mode\r\n");
+        /* Normal boot — DP vs VanMoof selected by the button on GPIOB PB11. */
+        if (gpio_bit_read(0x50000400, 0x800)) {
+            *s_status |= 8;
+            uart_printf((uint8_t *)s_vanmoof_mode);
         } else {
-            *g_state_flags &= ~8U;
-            uart_puts("VanMoof Mode\r\n");
+            *s_status &= ~8U;
+            uart_printf((uint8_t *)s_dp_mode);
         }
 
         extern void veneer_11f48(void);
         veneer_11f48();
 
-        /* Dispatch to charge/discharge states based on voltage comparators */
-        volatile uint32_t *g_cell_status = (volatile uint32_t *)0x20002C58;
-        volatile uint32_t *g_state_cfg   = (volatile uint32_t *)0x20002C5C;
-        volatile uint16_t *g_cmp1        = (volatile uint16_t *)0x20002C60;
-        volatile uint16_t *g_cmp2        = (volatile uint16_t *)0x20002C64;
-
-        if (*g_bms_state == 10 && *g_cmp1 < *(volatile uint16_t *)((uint8_t *)g_cell_status + 0x46)) {
-            uart_puts("FEDL5236_Max_Cell_Voltage over threshold\r\n");
-            *g_state = 10;
-            *g_state_cfg |= 8;
-            extern void state_handler_0a(void);
-            state_handler_0a();
-        } else if (*g_bms_state == 9 && *g_cmp1 < *(volatile uint16_t *)((uint8_t *)g_cell_status + 0x3E)) {
-            uart_puts("FEDL5236_Min_Cell_Voltage under threshold\r\n");
-            *g_state = 9;
-            *g_state_cfg |= 4;
-            extern void state_handler_09(void);
-            state_handler_09();
-        } else if (*g_bms_state == 8 && *(volatile uint16_t *)((uint8_t *)g_cell_status + 0x36) < *g_cmp2) {
-            uart_puts("CHG CAL over threshold\r\n");
-            *g_state = 8;
-            *g_state_cfg |= 2;
-            extern void state_handler_08(void);
-            state_handler_08();
-        } else if (*g_bms_state == 7 && *(volatile uint16_t *)((uint8_t *)g_cell_status + 0x2E) < *g_cmp2) {
-            uart_puts("DSG CAL over threshold\r\n");
-            *g_state = 7;
-            *g_state_cfg |= 1;
-            extern void state_handler_07(void);
-            state_handler_07();
+        /* Power-on protection detect: print the matching mode, latch the
+         * live-state byte + the protection bit, and enter the handler.
+         * cfg_blk threshold fields are compared against the UVP/OVP limits
+         * (0x2000282A / 0x200027FA). */
+        if (*g_boot_mode == 10 && *thr_uvp < *(volatile uint16_t *)(cfg_blk + 0x46)) {
+            uart_printf((uint8_t *)s_power_on_uvp2_mode);
+            *g_bms_state = 10; *s_prot |= 8; state_handler_0a();
+        } else if (*g_boot_mode == 9 && *thr_uvp < *(volatile uint16_t *)(cfg_blk + 0x3E)) {
+            uart_printf((uint8_t *)s_power_on_uvp1_mode);
+            *g_bms_state = 9;  *s_prot |= 4; state_handler_09();
+        } else if (*g_boot_mode == 8 && *(volatile uint16_t *)(cfg_blk + 0x36) < *thr_ovp) {
+            uart_printf((uint8_t *)s_power_on_ovp2_mode);
+            *g_bms_state = 8;  *s_prot |= 2; state_handler_08();
+        } else if (*g_boot_mode == 7 && *(volatile uint16_t *)(cfg_blk + 0x2E) < *thr_ovp) {
+            uart_printf((uint8_t *)s_power_on_ovp1_mode);
+            *g_bms_state = 7;  *s_prot |= 1; state_handler_07();
+        } else if (*thr_uvp <= *(volatile uint16_t *)(cfg_blk + 0x42)) {
+            uart_printf((uint8_t *)s_pwron_detect_uvp2);
+            *g_bms_state = 10; *s_prot |= 8; state_handler_0a();
+        } else if (*thr_uvp <= *(volatile uint16_t *)(cfg_blk + 0x3A)) {
+            uart_printf((uint8_t *)s_pwron_detect_uvp1);
+            *g_bms_state = 9;  *s_prot |= 4; state_handler_09();
+        } else if (*(volatile uint16_t *)(cfg_blk + 0x32) <= *thr_ovp) {
+            uart_printf((uint8_t *)s_pwron_detect_ovp2);
+            *g_bms_state = 8;  *s_prot |= 2; state_handler_08();
+        } else if (*(volatile uint16_t *)(cfg_blk + 0x2A) <= *thr_ovp) {
+            uart_printf((uint8_t *)s_pwron_detect_ovp1);
+            *g_bms_state = 7;  *s_prot |= 1; state_handler_07();
         } else {
             state_handler_01();
         }
