@@ -50,22 +50,56 @@ void system_reset_fault(void)
 }
 
 /*
+ * nvic_system_reset_dup / nvic_system_reset_v3 — additional copies of
+ * __NVIC_SystemReset that GCC inlined-then-emitted into other translation
+ * units in the OEM build (FUN_08007228 / FUN_08009AA0). Byte-identical to
+ * nvic_system_reset: DSB, write VECTKEY|SYSRESETREQ to SCB->AIRCR, DSB, spin.
+ * Kept as distinct symbols so their call sites (e.g. led.c) resolve.
+ */
+void nvic_system_reset_dup(void)
+{
+    __DSB();
+    *(volatile uint32_t *)0xE000ED0C = 0x05FA0004;
+    __DSB();
+    while (1) { }
+}
+
+void nvic_system_reset_v3(void)
+{
+    __DSB();
+    *(volatile uint32_t *)0xE000ED0C = 0x05FA0004;
+    __DSB();
+    while (1) { }
+}
+
+/* system_reset_simple (FUN_08006328) — bare wrapper that tail-calls
+ * system_reset(); a separate symbol in the OEM image. */
+void system_reset_simple(void)
+{
+    system_reset();
+}
+
+/*
  * System initialization — early boot setup.
  *
- * Calls phase 1 init (GPIO clocks), modem config, phase 2 init
- * (peripheral init), and the main clock setup (FUN_08000658).
+ * Calls GPIO init (FUN_08007D78), modem config, the PA10-gated service-UART
+ * bring-up (service_uart_init / FUN_0800AB7C), the main clock setup
+ * (FUN_08000658), and state_timer_10 (FUN_08006FBC, via irq_wait_handler).
  * Then enables NVIC IRQ 5 (RCC) and IRQ 7 (PVD) with zero priority.
+ *
+ * Note: the earlier source called `phase2_init` here — that was the wrong-
+ * address guess for FUN_0800AB7C, which is actually service_uart_init. It
+ * also spuriously ran state_timer_10 twice (phase2_init + irq_wait_handler).
  */
 void system_init(void)
 {
     extern void gpio_init_buttons(void);  /* FUN_08007d78 */
-    extern void phase2_init(void);       /* FUN_0800ab7c */
     extern void main_clock_setup(void);  /* FUN_08000658 */
-    extern void irq_wait_handler(void);  /* FUN_08006fbc */
+    extern void irq_wait_handler(void);  /* FUN_08006fbc = state_timer_10 */
 
     gpio_init_buttons();
     modem_config();
-    phase2_init();
+    service_uart_init();
     main_clock_setup();
     irq_wait_handler();
 

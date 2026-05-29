@@ -54,6 +54,9 @@ void nvic_system_reset(void);
 void system_reset(void);
 void system_reset_with_arg(uint32_t arg);
 void system_reset_fault(void);
+void nvic_system_reset_dup(void);   /* FUN_08007228 — __NVIC_SystemReset copy */
+void nvic_system_reset_v3(void);    /* FUN_08009AA0 — __NVIC_SystemReset copy */
+void system_reset_simple(void);     /* FUN_08006328 — tail-calls system_reset */
 void system_init(void);
 
 /* NVIC interrupt control — OEM uses raw cpsid/cpsie inline; no
@@ -325,9 +328,6 @@ uint32_t nvic_reconfigure(int *ctx, uint32_t *param);
  * per-oscillator State / Calibration / Range fields, then the 4-word
  * PLL sub-struct). */
 uint32_t rcc_osc_config(void *cfg);
-
-/* Phase 2 init — USART/DMA/GPIO initialization */
-void phase2_init(void);
 
 /* Main clock setup */
 void main_clock_setup(void);

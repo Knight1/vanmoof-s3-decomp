@@ -88,15 +88,6 @@ void fg_init(void)
 }
 
 /*
- * Phase 2 init — DMA/USART/peripheral initialization.
- * Wraps state_timer_10 which handles DMA channel and USART config.
- */
-void phase2_init(void)
-{
-    state_timer_10();
-}
-
-/*
  * IRQ wait handler — wraps state_timer_10().
  * In the OEM binary this is a separate entry point at FUN_08006fbc
  * that handles the IRQ wait/state transition after clock setup.
