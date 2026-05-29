@@ -1666,8 +1666,7 @@ void state_timer_10(void)
  *     = USART1 (0x40013800), baud 9600 (0x2580), mode TX|RX (0xC), and the two
  *     advanced-feature words (handle[9]=0x20, handle[0xF]=0x2000); zero CR1/CR2/
  *     CR3 on the instance first.
- *   - flash_page_program() is the mislabelled HAL_UART_Init in this tree (see
- *     progress.md "misnomer cluster"); reset on failure.
+ *   - hal_uart_init() (HAL_UART_Init, in uart.c); reset on failure.
  *   - Clear the handle's RX/TX bookkeeping (offsets 0x78/0x7C=0x20, 0x80=0) and
  *     the five ring-buffer index cells, set USART1->CR1 |= RXNEIE (0x20), set
  *     IRQ27 (USART1) priority 0 and enable it, then mark TX enabled.
@@ -1715,7 +1714,7 @@ void service_uart_init(void)
 
     *(volatile uint32_t *)0x200047DC = 0;
 
-    if (flash_page_program((int *)s_uart_hnd) != 0) {   /* HAL_UART_Init */
+    if (hal_uart_init((int *)s_uart_hnd) != 0) {   /* HAL_UART_Init */
         system_reset();
     }
 

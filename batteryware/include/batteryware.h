@@ -122,12 +122,14 @@ uint32_t flash_erase_start(void *ctx);
 uint8_t  flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val);
 uint32_t flash_unlock_both(void);
 void flash_op_cleanup(void *ctx);
-uint32_t flash_page_program(int *ctx);
 void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
 void flash_program_handler(uint8_t *frame, uint16_t frame_len);
-void flash_program_init(void *ctx);
-uint32_t flash_prescaler_setup(int *ctx);
+
+/* STM32L0 HAL UART init chain (in uart.c; were mis-named flash_* in flash.c) */
+uint32_t hal_uart_init(int *ctx);        /* FUN_080114EC = HAL_UART_Init */
+void     hal_uart_msp_init(void *ctx);   /* FUN_08011594 = HAL_UART_MspInit */
+uint32_t uart_set_config(int *ctx);      /* FUN_080115A4 = UART_SetConfig */
 uint8_t  usart1_dma_setup(int *ctx);
 uint32_t flash_op_start(int *ctx);
 
@@ -259,8 +261,8 @@ void dma_halfword_handler_v2(int *ctx);
 uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3);
 uint32_t timeout_poll(int *ctx, uint32_t mask, uint8_t expected, int deadline, uint32_t max_time);
 void dma_transfer_done(int *ctx);
-void dma_channel_config(int *ctx);
-uint32_t dma_completion_handler(uint32_t *ctx);
+void uart_adv_feature_config(int *ctx);      /* FUN_08011B20 = UART_AdvFeatureConfig (in dma.c) */
+uint32_t uart_check_idle_state(uint32_t *ctx); /* FUN_08011C88 = UART_CheckIdleState (in dma.c) */
 uint32_t dma_wait_done(int timeout);
 uint32_t dma_usart_init(int *ctx);
 uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *src4);

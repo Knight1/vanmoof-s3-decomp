@@ -320,14 +320,15 @@ void dma_transfer_done(int *ctx)
 }
 
 /*
- * DMA channel configuration — apply configuration bits from ctx.
+ * uart_adv_feature_config (FUN_08011B20) — STM32L0 HAL UART_AdvFeatureConfig.
+ * (Mis-filed in dma.c; it is a UART helper called only by hal_uart_init.)
  *
- * Walks ctx[9] bitmask (bits 0-7) and applies each enabled configuration
- * field (ctx[10]-ctx[18]) to the peripheral registers at *ctx + 4 and
- * *ctx + 8, using the corresponding clear masks from the literal pool.
- * Special case: if bit 6 is set and ctx[10] == 0x100000, ORs ctx[11] too.
+ * Walks the advanced-feature mask ctx[9] (bits 0-7) and applies each enabled
+ * field (ctx[10]-ctx[18]) to the instance CR2/CR3 (*ctx + 4 / *ctx + 8) using
+ * the corresponding clear masks. Special case: if bit 6 is set and
+ * ctx[10] == 0x100000, ORs ctx[11] too.
  */
-void dma_channel_config(int *ctx)
+void uart_adv_feature_config(int *ctx)
 {
     volatile uint32_t *reg = (volatile uint32_t *)*ctx;
 
@@ -527,7 +528,7 @@ void dma_error_clear_v2(void)
 
 /*
  * Timeout poll v2 — status poll with (*ctx + 0x1C) as status register.
- * Used by dma_completion_handler. Has emergency cleanup on bit 2+11.
+ * Used by uart_check_idle_state. Has emergency cleanup on bit 2+11.
  */
 uint32_t timeout_poll_v2(int *ctx, uint32_t mask, uint8_t param_3, int param_4, uint32_t param_5)
 {
@@ -773,17 +774,18 @@ uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t
 }
 
 /*
- * DMA completion handler — finalize DMA transfer.
+ * uart_check_idle_state (FUN_08011C88) — STM32L0 HAL UART_CheckIdleState.
+ * (Mis-filed in dma.c; it is a UART helper called only by hal_uart_init.)
  *
- * Called after a DMA page program completes. Clears the completion
- * counter, gets the current tick, then checks two completion flags:
- *   - bit 3 (0x8): calls timeout poll with 0x200000 mask
- *   - bit 2 (0x4): calls timeout poll with 0x400000 mask
- * If either fails (returns non-zero), returns 3 (timeout error).
- * Otherwise sets page counters (0x1E/0x1F to 0x20, 0x18 to 0,
- * status byte to 0) and returns 0 (success).
+ * Clears handle field 0x20, reads the current tick, then waits for the
+ * enabled TE/RE bits to settle:
+ *   - bit 3 (0x8 = TE): timeout-poll on instance ISR mask 0x200000
+ *   - bit 2 (0x4 = RE): timeout-poll on instance ISR mask 0x400000
+ * If either times out, returns 3 (HAL_TIMEOUT). Otherwise sets the handle
+ * state fields (0x1E/0x1F = 0x20 READY, 0x18 = 0, lock byte 0x1D = 0) and
+ * returns 0 (HAL_OK).
  */
-uint32_t dma_completion_handler(uint32_t *ctx)
+uint32_t uart_check_idle_state(uint32_t *ctx)
 {
     extern uint32_t tick_get(void);
     uint32_t tick = tick_get();
