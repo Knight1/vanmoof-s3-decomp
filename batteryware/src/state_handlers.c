@@ -265,12 +265,19 @@ void state_handler_03_init(void)
 /*
  * State handler 17/18/19: power-on OVP/UVP protection dispatch.
  *
- * If pre-discharge bit 11 is clear AND (bit 6 or bit 7 is set) AND
- * bit 15 is clear: turns on GPIO pin 0x80 (OVP/UVP override).
- * Clears bit 4 in status register.
- * Turns on GPIO 1, turns off charge MOSFET, turns off GPIO 0x200.
- * Masks out bit 11 (0x800) from status.
- * Calls bms_configure(0), then dispatches:
+ * **Secondary-protection fuse trigger.** When the protection is *not* the
+ * bit-11 class (s_prot_status bit 11 clear) AND a hard over-current is latched
+ * (g_fault_flags bit 6 FAULT_DISCHARGE_OC or bit 7 FAULT_CHARGE_OC) AND the
+ * update-busy flag (s_bms_cfg bit 15) is clear, it drives **GPIOB PB7
+ * (0x80) HIGH** — energizing the heater element of the on-board secondary
+ * fuse. This is a one-shot, last-resort permanent pack disconnect: no code
+ * path ever drives PB7 low again (it is only cleared once, in the boot GPIO
+ * init), so once the AFE's FETs can't break the over-current ("MOS Failure"),
+ * the heater melts the fuse and severs the pack for good. See docs/hardware.md.
+ *
+ * It then forces everything off (clear s_bms_cfg bit 4; PB1 high; charge MOSFET
+ * off via charge_mosfet_off + PB9 low; clear bit 11) and calls bms_configure(0),
+ * then dispatches the resulting protection state:
  *   - bit 11 clear AND bits 6+7 clear → state 0x18
  *   - bit 11 clear AND (bit 6 or bit 7 set) → state 0x17
  *   - bit 11 set → state 0x19
@@ -283,6 +290,8 @@ void state_handler_17_19(void)
     if (((*s_precharge >> 11) & 1) == 0) {
         if ((((*g_fault_flags >> 6) & 1) != 0) || (((*g_fault_flags >> 7) & 1) != 0)) {
             if (((*s_status >> 15) & 1) == 0) {
+                /* PB7 HIGH — fire the secondary-protection fuse heater (one-shot,
+                 * never cleared at runtime). Permanent pack disconnect. */
                 gpio_bit_write(0x50000400, 0x80, 1);
             }
         }

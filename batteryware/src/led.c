@@ -27,7 +27,7 @@ void led_flash(void)
 }
 
 /*
- * Fault LED trigger — triggers a system reset while lighting the LED.
+ * Fault recovery / reset path (name is a decomp guess — NOT an LED).
  *
  * Writes magic value to SRAM, calls nvic_system_reset_dup, clears
  * fault timer, sets RCC bit 0x400, pulses GPIOA pin 2 high.
