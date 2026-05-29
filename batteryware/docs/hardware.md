@@ -57,6 +57,7 @@ Initial SP from vector slot 0: `0x20005000` (top of SRAM).
 | PB9 (bit `0x200`) | Output | **Charge MOSFET enable.** `charge_mosfet_set` drives `gpio_bit_write(GPIOB, 0x200, on)` and caches state in `s_bms_cfg` bit 6. Matches the `"\nChargeOn_Off() --> PB9=0\r"` string. | `charge_mosfet_set` @ `0x08002d50` |
 | PB12 (bit `0x1000`), PB15 (bit `0x8000`) | Output | Misc control lines (toggled both ways) — PB12 cleared in modem.c / `state_flags_handler_timer`, PB15 set in `bms_setup` / `cell_balance_update`. Roles not yet pinned down. | bms_setup.c, fuel_gauge.c, modem.c |
 | PB11 (bit `0x800`) | Input | **Mode-select button.** `main` reads it via `gpio_bit_read(GPIOB, 0x800)` at boot: pressed → "VanMoof Mode" + `s_bms_cfg |= 8`; released → "DP Mode" + `s_bms_cfg &= ~8`. | `main` @ `0x080057b0` |
+| PA9 / PA10 (mask `0x600`) | AF4 (USART1 TX/RX) | **Service/debug UART.** Normally idle (PA10 is sampled as an input). When PA10 is read high for >9 consecutive ticks in `state_timer_05`, `service_uart_init` reconfigures PA9/PA10 to AF4 and brings up USART1 @ 9600 baud, then sets the TX-enable flag (`0x2000453D`). A jumper/probe on PA10 is the trigger. | `service_uart_init` @ `0x0800ab7c` ← `state_timer_05` |
 
 > **Charge/discharge FETs are mostly in the FEDL5236 AFE, not on MCU GPIO.**
 > `bms_configure` (`0x080052d8`) enables/disables the pack FETs by writing
@@ -100,6 +101,10 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x20002C00` | `s_bms_cfg` | 4 | **Central BMS status/control register.** Bit-flag word driving the state machine (bit 4 clear-on-entry, bit 11 mask, bits 3/11/12 select `bms_configure` arg). Aliased as `s_status`/`g_state_timer`/`s_mosfet_status` across files — all the same cell. |
 | `0x20002C10` | — | 4 | SysTick reload value holder — written by `delay_ms` ISR path. Initial value `0x0000AAAA`. |
 | `0x20002C44` | `s_fault_flags` / `g_fault_flags` | 4 | **Central fault/protection register** (`g_fault_flags` in `fuel_gauge.c`/`batteryware.h`). State timers read its low half (`ldrh`) — bits 5/6/7 dispatch `state_handler_17_19`. |
+| `0x20004488` | `s_uart_base` | 0x84 | **USART1 service-UART handle** (HAL_UART_HandleTypeDef-shaped). `[0]`=instance (`0x40013800`), `[1]`=baud (9600), `[5]`=mode (TX\|RX), `[9]/[0xF]`=advanced-feature words; rx/tx bookkeeping at `+0x78/0x7C/0x80`. Populated by `service_uart_init`, shared with `uart.c`. |
+| `0x2000453D` | `s_tx_enabled` | 1 | **Service-UART TX-enable flag.** Set 1 by `service_uart_init` when PA10 held (UART up), cleared 0 otherwise; gates UART TX in `uart.c`. (Same cell `state_timer_05` calls `s_gpio_flag`.) |
+| `0x2000453E` / `0x20004540` / `0x20004542` / `0x20004544` | — | 2 ea | USART1 RX/TX ring-buffer index cells, zeroed by `service_uart_init` at bring-up. |
+| `0x20002C84` | — | 2 | Zeroed by `service_uart_init` at UART bring-up (role TBD). |
 | `0x20002C80` | `s_bms_flags` | 1/4 | **BMS dispatch-flags byte** — read by the state timers as `uint8` (`ldrb`), bit 0 / bit 2 gate cell-balance and fault-dispatch, cleared after handling. NOTE: `delay.c`/this table previously called it a "SysTick CTRL shadow" (`uint32`) — that interpretation is unverified and likely wrong (SysTick CTRL is a core register at `0xE000E010`, not SRAM). |
 
 ## Peripheral usage

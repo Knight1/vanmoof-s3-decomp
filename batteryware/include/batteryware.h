@@ -297,6 +297,9 @@ uint32_t smbus_read(uint8_t addr, uint8_t count);
 void smbus_read_nack(uint8_t addr, uint8_t val);
 bool button_entry_check(void);
 void state_timer_15(void);
+void state_timer_0a(void);
+void can_transmit(void);   /* misnomer: actually the state-0x16 periodic timer */
+void service_uart_init(void);   /* FUN_0800AB7C: USART1 service UART, PA10-gated */
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);

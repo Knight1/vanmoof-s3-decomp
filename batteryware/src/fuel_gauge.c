@@ -506,10 +506,11 @@ static volatile uint32_t * const s_fg_i2c_ctx  = (volatile uint32_t *)0x20003250
 static volatile uint8_t  * const s_fg_i2c_data = (volatile uint8_t  *)0x20003254;
 static volatile uint8_t  * const s_fg_watchdog  = (volatile uint8_t  *)0x20003258;
 
-/* SPI status checker — external */
-extern uint32_t i2c_check_ready(void *ctx);  /* FUN_08010f88 */
-/* SPI read 2 bytes — external */
-extern uint32_t i2c_read_2bytes(uint8_t addr, uint8_t count);  /* FUN_080048cc */
+/* Bus-ready check (FUN_08010f88): returns the ready byte at ctx+0x51. */
+static uint32_t i2c_check_ready(void *ctx)
+{
+    return *((volatile uint8_t *)ctx + 0x51);
+}
 
 /*
  * Fuel gauge communication watchdog.
@@ -521,13 +522,12 @@ extern uint32_t i2c_read_2bytes(uint8_t addr, uint8_t count);  /* FUN_080048cc *
 void fg_watchdog_kick(void)
 {
     if (i2c_check_ready((void *)s_fg_i2c_ctx) == 1) {
-        if (i2c_read_2bytes(1, 2) == 0 ||
+        if (smbus_read(1, 2) == 0 ||  /* FUN_080048cc */
             (((s_fg_i2c_data[2] & 0xF) == 0xF &&
               (s_fg_i2c_data[3] & 2) == 2))) {
             *s_fg_watchdog = 0;
             /* Reset SPI config */
-            extern void i2c_write_reg(uint8_t addr, uint8_t val, uint8_t mask);
-            i2c_write_reg(8, 0x91, 0xFF);  /* FUN_08004a18 */
+            smbus_write_reg(8, 0x91, 0xFF);  /* FUN_08004a18 */
         } else {
             delay_ms(5);
             bms_init();
@@ -615,14 +615,10 @@ void fg_read_loop(void *ctx)
     void (* const * const s_callback_tbl)(uint32_t) = (void (* const * const)(uint32_t))0x08017470;
 
     if ((*(volatile uint8_t *)((uintptr_t)ctx + 0x37) & 8) == 0) {
-        extern void fg_read_done(void);
-        fg_read_done();
         return;
     }
 
     if (smbus_read(0x34, 2) == 0) {
-        extern void fg_read_done(void);
-        fg_read_done();
         return;
     }
 
@@ -642,8 +638,6 @@ void fg_read_loop(void *ctx)
         s_callback_tbl[*s_index](val);
     } else {
         smbus_write_reg(8, 0x91, 0xFF);
-        extern void fg_read_done(void);
-        fg_read_done();
     }
 }
 

@@ -403,9 +403,6 @@ void state_flags_handler_timer(void)
     volatile uint32_t * const s_timer2 = (volatile uint32_t *)0x20002AC8;
 
     extern void cell_balance_update(void); /* FUN_08000880 (bit 0) */
-    extern void resp_send_chain(void);     /* veneer_11f68 */
-    extern void resp_send_chain2(void);    /* veneer_11f88 */
-    extern void resp_send_chain3(void);    /* veneer_11f18 */
     extern void fg_scan(void);             /* FUN_0800325c */
     extern void memcmp_verify(char *actual, uint32_t len, char *expected);
 
@@ -420,9 +417,9 @@ void state_flags_handler_timer(void)
     }
     if (((*s_flags >> 2) & 1) != 0) {
         *s_flags &= ~4U;
-        resp_send_chain();
-        resp_send_chain2();
-        resp_send_chain3();
+        veneer_11f68();
+        veneer_11f88();
+        veneer_11f18();
         fg_watchdog_kick();
     }
     if (((*s_flags >> 3) & 1) != 0) {
@@ -1281,7 +1278,6 @@ void state_timer_05(void)
     extern void veneer_11f18(void);
     extern void veneer_11f58(uint32_t);
     extern void veneer_11f08(int arg);
-    extern void gpio_check_and_config(void);
 
     fg_scan();
 
@@ -1332,7 +1328,7 @@ void state_timer_05(void)
                 *s_gpio_cnt = cnt;
                 if (cnt > 9) {
                     *s_gpio_cnt = 0;
-                    gpio_check_and_config();
+                    service_uart_init();
                 }
             }
         }
@@ -1651,6 +1647,94 @@ void state_timer_10(void)
         *(volatile uint8_t *)(0x20002B64 + i) = 0xFF;
         *(volatile uint8_t *)(0x20002B84 + i) = 0xFF;
     }
+}
+
+/*
+ * service_uart_init (FUN_0800AB7C): bring up the USART1 service/debug UART,
+ * gated on PA10 still being asserted.
+ *
+ * Reached from state_timer_05 once PA10 (GPIOA mask 0x400) has been sampled
+ * high for >9 consecutive ticks. It re-samples PA10 as a debounce: if the pin
+ * is still high it configures USART1, otherwise it just clears the TX-enable
+ * flag (s_tx_enabled @ 0x2000453D, shared with uart.c) and returns.
+ *
+ * Bring-up sequence (PA10 still high):
+ *   - RCC->APB2ENR |= USART1EN (bit14); RCC->IOPENR |= IOPAEN (bit0), with the
+ *     usual dead read-back of IOPENR preserved for fidelity.
+ *   - PA9/PA10 -> AF4 (USART1 TX/RX), very-high speed, no pull.
+ *   - Populate the UART handle @ 0x20004488 (== uart.c s_uart_base): instance
+ *     = USART1 (0x40013800), baud 9600 (0x2580), mode TX|RX (0xC), and the two
+ *     advanced-feature words (handle[9]=0x20, handle[0xF]=0x2000); zero CR1/CR2/
+ *     CR3 on the instance first.
+ *   - flash_page_program() is the mislabelled HAL_UART_Init in this tree (see
+ *     progress.md "misnomer cluster"); reset on failure.
+ *   - Clear the handle's RX/TX bookkeeping (offsets 0x78/0x7C=0x20, 0x80=0) and
+ *     the five ring-buffer index cells, set USART1->CR1 |= RXNEIE (0x20), set
+ *     IRQ27 (USART1) priority 0 and enable it, then mark TX enabled.
+ */
+void service_uart_init(void)
+{
+    volatile uint32_t * const RCC         = (volatile uint32_t *)0x40021000;
+    volatile uint32_t * const s_uart_hnd  = (volatile uint32_t *)0x20004488;
+    volatile uint8_t  * const s_tx_enable = (volatile uint8_t  *)0x2000453D;
+
+    if (!gpio_bit_read(0x50000000, 0x400)) {
+        *s_tx_enable = 0;
+        return;
+    }
+
+    gpio_pin_cfg_t cfg;
+    memset_byte_fill((uint8_t *)&cfg, 0, sizeof cfg);
+
+    RCC[0x34 / 4] |= 0x4000;               /* APB2ENR: USART1EN */
+    RCC[0x2C / 4] |= 0x1;                   /* IOPENR:  IOPAEN   */
+    (void)(RCC[0x2C / 4] & 0x1);            /* dead read-back (OEM fidelity) */
+
+    cfg.pin_mask = 0x600;                   /* PA9 (TX) | PA10 (RX) */
+    cfg.mode     = GPIO_MODE_AF;            /* 2 */
+    cfg.pupd     = 0;
+    cfg.speed    = 3;                       /* very-high */
+    cfg.af       = 4;                       /* AF4 = USART1 */
+    gpio_pin_config((uint32_t *)0x50000000, &cfg);
+
+    s_uart_hnd[0]  = 0x40013800;            /* USART1 instance */
+    s_uart_hnd[1]  = 0x2580;                /* baud 9600 */
+    s_uart_hnd[2]  = 0;
+    s_uart_hnd[3]  = 0;
+    s_uart_hnd[4]  = 0;
+    s_uart_hnd[5]  = 0xC;                   /* mode TX|RX */
+    s_uart_hnd[6]  = 0;
+    s_uart_hnd[7]  = 0;
+    s_uart_hnd[8]  = 0;
+    s_uart_hnd[9]  = 0x20;
+    s_uart_hnd[15] = 0x2000;
+
+    *(volatile uint32_t *)(s_uart_hnd[0] + 0) = 0;   /* USART1->CR1 */
+    *(volatile uint32_t *)(s_uart_hnd[0] + 4) = 0;   /* USART1->CR2 */
+    *(volatile uint32_t *)(s_uart_hnd[0] + 8) = 0;   /* USART1->CR3 */
+
+    *(volatile uint32_t *)0x200047DC = 0;
+
+    if (flash_page_program((int *)s_uart_hnd) != 0) {   /* HAL_UART_Init */
+        system_reset();
+    }
+
+    s_uart_hnd[0x80 / 4] = 0;
+    s_uart_hnd[0x78 / 4] = 0x20;
+    s_uart_hnd[0x7C / 4] = 0x20;
+
+    *(volatile uint16_t *)0x20004542 = 0;
+    *(volatile uint16_t *)0x2000453E = 0;
+    *(volatile uint16_t *)0x20004540 = 0;
+    *(volatile uint16_t *)0x20004544 = 0;
+    *(volatile uint16_t *)0x20002C84 = 0;
+
+    *(volatile uint32_t *)(s_uart_hnd[0] + 0) |= 0x20;  /* USART1->CR1 |= RXNEIE */
+
+    flash_opt_byte_op(0x1B, 0);             /* NVIC_SetPriority(USART1_IRQn=27, 0) */
+    nvic_enable_irq_s(0x1B);                /* NVIC_EnableIRQ(27) */
+
+    *s_tx_enable = 1;
 }
 
 /* state_timer_charge_a (FUN_0800a794): charge monitoring with bootloader entry */
@@ -2088,6 +2172,108 @@ void state_timer_15(void)
             *s_bms_oc_tmr = 0;
         }
         veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(0);
+}
+
+/*
+ * state_timer_0a (FUN_08000f3c) — state-0x0A periodic tick. The simplest of
+ * the timer family: protection dispatch (prot bits 1->08, 0->07, bit4 clear
+ * ->01, bit11->17_19) then the flag-2 alert/discharge-OC phase with the
+ * bit5/6/7 fault escalation. No charge/threshold phase.
+ */
+void state_timer_0a(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 4) & 1) == 0) { state_handler_01(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check();
+        if ((*s_fault_flags != 0) &&
+            ((((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) || ((*s_fault_flags >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(0);
+}
+
+/*
+ * can_transmit (FUN_080055a8) — NOT a CAN routine; the name is a decomp
+ * misnomer. This is the state-0x16 periodic timer. Protection dispatch is the
+ * standard 08/07/0a/09/17_19 set (with a veneer_11f18 fired right after the
+ * cfg-bit5 clear), and the flag-2 phase runs alert + discharge-OC + charge-OC,
+ * then a charge-recovery debounce: while s_cell[0] >= cfg_blk[0x92], count up
+ * (limit cfg_blk[0x94]/100, timer @ 0x20002ABA) and transition via
+ * state_handler_01.
+ */
+void can_transmit(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    volatile uint8_t  *s_cell  = (volatile uint8_t  *)0x20002588;
+    volatile uint8_t  *cfg_blk = (volatile uint8_t  *)0x200028D0;
+    volatile uint16_t *s_tmr   = (volatile uint16_t *)0x20002ABA;
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            veneer_11f18();
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_prot_status >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_fault_flags != 0) &&
+            ((((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) || ((*s_fault_flags >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (cfg_blk[0x92] < s_cell[0]) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if ((uint16_t)(*(volatile uint16_t *)(cfg_blk + 0x94) / 100) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        veneer_11f68(); veneer_11f88();
         fg_watchdog_kick();
     }
     veneer_11f08(0);

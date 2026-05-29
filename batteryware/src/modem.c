@@ -109,7 +109,7 @@ bool modem_deinit(void *ctx)
  */
 void bootloader_entry(void)
 {
-    extern volatile uint8_t * const s_protection_cfg;
+    volatile uint8_t * const s_protection_cfg = (volatile uint8_t *)0x200028D0;
     extern void charge_mosfet_off(void);
     extern void bms_set_state(uint8_t state);
     extern void memcmp_verify(char *a, uint32_t size, char *b);
@@ -126,8 +126,7 @@ void bootloader_entry(void)
     uart_printf((uint8_t *)0x0800720C);
     uart_tx_flush();
 
-    extern bool power_on_gpio_check(void);  /* FUN_080050ac */
-    if (power_on_gpio_check()) {
+    if (button_entry_check()) {  /* FUN_080050ac */
         memcmp_verify((char *)0x08007214, 0x80, (char *)0x08007210);
         gpio_bit_write(0x50000400, 0x1000, 0);
         while (1) { }  /* bootloader mode — wait for reset */
