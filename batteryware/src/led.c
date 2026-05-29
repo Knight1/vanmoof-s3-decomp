@@ -29,8 +29,11 @@ void led_flash(void)
 /*
  * Fault recovery / reset path (name is a decomp guess — NOT an LED).
  *
- * Writes magic value to SRAM, calls nvic_system_reset_dup, clears
- * fault timer, sets RCC bit 0x400, pulses GPIOA pin 2 high.
+ * Writes a magic word to SRAM 0x20002C2C, calls nvic_system_reset_dup,
+ * clears g_fault_flags (0x20002C44), sets bit 0x400 in 0x20002C48, and
+ * drives GPIOB PB1 (mask 0x2) high — the charge-path control line, not a
+ * GPIOA pin. (The actual secondary-protection fuse heater is GPIOB PB7,
+ * driven only in state_handler_17_19; see docs/hardware.md.)
  */
 void fault_led_trigger(void)
 {
