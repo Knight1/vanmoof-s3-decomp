@@ -231,6 +231,22 @@ uint32_t veneer_1556c(uint32_t arg)
     return 0;
 }
 
+/*
+ * veneer_11ee8 / 11f08 / 11f18 / 11f58 / 11f68 / 11f88 — sibling trampolines
+ * of veneer_11f48. Each is `push {r0}; ldr r0,[pc,#8]; mov ip,r0; pop {r0};
+ * bx ip`, jumping to a flash-held pointer whose value is an SRAM address with
+ * the Thumb bit set (e.g. 11f68 -> 0x20000d01, 11f88 -> 0x20000dd9, 11f08 ->
+ * 0x2000185d, 11f18 -> 0x20001935, 11ee8 -> 0x20001089, 11f58 -> 0x200000cd).
+ * Those routines are installed in SRAM at runtime and are not part of this
+ * image, so for decomp-c they are no-op stubs that keep the call sites intact.
+ */
+void veneer_11ee8(void)          { }
+void veneer_11f08(int arg)       { (void)arg; }
+void veneer_11f18(void)          { }
+void veneer_11f58(uint32_t arg)  { (void)arg; }
+void veneer_11f68(void)          { }
+void veneer_11f88(void)          { }
+
 /* FUN_0800eebc was decompiled here as `nop_eebc`. Re-identified as
  * HAL_CRC_MspInit (called from HAL_CRC_Init / FUN_0800edf0). Moved to
  * crc.c as `crc_msp_init`. */

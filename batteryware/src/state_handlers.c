@@ -1773,3 +1773,322 @@ void state_timer_charge_b(void)
     }
     veneer_11f08(0);
 }
+
+/*
+ * Bootloader / shipping power-down entry check (OEM FUN_080050ac).
+ *
+ * Forces the charge MOSFET off (PB9 = 0), then polls the FEDL5236 total-
+ * voltage register (reg 0x34). The raw reading is scaled (raw * 19536 / 1000,
+ * i.e. an mV conversion) and compared against 10000; once the pack has fallen
+ * to/below ~10 V it runs the FEDL5236 POWER_DOWN command sequence (reg 0x0C,
+ * waiting on the bit-7 handshake) and samples the button on PA11:
+ *   pressed (high) -> print "POWER_DOWN_Finish", return true;
+ *   released       -> print "POWER_DOWN_Error",  return false.
+ * Either poll stage gives up after ~250 ticks (5 ms each) and returns false.
+ * `s_bms_flags` bits 4/5 are cleared opportunistically (pending TX/alert acks).
+ */
+bool button_entry_check(void)
+{
+    volatile uint8_t * const rx = (volatile uint8_t *)0x20002B84;
+    uint32_t scaled;
+    uint8_t  ticks;
+
+    gpio_bit_write(0x50000400, 0x200, 0);             /* PB9 = 0 (charge off) */
+    uart_printf((uint8_t *)s_chargeon_off_pb9_0);
+    delay_ms(100);
+    ticks = 0;
+    smbus_write_reg(8, 1, 0xFF);
+    delay_ms(5);
+    smbus_write_reg(8, 0x91, 0xFF);
+    uart_tx_flush();
+
+    for (;;) {
+        delay_ms(5);
+        scaled = 100000u;                              /* fallback when the read fails */
+        if (smbus_read(0x34, 2) != 0) {
+            scaled = *(volatile uint16_t *)(rx + 2);
+            scaled = (scaled * 19536u) / 1000u;
+            if (((*s_bms_flags >> 4) & 1) != 0) {
+                *s_bms_flags &= ~0x10u;
+            }
+        }
+        if (++ticks > 0xF9) {
+            uart_tx_flush();
+            return false;
+        }
+        if (((*s_bms_flags >> 5) & 1) != 0) {
+            *s_bms_flags &= ~0x20u;
+        }
+        uart_resp_handler();
+        uart_tx_isr();
+
+        if (scaled <= 10000u) {
+            /* Pack drained — issue FEDL5236 power-down and confirm. */
+            ticks = 0;
+            uart_tx_flush();
+            do {
+                delay_ms(5);
+                if (++ticks > 0xF9) {
+                    uart_tx_flush();
+                    return false;
+                }
+                rx[2] = 0;
+                smbus_read(0x0C, 1);
+                if (((*s_bms_flags >> 5) & 1) != 0) {
+                    *s_bms_flags &= ~0x20u;
+                }
+                uart_resp_handler();
+                uart_tx_isr();
+            } while ((rx[2] & 0x80) == 0x80);
+
+            delay_ms(5);
+            uart_printf((uint8_t *)s_pdown_set_command);
+            uart_tx_flush();
+            smbus_read_nack(0x0C, 0x10);
+            delay_ms(50);
+            if (gpio_bit_read(0x50000000, 0x800)) {    /* PA11 */
+                uart_printf((uint8_t *)s_pdown_finish);
+                uart_tx_flush();
+                return true;
+            } else {
+                uart_printf((uint8_t *)s_pdown_error);
+                uart_tx_flush();
+                return false;
+            }
+        }
+    }
+}
+
+/*
+ * state_timer_0c (FUN_0800122c) — state-0x0C periodic tick.
+ * Standard timer skeleton; the flag-2 phase runs the discharge over-current
+ * path and a discharge-recovery debounce on cell[1]/[2] vs cfg_blk[0x72]
+ * (debounce count cfg_blk[0x74]/100, timer @ 0x20002B5C).
+ */
+void state_timer_0c(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    volatile uint8_t  *s_cell  = (volatile uint8_t  *)0x20002588;
+    volatile uint8_t  *cfg_blk = (volatile uint8_t  *)0x200028D0;
+    volatile uint16_t *s_tmr   = (volatile uint16_t *)0x20002B5C;
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_prot_status >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check();
+        if ((*s_fault_flags != 0) &&
+            ((((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) || ((*s_fault_flags >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_bms_cur <= BMS_OC_DISCHARGE_THRESHOLD) { state_handler_01(); return; }
+        if ((cfg_blk[0x72] < s_cell[1]) || (cfg_blk[0x72] < s_cell[2])) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if ((uint16_t)(*(volatile uint16_t *)(cfg_blk + 0x74) / 100) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(0);
+}
+
+/*
+ * state_timer_12 (FUN_08001434) — state-0x12 periodic tick. Sibling of 0c;
+ * the discharge-recovery debounce is on cell[1]/[2] < cfg_blk[0x7a] (count
+ * cfg_blk[0x7c]/100, timer @ 0x20002ACE).
+ */
+void state_timer_12(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    volatile uint8_t  *s_cell  = (volatile uint8_t  *)0x20002588;
+    volatile uint8_t  *cfg_blk = (volatile uint8_t  *)0x200028D0;
+    volatile uint16_t *s_tmr   = (volatile uint16_t *)0x20002ACE;
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_prot_status >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check();
+        if ((*s_fault_flags != 0) &&
+            ((((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) || ((*s_fault_flags >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (*s_bms_cur <= BMS_OC_DISCHARGE_THRESHOLD) { state_handler_01(); return; }
+        if ((s_cell[1] < cfg_blk[0x7A]) || (s_cell[2] < cfg_blk[0x7A])) {
+            *s_tmr = 0;
+        } else {
+            uint16_t cnt = (uint16_t)(*s_tmr + 1);
+            *s_tmr = cnt;
+            if ((uint16_t)(*(volatile uint16_t *)(cfg_blk + 0x7C) / 100) <= cnt) {
+                state_handler_01(); return;
+            }
+        }
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(0);
+}
+
+/*
+ * state_timer_13 (FUN_0800163c) — state-0x13 periodic tick (normal/charging).
+ * Runs the full fuel-gauge check suite, dispatches latched faults
+ * (g_fault_flags bits 0..7 -> handlers 12/13/14/15/16/17_19), and when the
+ * pack is above the OC limit (20000) toggles the PB9 charge MOSFET based on
+ * the pack voltage vs the cfg_blk[0x16] upper window.
+ */
+void state_timer_13(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11ee8(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    volatile uint8_t  *cfg_blk = (volatile uint8_t  *)0x200028D0;
+    volatile uint32_t *thr2    = (volatile uint32_t *)0x20002800;
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 5) & 1) != 0) { state_handler_0c(); return; }
+            if (((*s_prot_status >> 4) & 1) != 0) { state_handler_0b(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_uvp1_check(); fg_uvp2_check(); fg_ovp1_check(); fg_ovp2_check();
+        fg_threshold_check(); fg_alert_monitor();
+        if (*s_fault_flags != 0) {
+            if ((*s_fault_flags & 1) != 0)        { state_handler_12(); return; }
+            if (((*s_fault_flags >> 1) & 1) != 0) { state_handler_13(); return; }
+            if (((*s_fault_flags >> 2) & 1) != 0) { state_handler_14(); return; }
+            if (((*s_fault_flags >> 3) & 1) != 0) { state_handler_15(); return; }
+            if (((*s_fault_flags >> 4) & 1) != 0) { state_handler_16(); return; }
+            if (((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) ||
+                ((*s_fault_flags >> 7) & 1)) { state_handler_17_19(); return; }
+        }
+        if (*s_bms_cur <= 20000) {
+            if (((*s_prot_status >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_prot_status >> 2) & 1) != 0) { state_handler_09(); return; }
+            state_handler_01(); return;
+        }
+        if (*thr2 < *(volatile uint16_t *)(cfg_blk + 0x16)) {
+            if (((*s_bms_cfg >> 6) & 1) != 0) {
+                *s_bms_cfg &= ~0x40U;
+                gpio_bit_write(0x50000400, 0x200, 0);
+            }
+        } else if (((*s_bms_cfg >> 6) & 1) == 0) {
+            *s_bms_cfg |= 0x40;
+            gpio_bit_write(0x50000400, 0x200, 1);
+        }
+        veneer_11f68(); veneer_11ee8(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(1);
+}
+
+/*
+ * state_timer_15 (FUN_080019b8) — state-0x15 periodic tick. Discharge-OC
+ * monitor: when the pack current exceeds 19999 for >9 consecutive ticks it
+ * transitions via state_handler_02 (counter @ 0x20002C0C = s_bms_oc_tmr).
+ */
+void state_timer_15(void)
+{
+    extern void fg_scan(void);
+    extern void veneer_11f68(void);
+    extern void veneer_11f88(void);
+    extern void veneer_11f18(void);
+    extern void veneer_11f08(int arg);
+    fg_scan();
+
+    if (*s_bms_state != 0) { state_handler_11(); return; }
+
+    if ((*s_bms_flags & 1) != 0) {
+        *s_bms_flags &= ~1U;
+        if (((*s_bms_cfg >> 5) & 1) != 0) {
+            *s_bms_cfg &= ~0x20U;
+            if (((*s_prot_status >> 1) & 1) != 0) { state_handler_08(); return; }
+            if ((*s_prot_status & 1) != 0)        { state_handler_07(); return; }
+            if (((*s_prot_status >> 3) & 1) != 0) { state_handler_0a(); return; }
+            if (((*s_prot_status >> 2) & 1) != 0) { state_handler_09(); return; }
+            if (((*s_prot_status >> 6) & 1) == 0) { state_handler_01(); return; }
+            if (((*s_prot_status >> 11) & 1) != 0) { state_handler_17_19(); return; }
+        }
+        cell_balance_update();
+    }
+
+    if (((*s_bms_flags >> 2) & 1) != 0) {
+        *s_bms_flags &= ~4U;
+        fg_alert_monitor(); fg_discharge_oc_check(); fg_charge_oc_check();
+        if ((*s_fault_flags != 0) &&
+            ((((*s_fault_flags >> 5) & 1) || ((*s_fault_flags >> 6) & 1) || ((*s_fault_flags >> 7) & 1)))) {
+            state_handler_17_19(); return;
+        }
+        if (BMS_OC_DISCHARGE_THRESHOLD < *s_bms_cur) {
+            uint16_t cnt = (uint16_t)(*s_bms_oc_tmr + 1);
+            *s_bms_oc_tmr = cnt;
+            if (cnt > 9) {
+                *s_bms_oc_tmr = 0;
+                state_handler_02();
+                return;
+            }
+        } else {
+            *s_bms_oc_tmr = 0;
+        }
+        veneer_11f68(); veneer_11f88(); veneer_11f18();
+        fg_watchdog_kick();
+    }
+    veneer_11f08(0);
+}

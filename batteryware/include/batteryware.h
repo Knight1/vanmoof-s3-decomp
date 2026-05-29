@@ -267,6 +267,17 @@ uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *
 uint32_t veneer_1556c(uint32_t arg);
 uint32_t veneer_1557c(uint32_t numerator, uint32_t divisor);
 
+/* 0x08011exx/0x08011fxx veneers — each is a trampoline that bx-jumps to a
+ * function pointer held in flash whose value is an SRAM address (Thumb bit
+ * set) installed at runtime; the routine bodies are not in this image, so
+ * these are no-op stubs (see src/nops.c). Signatures match the call sites. */
+void veneer_11ee8(void);
+void veneer_11f08(int arg);
+void veneer_11f18(void);
+void veneer_11f58(uint32_t arg);
+void veneer_11f68(void);
+void veneer_11f88(void);
+
 /* memcpy helpers */
 uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
 void memcpy_byte(void *dst, const void *src, uint32_t len);
@@ -284,6 +295,8 @@ uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val);
 void smbus_write_reg(uint8_t reg, uint8_t val, uint8_t mask);
 uint32_t smbus_read(uint8_t addr, uint8_t count);
 void smbus_read_nack(uint8_t addr, uint8_t val);
+bool button_entry_check(void);
+void state_timer_15(void);
 
 /* System tick — read millisecond counter */
 uint32_t get_tick_ms(uint32_t *out);

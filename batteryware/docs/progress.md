@@ -26,14 +26,17 @@ _Last refresh from `ghidra/exports/batteryware_program.json`: 2026-05-25
 
 | Status | Count |
 | --- | --- |
-| pending      |  0 |
-| in-progress  |   0 |
-| named        |   6 |
-| decomp-c     | 195 |
-| byte-eq      |   0 |
-| deferred     |  30 |
+ | pending      |  0  |
+ | in-progress  |  0 |
+ | named        | 19 |
+ | decomp-c     | 229 |
+ | byte-eq      |  0 |
+ | deferred     | 33 |
 
-_Total functions: 281. 176 decomp-c, 6 named, 30 deferred, 20 pending (`FUN_*`).
+_Total functions: 281. 229 decomp-c, 19 named (declared + signature known, no C
+body yet — dead-stripped state handlers and large unimplemented routines), 33
+deferred (toolchain-provided runtime + intentionally-skipped thunks/veneers),
+0 pending._
 ## Functions
 
 | Addr | Size | Name | Status | Notes |
