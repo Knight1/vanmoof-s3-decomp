@@ -53,14 +53,14 @@ shown with LSB set (Thumb mode).
 | 0 | `+0x00` | `0x20005000` | Initial MSP. Stack grows down from top of 20 KB SRAM |
 | 1 | `+0x04` | `0x080131F9` | **Reset_Handler** (entry at `0x080131F8`) |
 | 2 | `+0x08` | `0x0801324D` | NMI_Handler (default) |
-| 3 | `+0x0C` | `0x0800B329` | **HardFault_Handler** (real handler at `0x0800B328`) |
+| 3 | `+0x0C` | `0x0800B329` | **HardFault** → real handler `0x08006328` (`system_reset_simple`, value − 0x5000). The `0x0800B328` label is a −0x5000 mislabel (lands mid-UART-processor). |
 | 4–10 | — | `0x00000000` | MemManage, BusFault, UsageFault, Reserved (all zero — CM0+ faults handled via HardFault) |
 | 11 | `+0x2C` | `0x0801324D` | SVC_Handler (default) |
 | 12–13 | — | `0x00000000` | Reserved |
 | 14 | `+0x38` | `0x0801324D` | PendSV_Handler (default) |
 | 15 | `+0x3C` | `0x2000199D` | **SysTick_Handler** — → SRAM vector at `0x2000199C` (configurable at runtime) |
-| 16–27 | — | `0x0801324D` | IRQ 0–11 (most default, except IRQ 5 = `0x0800C24D`/TIM2, IRQ 7 = `0x0800C279`/TIM2, IRQ 12 = `0x080054C5`/USART1) |
-| 28 | `+0x70` | `0x080054C5` | **USART1_IRQHandler** (IRQ 12) — real handler at `0x080054C4` |
+| 16–27 | — | `0x0801324D` | IRQ 0–11 (most default, except IRQ 5 = `0x0800C24D` → real `0x0800724C` EXTI0_1/PB0, IRQ 7 = `0x0800C279` → real `0x08007278` EXTI4_15/PC13, IRQ 12 = `0x080054C5` → real `0x080004C4` ADC1_COMP — all values − 0x5000) |
+| 28 | `+0x70` | `0x080054C5` | **ADC1_COMP_IRQHandler** (IRQ 12) — real handler at `0x080004C4` (value − 0x5000; the `0x080054C4` label is a mislabel) |
 | 29–34 | — | `0x0801324D` | IRQ 13–18 (default) |
 | 35 | `+0x8C` | `0x00000000` | IRQ 19 — zero |
 | 36–40 | — | `0x0801324D` | IRQ 20–24 (default) |
@@ -74,11 +74,12 @@ shown with LSB set (Thumb mode).
 The default handler `0x0801324D` (Thumb LSB set → entry at `0x0801324C`)
 is an infinite loop stub (`b .`).
 
-Real IRQ handlers identified so far:
-- **IRQ 3** = HardFault at `0x0800B328` (unusual — STM32L0 typically maps HardFault to slot 3)
-- **IRQ 5** = TIM2 at `0x0800C24C`
-- **IRQ 7** = TIM2 alternative at `0x0800C278`
-- **IRQ 12** = USART1 at `0x080054C4`
+Real IRQ handlers identified so far (vector values are runtime addresses;
+subtract 0x5000 to get the Ghidra/file address of the real handler):
+- **Slot 3 (HardFault)** → `0x08006328` = `system_reset_simple` (OEM resets on fault). The `0x0800B328` blob is the +0x5000 mislabel (mid-UART-processor).
+- **IRQ 5 (EXTI0_1)** → `0x0800724C` — clears EXTI line 0 = PB0 button. (Earlier "TIM2 at 0x0800C24C" was the mislabel.)
+- **IRQ 7 (EXTI4_15)** → `0x08007278` — clears EXTI line 13 = PC13 power button. (Earlier "TIM2 at 0x0800C278" was the mislabel.)
+- **IRQ 12 (ADC1_COMP)** → `0x080004C4` — ADC EOC/OVR ISR (sample buffer @ `0x20002558`). (Earlier "USART1 at 0x080054C4" was the mislabel.)
 - SysTick at SRAM `0x2000199C` — configurable at runtime via `s_sys_tick_callback`
 - IRQ 25 at SRAM `0x20000E70` — runtime-configurable vector
 - IRQ 27 at SRAM `0x20001AA0` — runtime-configurable vector

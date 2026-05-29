@@ -152,9 +152,10 @@ static const uint8_t AHBPrescTable[16] = {
 #define G_TICK_FREQ          (*(volatile uint8_t  *)0x200000C4U)
 
 /* PLL multiplier table — RCC_CFGR.PLLMUL (bits [21:18]) is an index.
- * The OEM keeps this in flash at 0x08010820 (past the .bin we have);
- * values are the canonical STM32L0 PLLMulTable. */
-static const uint8_t PLLMulTable[9] = { 3, 4, 6, 8, 12, 16, 24, 32, 48 };
+ * The OEM keeps this in flash at 0x08018200; values are the canonical
+ * STM32L0 PLLMulTable. Shared with tick.c's clock_prescaler_val, which
+ * indexes the same OEM table by the same PLLMUL field. */
+const uint8_t PLLMulTable[9] = { 3, 4, 6, 8, 12, 16, 24, 32, 48 };
 
 /*
  * HAL_RCC_GetSysClockFreq — FUN_080107e4 (216 B).

@@ -46,17 +46,16 @@
 extern void dma_stop(void);
 extern void veneer_11ef8(uint32_t arg);
 
-/* The flash strings at 0x080171f0..0x08017280 referenced by uart_printf
- * here live past the end of the OEM .bin (image size 0x15610) — they
- * sit in a separate flash region (bootloader / extended pack). We
- * pass the OEM addresses through as opaque pointers so the call sites
- * match; the strings themselves are not in our build. */
-static uint8_t * const s_fmt_max_voltage = (uint8_t *)0x080171f0;
-static uint8_t * const s_fmt_min_voltage = (uint8_t *)0x08017214;
-static uint8_t * const s_fmt_total       = (uint8_t *)0x08017238;
-static uint8_t * const s_fmt_real_rsoc   = (uint8_t *)0x08017258;
-static uint8_t * const s_fmt_record_soc  = (uint8_t *)0x0801726c;
-static uint8_t * const s_fmt_rsoc_adj    = (uint8_t *)0x08017280;
+/* uart_printf format strings (OEM flash 0x080171f0..0x08017280), defined
+ * in src/strings.c. The OEM passes a value as the %i/%d argument; our
+ * uart_printf models the format pointer only, so the value args are
+ * dropped pending variadic-printf support. */
+static uint8_t * const s_fmt_max_voltage = (uint8_t *)s_max_cell_voltage;
+static uint8_t * const s_fmt_min_voltage = (uint8_t *)s_min_cell_voltage;
+static uint8_t * const s_fmt_total       = (uint8_t *)s_total_voltage;
+static uint8_t * const s_fmt_real_rsoc   = (uint8_t *)s_real_rsoc;
+static uint8_t * const s_fmt_record_soc  = (uint8_t *)s_record_soc;
+static uint8_t * const s_fmt_rsoc_adj    = (uint8_t *)s_rsoc_adjust;
 
 static void byte_copy(const uint8_t *src, uint16_t len, uint8_t *dst)
 {

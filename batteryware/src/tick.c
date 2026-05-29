@@ -58,7 +58,7 @@ uint32_t tick_counter_read(void)
 int32_t clock_prescaler_val(void)
 {
     volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000;
-    const uint8_t * const s_shift_tbl = (const uint8_t *)0x08018200;
+    const uint8_t * const s_shift_tbl = PLLMulTable;  /* OEM flash 0x08018200 */
     /* constant table at 0x08010920-0x08010928 */
     const uint32_t MAGIC_MSI_ALT = 0x003D0900;  /* DAT_08010920 */
     const uint32_t MAGIC_MSI     = 0x00F42400;  /* DAT_08010924 */

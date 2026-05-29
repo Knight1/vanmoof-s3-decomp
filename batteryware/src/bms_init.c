@@ -49,10 +49,9 @@
 
 extern uint32_t veneer_11f48(void);
 
-/* The flash format string at 0x08016fb8 lives past the end of this
- * .bin (image is 0x15610 bytes) — same situation as bms_setup's
- * 0x080171f0-block. Pass the OEM address through opaquely. */
-static uint8_t * const s_fmt_boot_banner = (uint8_t *)0x08016fb8;
+/* Boot banner = the "FEDL5236_Initialize()" log string (OEM flash 0x08016fb8,
+ * = src/strings.c s_fedl5236_init). */
+static uint8_t * const s_fmt_boot_banner = (uint8_t *)s_fedl5236_init;
 
 /* SMBus / FEDL5236 read buffer (raw bytes). bms_init reads halfword
  * status from +2..+3 and cell-voltage bytes from +2 onward. */

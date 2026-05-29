@@ -917,9 +917,10 @@ void bms_set_state(uint8_t state)
     *s_bms_cfg &= 0xFFFF7FFFu;
     fg_clear_status();
     *(volatile uint8_t *)(0x200028D0 + 5) = 1;
-    /* OEM also passes *(uint8_t*)0x20002C49 as the %d argument; the project's
-     * uart_printf prototype is the format pointer only. */
-    uart_printf((uint8_t *)0x08017188);
+    /* "PreDischargeLockCounter = %d" (src/strings.c s_predischg_lock_ctr,
+     * OEM flash 0x08017188). OEM also passes *(uint8_t*)0x20002C49 as the %d
+     * argument; the project's uart_printf prototype is the format pointer only. */
+    uart_printf((uint8_t *)s_predischg_lock_ctr);
 }
 
 /*

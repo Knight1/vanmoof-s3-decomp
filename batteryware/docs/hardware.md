@@ -78,6 +78,11 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x20000E70` | — | 4 | Runtime IRQ vector target (IRQ 25 → loaded from VT slot 41) |
 | `0x2000199C` | — | 4 | Runtime SysTick callback pointer (VT slot 15 → `0x2000199D`) |
 | `0x20001AA0` | — | 4 | Runtime IRQ vector target (IRQ 27 → loaded from VT slot 43) |
+| `0x200024F4` | `s_dma_ctx` (dma.c) | 0x5C | **HAL-style ADC handle.** `[0]`=ADC instance base (`0x40012400`); `+0x20` byte software-trigger gate; `+0x30` DMA-handle ptr; `+0x54` `State` (HAL_ADC_STATE_* bitset); `+0x58` `ErrorCode` (HAL_ADC_ERROR_* bitset). Read/written by `ADC1_COMP_IRQHandler`; the `dma.c`/`modem.c` "dma_ctx" name is the same cell. |
+| `0x20002550` | `s_subcnt` (fuel_gauge.c) | 1+ | ADC sub-cycle / cell counter. Low byte indexes the sample buffer (`cell*4`) in `ADC1_COMP_IRQHandler`; `cell_balance_update` advances it per sequence. (Shared with the DMA path.) |
+| `0x20002554` | `s_dma_enabled` (dma.c) | 1 | **ADC sequence-ready flag.** Bit 0 set by `ADC1_COMP_IRQHandler` on EOS; polled and cleared by `cell_balance_update`. (Not a DMA-enable bit — the dma.c name is a mislabel.) |
+| `0x20002558` | `s_adc_buf` (fuel_gauge.c) | 0x1E | **ADC sample buffer**, u16 per cell/phase (5 cells × 3 phases). Filled by `ADC1_COMP_IRQHandler` (EOC → `DR & 0xFFF`); consumed by `cell_balance_update`. |
+| `0x20002582` | `s_dma_counter` (dma.c) | 1 | Conversion-in-sequence index. Selects the per-cell slot (`+conv`) in the sample buffer and post-increments in `ADC1_COMP_IRQHandler`. (Shared with the DMA path.) |
 | `0x20002588` | — | — | Cell-status byte array. `[1]`/`[2]` are the two pack cell readings compared in `bms_state_machine` against the `cfg_blk` window thresholds; `[0]`/`[1]`/`[2]` are also copied into the telemetry packet by `bms_set_state`. |
 | `0x200027FA` | — | 2 | OVP comparison threshold read by `main`'s boot mode-report (vs `cfg_blk[0x2e/0x32/0x36]`). |
 | `0x20002800` | — | 4 | Pre-charge upper-window threshold (`thr2`) compared against `cfg_blk[0x16]` in the `bms_state_machine` precharge SM. |
@@ -97,7 +102,7 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x2000286C` | `s_prot_status` | 2 | OVP/UVP **protection-status** word. Read by the BMS state timers (`ldrh`) to dispatch protection handlers (bits 0→`07`, 1→`08`, 5→`01`, 11→`17_19`); zeroed by `bms_init`. Not the central fault register. |
 | `0x2000289C` | `s_bms_state` | 1 | BMS dispatch byte — when non-zero, the state timers jump to `state_handler_11`. (`s_status_lo` in `bms_init.c`.) |
 | `0x200028C8` | `s_bms_cur` | 4 | Over-current measurement cell, compared against `19999` (`0x4E1F`) in `state_handler_0d`/`0e`. |
-| `0x20002BFC` | — | 1 | `g_pFastModeLed` target — boolean flag controlling the PA4 status-pulse speed. `0` = slow (100ms/50ms), non-zero = fast (20ms/10ms). Read by `led_flash`. |
+| `0x20002BFC` | — | 1 | Flag byte. Read by `led_flash` as `g_pFastModeLed` (PA4 status-pulse speed: `0`=slow 100/50ms, non-zero=fast 20/10ms). The button EXTI ISRs also set bits here: `EXTI0_1` (PB0) → bit 1, `EXTI4_15` (PC13 power) → bit 0. |
 | `0x20002C00` | `s_bms_cfg` | 4 | **Central BMS status/control register.** Bit-flag word driving the state machine (bit 4 clear-on-entry, bit 11 mask, bits 3/11/12 select `bms_configure` arg). Aliased as `s_status`/`g_state_timer`/`s_mosfet_status` across files — all the same cell. |
 | `0x20002C10` | — | 4 | SysTick reload value holder — written by `delay_ms` ISR path. Initial value `0x0000AAAA`. |
 | `0x20002C44` | `s_fault_flags` / `g_fault_flags` | 4 | **Central fault/protection register** (`g_fault_flags` in `fuel_gauge.c`/`batteryware.h`). State timers read its low half (`ldrh`) — bits 5/6/7 dispatch `state_handler_17_19`. |
@@ -113,10 +118,12 @@ Addresses resolved from literal pool entries in the flash image.
 | --- | --- | --- |
 | GPIOA | `0x50000000` | Status "alive" pulse on PA4 (BSRR/BRR via `gpio_bit_write`) — see GPIO table |
 | GPIOB | `0x50000400` | PB9 = charge MOSFET enable (`"\nChargeOn_Off() --> PB9=0\r"`); **PB7 = secondary-protection fuse heater** (one-shot, OC-gated); PB1 charge-path control; PB12/PB15 misc |
-| USART1 | `0x40013800` | Serial comm with main module (IRQ 12 = USART1 at VT slot 28 → `0x080054C5`); also the PA9/PA10 PA10-gated service UART (`service_uart_init`) |
+| USART1 | `0x40013800` | Serial comm with main module; also the PA9/PA10 PA10-gated service UART (`service_uart_init`). USART1 IRQ = IRQ27 (vector slot 43 → runtime-installed SRAM trampoline `0x20001AA0`) |
+| EXTI | `0x40010400` | External-interrupt controller (PR @ +0x14). **IRQ5 (EXTI0_1)** clears line 0 = PB0 button; **IRQ7 (EXTI4_15)** clears line 13 = PC13 power button. Both enabled by `system_init`; ISRs set bits 0/1 @ `0x20002BFC`. Real vector targets `0x0800724C` / `0x08007278` (formerly mis-named `uart_check_*_error`) |
 | USART2 | `0x40004400` | Handled by `UART_SetConfig` (standard OVER8/OVER16 BRR); clock source from RCC->CCIPR |
 | LPUART1 | `0x40004800` | Low-power UART — `UART_SetConfig` gives it the LPUART BRR path (`256×freq/baud`, range `[0x300,0xFFFFF]`); the prior decomp called this base "USART3" |
-| TIM2 | `0x40000000` | IRQ 5 and 7 assigned (two TIM2 IRQs) |
+| TIM2 | `0x40000000` | Timer base. (Earlier note "IRQ 5 and 7 = TIM2" was wrong: the IRQ5/IRQ7 `system_init` enables are EXTI0_1/EXTI4_15 buttons — see the EXTI row.) |
+| ADC1 | `0x40012400` | 12-bit ADC for cell-voltage acquisition. **IRQ12 (ADC1_COMP, vector slot 28)** services it: EOC stores `DR & 0xFFF` into the sample buffer `@ 0x20002558`, EOS raises the sequence-ready flag `@ 0x20002554`, OVR records an error in the HAL handle `@ 0x200024F4`. Real vector target `0x080004C4` (now wired; was trapping via `Default_Handler`). Regs used: ISR +0x00, IER +0x04, CR +0x08, CFGR1 +0x0C, DR +0x40. |
 | SysTick | `0xE000E010` | 1 ms tick timer — polled by `delay_ms` |
 |FEDL5236 (communicates via SPI)1 | `0x40005400` | Likely FEDL5236 fuel gauge communication |
 

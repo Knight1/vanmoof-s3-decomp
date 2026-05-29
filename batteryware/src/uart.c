@@ -74,32 +74,37 @@ void uart_tx_flush(void)
 }
 
 /*
- * Check USART1 parity error flag. If set, records the error in SRAM
- * status and clears the PE flag in the ISR register.
+ * EXTI0_1_IRQHandler (IRQ5) — real OEM vector target at 0x0800724C (was
+ * mis-named `uart_check_parity_error`; 0x40010400 is the **EXTI** base, not
+ * USART1, and offset 0x14 is EXTI_PR). Handles EXTI line 0 = PB0 button:
+ * if its pending bit is set, records the event (flag bit 1 @ 0x20002BFC) and
+ * clears EXTI_PR line 0. Strong def overrides the weak startup.S alias.
  */
-void uart_check_parity_error(void)
+void EXTI0_1_IRQHandler(void)
 {
-    volatile uint32_t *usart1 = (volatile uint32_t *)0x40010400;
-    volatile uint8_t * const s_error_flags = (volatile uint8_t *)0x20002BFC;
+    volatile uint32_t * const exti = (volatile uint32_t *)0x40010400;
+    volatile uint8_t  * const s_btn_flags = (volatile uint8_t *)0x20002BFC;
 
-    if (usart1[0x14 / 4] & 1) {
-        *s_error_flags |= 2;
-        usart1[0x14 / 4] = 1;
+    if (exti[0x14 / 4] & 1) {            /* EXTI_PR line 0 (PB0) */
+        *s_btn_flags |= 2;
+        exti[0x14 / 4] = 1;              /* clear pending */
     }
 }
 
 /*
- * Check USART1 overrun error flag (bit 0x2000 = ORE).
- * If set, records error in SRAM flag bit 0 and clears ORE.
+ * EXTI4_15_IRQHandler (IRQ7) — real OEM vector target at 0x08007278 (was
+ * mis-named `uart_check_overrun_error`). Handles EXTI line 13 = PC13 power
+ * button (mask 0x2000): records the event (flag bit 0 @ 0x20002BFC) and clears
+ * EXTI_PR line 13. Strong def overrides the weak startup.S alias.
  */
-void uart_check_overrun_error(void)
+void EXTI4_15_IRQHandler(void)
 {
-    volatile uint32_t *usart1 = (volatile uint32_t *)0x40010400;
-    volatile uint8_t * const s_error_flags = (volatile uint8_t *)0x20002BFC;
+    volatile uint32_t * const exti = (volatile uint32_t *)0x40010400;
+    volatile uint8_t  * const s_btn_flags = (volatile uint8_t *)0x20002BFC;
 
-    if (usart1[0x14 / 4] & 0x2000) {
-        *s_error_flags |= 1;
-        usart1[0x14 / 4] = 0x2000;
+    if (exti[0x14 / 4] & 0x2000) {       /* EXTI_PR line 13 (PC13 power button) */
+        *s_btn_flags |= 1;
+        exti[0x14 / 4] = 0x2000;         /* clear pending */
     }
 }
 

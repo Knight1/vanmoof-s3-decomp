@@ -258,7 +258,7 @@
       "value": "0x0801324d"
     }
   ],
-  "function_count": 281,
+  "function_count": 282,
   "functions": [
     {
       "addr": "0x08000130",
@@ -329,6 +329,15 @@
       "name": "__clzsi2",
       "auto_named": false,
       "signature": "int __clzsi2(uint val)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x080004c4",
+      "size": 380,
+      "name": "ADC1_COMP_IRQHandler",
+      "auto_named": false,
+      "signature": "void ADC1_COMP_IRQHandler(void)",
       "thunk": false,
       "external": false
     },

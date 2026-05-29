@@ -92,8 +92,10 @@ void modem_command_handler(uint8_t byte);
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
-void uart_check_parity_error(void);
-void uart_check_overrun_error(void);
+/* EXTI0_1 (PB0) / EXTI4_15 (PC13) button ISRs — vector targets, defined in
+ * uart.c, declared in startup_stm32l072.S; were mis-named uart_check_*_error. */
+void EXTI0_1_IRQHandler(void);
+void EXTI4_15_IRQHandler(void);
 void uart_puthex_byte(uint8_t b);
 void uart_puthex_16(uint16_t val);
 void uart_puthex_32(uint32_t val);
@@ -168,6 +170,8 @@ uint32_t fg_read_field_11(void);
 void fg_read_loop(void *ctx);
 void fg_scan(void);
 void fg_coulomb_update(void);
+/* ADC EOC/OVR ISR (IRQ12, vector slot 28); defined in fuel_gauge.c */
+void ADC1_COMP_IRQHandler(void);
 void cell_balance_update(void);
 void coulomb_counter(uint32_t val);
 void cell_voltage_scan(void);
@@ -426,6 +430,10 @@ void null_trap(void);
 void nop_716c(void);
 void nop_721c(void);
 uint64_t __aeabi_ldiv0(uint64_t dividend, uint64_t divisor);
+
+/* STM32L0 PLL multiplier table (src/rcc.c, OEM flash 0x08018200);
+ * shared with tick.c's clock_prescaler_val. */
+extern const uint8_t PLLMulTable[9];
 
 /* OEM rodata strings (src/strings.c). See that file for layout +
  * the per-string OEM address. */

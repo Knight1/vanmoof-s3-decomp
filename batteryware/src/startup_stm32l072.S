@@ -43,7 +43,7 @@ g_pfnVectors:
     .word   _estack                     /*  0: initial SP                 */
     .word   Reset_Handler               /*  1: reset                      */
     .word   NMI_Handler                 /*  2: NMI                        */
-    .word   HardFault_Handler           /*  3: hard fault                 */
+    .word   system_reset_simple         /*  3: hard fault → system reset (OEM vector = 0x0800B329 runtime = system_reset_simple @ 0x08006328) */
     .word   0                           /*  4: reserved (MemManage)       */
     .word   0                           /*  5: reserved (BusFault)        */
     .word   0                           /*  6: reserved (UsageFault)      */
@@ -234,7 +234,8 @@ Default_Handler:
     .endm
 
     default_handler NMI_Handler
-    default_handler HardFault_Handler
+    /* HardFault is wired directly to system_reset_simple in the vector table
+     * above (the OEM resets on fault) — no weak Default_Handler alias. */
     default_handler SVC_Handler
     default_handler PendSV_Handler
     default_handler SysTick_Handler

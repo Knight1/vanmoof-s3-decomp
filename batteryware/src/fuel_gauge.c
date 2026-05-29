@@ -59,8 +59,8 @@ static volatile uint32_t * const s_tick_counter = (volatile uint32_t *)0x200000C
 /* RCC base for clock tree queries */
 static volatile uint32_t * const RCC_FG = (volatile uint32_t *)0x40021000;
 
-/* Shift table in flash for fg_read_field_8 / fg_read_field_11 */
-static const uint8_t * const s_fg_shift_table = (const uint8_t *)0x080181F8;
+/* Shift table for fg_read_field_8 / fg_read_field_11 (OEM flash 0x080181F8) */
+static const uint8_t s_fg_shift_table[8] = { 0, 0, 0, 0, 1, 2, 3, 4 };
 
 /* Fault flag bits */
 #define FAULT_UVP1  0x01
@@ -299,8 +299,19 @@ void shipping_mode_check(void)
     *s_shipping_enable &= ~2U;
 }
 
-/* RSOC lookup table (voltage → state-of-charge) at flash 0x080174B0 */
-static volatile uint16_t * const s_rsoc_table     = (volatile uint16_t *)0x080174B0;
+/* RSOC lookup table (state-of-charge percent → cell voltage), OEM flash
+ * 0x080174B0. Indexed 0..100; entry [p] is the voltage threshold for p%. */
+static const uint16_t s_rsoc_table[101] = {
+    0x0c4e, 0x0c6e, 0x0c8a, 0x0ca5, 0x0cc0, 0x0cd8, 0x0ced, 0x0d01, 0x0d13, 0x0d24, 0x0d34, 0x0d43,
+    0x0d54, 0x0d63, 0x0d6f, 0x0d79, 0x0d83, 0x0d8d, 0x0d96, 0x0d9f, 0x0daa, 0x0db5, 0x0dc0, 0x0dcb,
+    0x0dd5, 0x0dde, 0x0de6, 0x0ded, 0x0df5, 0x0dfc, 0x0e03, 0x0e09, 0x0e0f, 0x0e14, 0x0e1a, 0x0e1f,
+    0x0e24, 0x0e2a, 0x0e2f, 0x0e35, 0x0e3a, 0x0e40, 0x0e46, 0x0e4c, 0x0e52, 0x0e58, 0x0e5f, 0x0e67,
+    0x0e6e, 0x0e76, 0x0e7f, 0x0e88, 0x0e92, 0x0e9c, 0x0ea8, 0x0eb4, 0x0ebf, 0x0ec9, 0x0ed4, 0x0ede,
+    0x0ee9, 0x0ef4, 0x0efe, 0x0f08, 0x0f11, 0x0f1a, 0x0f23, 0x0f2b, 0x0f33, 0x0f3b, 0x0f42, 0x0f4a,
+    0x0f51, 0x0f59, 0x0f62, 0x0f6b, 0x0f74, 0x0f7e, 0x0f88, 0x0f92, 0x0f9d, 0x0fa8, 0x0fb2, 0x0fbd,
+    0x0fc7, 0x0fd0, 0x0fd8, 0x0fe0, 0x0fe6, 0x0feb, 0x0fef, 0x0ff3, 0x0ff7, 0x0ffc, 0x1000, 0x1007,
+    0x100e, 0x1018, 0x1025, 0x1037, 0x1054,
+};
 static volatile uint8_t  * const s_rsoc_percent   = (volatile uint8_t *)0x200025BD;
 static volatile uint16_t * const s_rsoc_voltage   = (volatile uint16_t *)0x2000282A;
 static volatile uint32_t * const s_rsoc_register  = (volatile uint32_t *)0x200025AC;
@@ -789,6 +800,97 @@ void fg_coulomb_update(void)
 }
 
 /*
+ * ADC end-of-conversion / overrun interrupt (IRQ12, vector slot 28).
+ *
+ * Services the STM32L0 ADC whose HAL-style handle sits at 0x200024F4
+ * (handle[0] = the ADC instance base, runtime 0x40012400). On end-of-
+ * conversion it copies the 12-bit result into the cell-balance sample
+ * buffer at 0x20002558 that cell_balance_update() below consumes; on
+ * end-of-sequence it raises the bit-0 "sequence ready" flag at
+ * 0x20002554. Overruns are recorded in the handle ErrorCode word.
+ *
+ * Instance register offsets: ISR +0x00, IER +0x04, CR +0x08,
+ * CFGR1 +0x0C, DR +0x40. Handle words: State +0x54, ErrorCode +0x58,
+ * a byte gate at +0x20, and the DMA-handle pointer at +0x30. The
+ * 0x20002550 / 0x20002582 indices and the 0x20002554 flag are shared
+ * with the DMA capture path (named s_dma_* in dma.c — same storage).
+ */
+void ADC1_COMP_IRQHandler(void)
+{
+    volatile uint32_t * const h   = (volatile uint32_t *)0x200024F4;
+    volatile uint32_t * const adc = (volatile uint32_t *)h[0];
+
+    enum { EOC = 0x4, EOS = 0x8, OVR = 0x10 };   /* ISR / IER flag bits */
+
+    if ((((adc[0] & EOC) == EOC) && ((adc[1] & EOC) == EOC)) ||
+        (((adc[0] & EOS) == EOS) && ((adc[1] & EOS) == EOS))) {
+
+        if ((h[0x15] & 0x10) == 0) {           /* not HAL_ADC_STATE_ERROR_INTERNAL */
+            h[0x15] |= 0x200;                  /* HAL_ADC_STATE_REG_EOC */
+        }
+
+        /* End-of-sequence on a software-triggered single conversion */
+        if (((adc[3] & 0xc00) == 0) &&         /* CFGR1 EXTEN == 0 (no ext trigger) */
+            (((volatile uint8_t *)h)[0x20] == 0) &&
+            ((adc[0] & EOS) == EOS)) {
+            if ((adc[2] & 0x4) == 0) {         /* CR ADSTART cleared → sequence done */
+                adc[1] &= ~0xcU;               /* disable EOCIE | EOSIE */
+                h[0x15] = (h[0x15] & 0xFFFFFEFE) | 1;  /* clear REG_BUSY+bit0, set READY */
+            } else {
+                h[0x15] |= 0x20;               /* HAL_ADC_STATE_ERROR_CONFIG */
+                h[0x16] |= 1;                  /* HAL_ADC_ERROR_INTERNAL */
+            }
+        }
+
+        if ((adc[0] & EOC) == EOC) {
+            volatile uint16_t * const s_buf      = (volatile uint16_t *)0x20002558;
+            volatile uint8_t  * const s_cell     = (volatile uint8_t  *)0x20002550;
+            volatile uint8_t  * const s_conv_idx = (volatile uint8_t  *)0x20002582;
+            s_buf[*s_cell * 4 + *s_conv_idx] = (uint16_t)(adc[0x10] & 0xfff);  /* DR, 12-bit */
+            *s_conv_idx = (uint8_t)(*s_conv_idx + 1);
+        }
+
+        if ((adc[0] & EOS) == EOS) {
+            *(volatile uint8_t *)0x20002554 |= 1;   /* sequence-ready flag */
+        }
+
+        adc[0] = EOC | EOS;                    /* clear EOC, EOS (rc_w1) */
+    }
+
+    if (((adc[0] & OVR) == OVR) && ((adc[1] & OVR) == OVR)) {
+        if ((h[0xc] == 0) || ((adc[3] & 1) == 1)) {  /* no DMA handle, or DMAEN set */
+            h[0x16] |= 2;                      /* HAL_ADC_ERROR_OVR */
+        }
+        adc[0] = OVR;                          /* clear OVR */
+    }
+}
+
+/* Cell-voltage → score lookup table (OEM flash 0x08017698), 146 descending
+ * u32 entries. cell_balance_update scores a measured voltage by walking this
+ * table from index 0x91 (145) down to 0 — see the loop below. */
+static const uint32_t s_cell_score_lut[146] = {
+    0x0002f2fe, 0x0002caa0, 0x0002a49d, 0x000280d3, 0x00025f21, 0x00023f66, 0x00022184, 0x0002055c,
+    0x0001ead2, 0x0001d1cd, 0x0001ba32, 0x0001a3ed, 0x00018ee6, 0x00017b09, 0x00016845, 0x00015689,
+    0x000145c5, 0x000135e9, 0x000126e9, 0x000118b7, 0x00010b48, 0x0000fe90, 0x0000f285, 0x0000e71d,
+    0x0000dc4f, 0x0000d212, 0x0000c85f, 0x0000bf2d, 0x0000b675, 0x0000ae31, 0x0000a659, 0x00009ee8,
+    0x000097d8, 0x00009124, 0x00008ac5, 0x000084b9, 0x00007ef9, 0x00007982, 0x0000744f, 0x00006f5d,
+    0x00006aa9, 0x0000662e, 0x000061ea, 0x00005dda, 0x000059fa, 0x00005649, 0x000052c4, 0x00004f68,
+    0x00004c34, 0x00004925, 0x00004639, 0x0000436f, 0x000040c5, 0x00003e39, 0x00003bca, 0x00003976,
+    0x0000373c, 0x0000351c, 0x00003312, 0x00003120, 0x00002f42, 0x00002d79, 0x00002bc4, 0x00002a21,
+    0x00002890, 0x00002710, 0x0000259f, 0x0000243f, 0x000022ec, 0x000021a8, 0x00002072, 0x00001f48,
+    0x00001e2a, 0x00001d18, 0x00001c11, 0x00001b15, 0x00001a23, 0x0000193b, 0x0000185b, 0x00001785,
+    0x000016b8, 0x000015f2, 0x00001534, 0x0000147e, 0x000013cf, 0x00001326, 0x00001284, 0x000011e9,
+    0x00001153, 0x000010c3, 0x00001038, 0x00000fb2, 0x00000f32, 0x00000eb6, 0x00000e3f, 0x00000dcc,
+    0x00000d5e, 0x00000cf3, 0x00000c8c, 0x00000c29, 0x00000bca, 0x00000b6e, 0x00000b15, 0x00000abf,
+    0x00000a6c, 0x00000a1c, 0x000009cf, 0x00000985, 0x0000093d, 0x000008f7, 0x000008b4, 0x00000873,
+    0x00000835, 0x000007f8, 0x000007be, 0x00000785, 0x0000074e, 0x00000719, 0x000006e6, 0x000006b4,
+    0x00000685, 0x00000656, 0x00000629, 0x000005fe, 0x000005d4, 0x000005ab, 0x00000583, 0x0000055d,
+    0x00000538, 0x00000514, 0x000004f2, 0x000004d0, 0x000004af, 0x00000490, 0x00000471, 0x00000454,
+    0x00000437, 0x0000041b, 0x00000400, 0x000003e6, 0x000003cc, 0x000003b4, 0x0000039c, 0x00000385,
+    0x0000036e, 0x00000358,
+};
+
+/*
  * Cell balancing voltage update algorithm.
  *
  * Runs a multi-phase cell balancing measurement cycle:
@@ -832,7 +934,7 @@ void cell_balance_update(void)
     volatile uint8_t  * const s_cycle    = (volatile uint8_t  *)0x200024E0;
     volatile uint8_t  * const s_flags    = (volatile uint8_t  *)0x20002554;
     volatile uint32_t * const s_subcnt   = (volatile uint32_t *)0x20002550;
-    const uint32_t * const s_thresh_lut  = (const uint32_t *)0x08017698;
+    const uint32_t * const s_thresh_lut  = s_cell_score_lut;
     extern void memcmp_verify(char *actual, uint32_t len, char *expected);
 
     /* Only run when trigger register matches ADC data register */
@@ -882,7 +984,14 @@ void cell_balance_update(void)
                 uint32_t result = (VREF_MV - step) / DIV_FACTOR;
 
                 uint8_t score = 0x91;
-                /* Score against 146-entry descending threshold LUT */
+                /* Score against the 146-entry descending threshold LUT.
+                 * NOTE: with the current result formula above, `result` is
+                 * provably in [234,250] (12-bit ADC) while the smallest LUT
+                 * entry is s_cell_score_lut[145]=0x358 (856), so the first
+                 * iteration always matches and the optimiser folds `score` to
+                 * 0x91 and elides the table. The OEM image keeps this table
+                 * live, so the result-scaling here is suspect — revisit the
+                 * MUL/DIV/VREF factors when cell_balance_update is verified. */
                 uint8_t s;
                 for (s = 0x91; s != 0; s--) {
                     if (result <= s_thresh_lut[s]) {
