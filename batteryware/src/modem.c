@@ -102,10 +102,12 @@ bool modem_deinit(void *ctx)
 /*
  * Bootloader entry sequence.
  *
- * Prints "I am VanMoof AP", turns off charge MOSFET, enters state 6,
- * then calls FUN_080050ac (power-on GPIO check). If the check passes
- * (true), verifies a config block and enters an infinite loop (bootloader
- * mode). Otherwise falls through to state_handler_01 (normal boot).
+ * Prints "\nShipping Mode\r" and "\nFEDL5236_PowerDown_Start()\r", turns
+ * off the charge MOSFET, enters state 6, then calls FUN_080050ac (power-on
+ * GPIO check). If the check passes (true), verifies the 0x80-byte EEPROM
+ * config block at flash 0x08080C00 against the RAM copy at 0x200029A8 and
+ * enters an infinite loop (bootloader mode). Otherwise falls through to
+ * state_handler_01 (normal boot).
  */
 void bootloader_entry(void)
 {
@@ -117,22 +119,22 @@ void bootloader_entry(void)
 
     s_protection_cfg[5] = 1;
     *s_modem_ctx |= 0x20000;
-    uart_printf((uint8_t *)0x08007204);
+    uart_printf((uint8_t *)s_shipping_mode);
     uart_tx_flush();
     charge_mosfet_off();
     gpio_bit_write(0x50000400, 0x200, 0);
     bms_configure(0);
     bms_set_state(6);
-    uart_printf((uint8_t *)0x0800720C);
+    uart_printf((uint8_t *)s_pdown_start);
     uart_tx_flush();
 
     if (button_entry_check()) {  /* FUN_080050ac */
-        memcmp_verify((char *)0x08007214, 0x80, (char *)0x08007210);
+        memcmp_verify((char *)0x08080C00, 0x80, (char *)0x200029A8);
         gpio_bit_write(0x50000400, 0x1000, 0);
         while (1) { }  /* bootloader mode — wait for reset */
     }
 
-    *s_modem_ctx &= 0xFFFFFFFD;
+    *s_modem_ctx &= 0xFFFFFDFF;
     state_handler_01();
 }
 

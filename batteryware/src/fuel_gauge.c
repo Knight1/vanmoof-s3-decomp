@@ -547,10 +547,11 @@ void fg_watchdog_kick(void)
     }
 }
 
-/* Cell voltage table and balance threshold */
-static volatile uint16_t * const s_cell_voltage_table = (volatile uint16_t *)0x08013E50;
-static volatile uint16_t * const s_balance_threshold  = (volatile uint16_t *)0x20002000;
-static volatile uint8_t  * const s_balance_idx        = (volatile uint8_t  *)0x20002000;
+/* Cell voltage table and balance threshold (all SRAM; see the cell map at
+ * 0x200027D4 / mid-cell average at 0x2000286E / cached count at 0x200027FE). */
+static volatile uint16_t * const s_cell_voltage_table = (volatile uint16_t *)0x200027D4;
+static volatile uint16_t * const s_balance_threshold  = (volatile uint16_t *)0x2000286E;
+static volatile uint8_t  * const s_balance_idx        = (volatile uint8_t  *)0x200027FE;
 
 /*
  * Cell voltage balancing.
@@ -970,28 +971,26 @@ void cell_balance_update(void)
         /* --- Voltage computation phase (sub-cycle 5+) --- */
         volatile uint16_t * const s_adc_buf = (volatile uint16_t *)0x20002558;
         volatile uint8_t  * const s_scores  = (volatile uint8_t  *)0x200024E4;
-        const uint32_t MUL_FACTOR  = 610;
-        const uint32_t DIV_FACTOR  = 10000;
-        const uint32_t VREF_MV     = 2500000;
-
         uint8_t cell, phase;
 
         /* Step 1: score each of 5 cells × 3 phases */
         for (cell = 0; cell < 5; cell++) {
             for (phase = 0; phase < 3; phase++) {
-                uint32_t adc  = s_adc_buf[cell * 4 + phase];
-                uint32_t step = (adc * MUL_FACTOR * MUL_FACTOR) / DIV_FACTOR;
-                uint32_t result = (VREF_MV - step) / DIV_FACTOR;
+                /* OEM transfer curve (computed in 64-bit):
+                 *   result = (adc * 610 * 10000) / (2500000 - adc * 610)
+                 * — a rational voltage→index map, not a linear one. The
+                 * shared sub-expression p1 = adc*610 appears in both the
+                 * numerator (×10000) and the denominator (2500000 - p1).
+                 * For a 12-bit ADC, p1 ≤ 2,497,950 so the denominator stays
+                 * ≥ 2050 (>0) and result spans ~[0, 1.2e7], covering the full
+                 * descending LUT range [0x358 .. 0x2f2fe]. */
+                int64_t p1     = (int64_t)s_adc_buf[cell * 4 + phase] * 610;
+                int64_t num    = p1 * 10000;
+                int64_t den    = 2500000 - p1;
+                uint32_t result = (uint32_t)(num / den);
 
                 uint8_t score = 0x91;
-                /* Score against the 146-entry descending threshold LUT.
-                 * NOTE: with the current result formula above, `result` is
-                 * provably in [234,250] (12-bit ADC) while the smallest LUT
-                 * entry is s_cell_score_lut[145]=0x358 (856), so the first
-                 * iteration always matches and the optimiser folds `score` to
-                 * 0x91 and elides the table. The OEM image keeps this table
-                 * live, so the result-scaling here is suspect — revisit the
-                 * MUL/DIV/VREF factors when cell_balance_update is verified. */
+                /* Score against the 146-entry descending threshold LUT */
                 uint8_t s;
                 for (s = 0x91; s != 0; s--) {
                     if (result <= s_thresh_lut[s]) {

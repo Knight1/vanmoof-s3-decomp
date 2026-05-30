@@ -316,7 +316,6 @@ uint32_t tick_get(void);
 uint32_t tick_counter_read(void);
 int32_t  clock_prescaler_val(void);
 uint32_t rcc_reconfigure(uint32_t *param);
-int8_t   clock_config(uint32_t *param, uint32_t clk_src);
 uint32_t tick_val_get(void);
 uint32_t tick_ms_get(void);
 uint32_t tick_timeout_get(void);

@@ -83,6 +83,9 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x20002554` | `s_dma_enabled` (dma.c) | 1 | **ADC sequence-ready flag.** Bit 0 set by `ADC1_COMP_IRQHandler` on EOS; polled and cleared by `cell_balance_update`. (Not a DMA-enable bit — the dma.c name is a mislabel.) |
 | `0x20002558` | `s_adc_buf` (fuel_gauge.c) | 0x1E | **ADC sample buffer**, u16 per cell/phase (5 cells × 3 phases). Filled by `ADC1_COMP_IRQHandler` (EOC → `DR & 0xFFF`); consumed by `cell_balance_update`. |
 | `0x20002582` | `s_dma_counter` (dma.c) | 1 | Conversion-in-sequence index. Selects the per-cell slot (`+conv`) in the sample buffer and post-increments in `ADC1_COMP_IRQHandler`. (Shared with the DMA path.) |
+| `0x200027D4` | `s_cell_voltage_table` (fuel_gauge.c) | u16[N] | **Per-cell voltage array** (N = cell_count). Averaged pairwise and rewritten by `fg_cell_balance`; also the live cell map built by `calculate_rsoc`. |
+| `0x200027FE` | `s_balance_idx` / cached cell_count (fuel_gauge.c) | 1 | Cached cell count; overwritten with the last balanced cell index by `fg_cell_balance`. |
+| `0x2000286E` | `s_balance_threshold` / mid-cell average (fuel_gauge.c) | 2 | Mid-cell average `(sum − max − min) >> 3`; `fg_cell_balance` only equalises a pair when its average is within ±0x31 of this. |
 | `0x20002588` | — | — | Cell-status byte array. `[1]`/`[2]` are the two pack cell readings compared in `bms_state_machine` against the `cfg_blk` window thresholds; `[0]`/`[1]`/`[2]` are also copied into the telemetry packet by `bms_set_state`. |
 | `0x200027FA` | — | 2 | OVP comparison threshold read by `main`'s boot mode-report (vs `cfg_blk[0x2e/0x32/0x36]`). |
 | `0x20002800` | — | 4 | Pre-charge upper-window threshold (`thr2`) compared against `cfg_blk[0x16]` in the `bms_state_machine` precharge SM. |
