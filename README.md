@@ -14,6 +14,8 @@ behaviour-equivalent) images.
 | [`mainware/`](mainware/) | `mainware 1.07.06` | STM32F413VGT6 (Cortex-M4) | ~213 KB | `6 decomp / 11 named / 794 pending` |
 | [`bleboot/`](bleboot/) | `bleboot 1.0.0` | TI CC2642R1F (Cortex-M4F) | 8 KB | **complete** — byte-equivalent, Unicorn-validated |
 | [`bleware/`](bleware/) | `bleware 1.4.01` | TI CC2642R1F (Cortex-M4F) | 178 KB | **159 decompiled** — OAD header byte-equivalent, full VanMoof code compiles |
+| [`batteryware/`](batteryware/) | `batteryware 1.17.1` | STM32L072CZT6 (Cortex-M0+) | ~88 KB | all functions `decomp-c` — builds (40 KB) + self-CRCs; behaviour-faithful (byte-eq out of reach: toolchain) |
+| [`powerbankware/`](powerbankware/) | `powerbank_firmware 1.11.05` | STM32F091xC (Cortex-M0) | ~92 KB | early — scaffold + `main`/state-loop decompiled (compiles; not yet linking) |
 
 ## Per-firmware MCU mapping
 
@@ -24,6 +26,7 @@ behaviour-equivalent) images.
 | `motorware` | TI TMS320F28054F | C2000 Piccolo (32-bit DSP — **not ARM**) |
 | `shifterware` / `shifterboot` | MindMotion MM32F031F6U6 | Cortex-M0 (STM32F031 clone) |
 | `batteryware` / `bmsboot` | ST STM32L072CZT6 | Cortex-M0+, 192 KB flash, 20 KB SRAM |
+| `powerbankware` / `powerbankboot` | ST STM32F091xC | Cortex-M0, 256 KB flash, 32 KB SRAM (PowerBank BMS — no VTOR, SYSCFG SRAM remap) |
 
 ## Repository layout
 
@@ -44,6 +47,9 @@ vanmoof-s3-decomp/
 │   ├── docs/               ← progress.md, hardware.md
 │   ├── ghidra/exports/     ← bleware_program.json
 │   └── linker_cc2642r1.ld
+├── batteryware/            ← in-frame battery BMS (STM32L072, all functions decomp-c)
+├── powerbankware/          ← PowerBank BMS application (STM32F091, active — early)
+├── tools/                  ← cross-ware tools (patch_image_header.py, emulator, modbus)
 └── reference/              ← shared datasheets, pin maps
 ```
 
