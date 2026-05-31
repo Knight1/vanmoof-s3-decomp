@@ -71,9 +71,9 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJS) $(LD_SCRIPT)
 	$(LD) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
-$(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
+$(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf ../tools/patch_image_header.py
 	$(OBJCOPY) -O binary $< $@
-	@python3 tools/patch_image_crc.py $@
+	@python3 ../tools/patch_image_header.py $@
 
 $(BUILD_DIR)/$(PROJECT).hex: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O ihex $< $@
