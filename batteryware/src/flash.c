@@ -708,27 +708,26 @@ void flash_stream_handler(uint8_t b)
  * Write a single 32-bit word to flash memory.
  *
  * Mutex-guarded: if the flash mutex at 0x200047E0 is locked, returns 2.
- * Otherwise locks the mutex, checks the bus via dma_lock, writes the word,
- * unlocks the mutex, and returns the status.
+ * Otherwise locks the mutex, waits on FLASH_SR via dma_wait_for_ready,
+ * writes the word, waits again, unlocks, and returns the status. The width
+ * arg is part of the ABI but unused here — the OEM always does a word store.
  */
 uint8_t flash_word_write(uint32_t type, volatile uint32_t *dst, uint32_t val)
 {
-    volatile uint8_t  * const s_flash_mutex  = (volatile uint8_t *)0x200047E0;
-    volatile uint32_t * const s_flash_addr   = (volatile uint32_t *)0x200047E4;
-    volatile uint32_t * const s_flash_busy   = (volatile uint32_t *)0x20002000;
-    extern uint8_t dma_lock(void *ctx);  /* FUN_0800f3ac */
+    volatile uint8_t * const s_flash_mutex = (volatile uint8_t *)0x200047E0;
+    (void)type;
 
     if (s_flash_mutex[0x10] == 1) {
         return 2;  /* already locked */
     }
 
     s_flash_mutex[0x10] = 1;
-    uint8_t ret = dma_lock((void *)s_flash_busy);
+    uint8_t ret = (uint8_t)dma_wait_for_ready(50000);
 
     if (ret == 0) {
-        s_flash_addr[0x14 / 4] = 0;
+        *(volatile uint32_t *)&s_flash_mutex[0x14] = 0;  /* 0x200047F4 error shadow */
         *dst = val;
-        ret = dma_lock((void *)s_flash_busy);
+        ret = (uint8_t)dma_wait_for_ready(50000);
     }
 
     s_flash_mutex[0x10] = 0;

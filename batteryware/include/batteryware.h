@@ -83,6 +83,7 @@ void uart_tx_isr(void);
 void modem_config(void);
 void modem_reinit(void);
 bool modem_deinit(void *ctx);
+void modem_isr_ack(void);
 void modem_init(void);
 void modem_send_2bytes(uint8_t b1, uint8_t b2);
 void temp_offset_send(uint8_t raw_temp);
@@ -270,7 +271,8 @@ uint32_t timeout_poll(int *ctx, uint32_t mask, uint8_t expected, int deadline, u
 void dma_transfer_done(int *ctx);
 void uart_adv_feature_config(int *ctx);      /* FUN_08011B20 = UART_AdvFeatureConfig (in dma.c) */
 uint32_t uart_check_idle_state(uint32_t *ctx); /* FUN_08011C88 = UART_CheckIdleState (in dma.c) */
-uint32_t dma_wait_done(int timeout);
+uint32_t dma_wait_done(uint32_t loops);
+int dma_channel_reset_all(void *cfg, void *out_params);
 uint32_t dma_usart_init(int *ctx);
 uint8_t  dma_irq_copy(uint32_t *dst1, uint32_t *src2, uint32_t *dst3, uint32_t *src4);
 
@@ -291,7 +293,7 @@ void veneer_11f68(void);
 void veneer_11f88(void);
 
 /* memcpy helpers */
-uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count);
+uint32_t memcpy_halfword(uint32_t **dst_pp, uint32_t src_base, uint32_t count);
 void memcpy_byte(void *dst, const void *src, uint32_t len);
 void memset_byte_copy(int dst, int src, int count);
 void memset_byte_fill(uint8_t *dst, uint8_t val, int count);

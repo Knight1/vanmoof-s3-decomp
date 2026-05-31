@@ -80,18 +80,18 @@ void modem_reinit(void)
 /*
  * Deinitialize the USART/modem context.
  *
- * Sets the context's status byte to 2, clears bit 6 (0x40) in the base
- * register, calls the deinit thunk, then zeroes the status and control
- * fields. Returns true if ctx was null (error), false on success.
+ * Sets the context's status byte to 2, clears bit 6 (0x40) in the peripheral
+ * register pointed to by ctx[0], acknowledges the modem ISR, then zeroes the
+ * status and control fields. Returns true if ctx was null (error), false on
+ * success.
  */
 bool modem_deinit(void *ctx)
 {
     if (ctx != NULL) {
         volatile uint32_t *c = (volatile uint32_t *)ctx;
         *(volatile uint8_t *)((uintptr_t)c + 0x51) = 2;
-        *c &= ~0x40U;
-        extern void modem_deinit_thunk(void *);
-        modem_deinit_thunk(ctx);
+        *(volatile uint32_t *)(uintptr_t)c[0] &= ~0x40U;
+        modem_isr_ack();
         c[0x15] = 0;
         *(volatile uint8_t *)((uintptr_t)c + 0x51) = 0;
         *(volatile uint8_t *)(c + 0x14) = 0;

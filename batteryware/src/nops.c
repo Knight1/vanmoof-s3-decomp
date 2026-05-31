@@ -44,20 +44,6 @@ uint32_t dma_get_status(uint32_t reg_val)
     return reg_val;
 }
 
-/* DMA flash-transfer leaves — not yet reconstructed. Provisional stubs so
- * the now-live command processor / OAD path links; reconstruct as their own
- * decomp targets. dma_lock returns 0 (bus free) so callers proceed. */
-uint8_t  dma_lock(void *ctx)                              { (void)ctx; return 0; }
-uint32_t dma_byte_copy(void *ctx, void *src, uint32_t n)  { (void)ctx; (void)src; (void)n; return 0; }
-uint32_t memcpy_hw(void *ctx, void *src, uint32_t n)      { (void)ctx; (void)src; (void)n; return 0; }
-
-/* DMA channel reset (FUN_~188 B, not yet reconstructed) — provisional stub
- * returning 0 (success) so flash_dma_start's retry loop completes. */
-int dma_channel_reset_all(void *ctx, void *params) { (void)ctx; (void)params; return 0; }
-
-/* Modem deinit inner thunk — provisional stub. */
-void modem_deinit_thunk(void *ctx) { (void)ctx; }
-
 /*
  * CRC-32/MPEG-2 (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection, no final
  * XOR). The OEM drives the STM32 hardware CRC peripheral; this is the

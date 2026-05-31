@@ -126,6 +126,7 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x200047D4` | — | 2 | **Report count / cascade gate** = `cmdbuf[4:5]*2`; non-zero enables every cmd-3 telemetry field. |
 | `0x20002C72` | — | 1 | cmd-0x80 firmware-update retry counter (reset triggers `system_reset` after 0x32 fails). |
 | `0x200047DC` | — | 1 | cmd-0x80 firmware-update watchdog-clear cell. |
+| `0x200047E0` | `s_flash_mutex` | 0x18 | **Flash/EEPROM/SPI write mutex + error shadow.** `[+0x10]` (`0x200047F0`) = held flag (1=busy → callers return 2); `[+0x14]` (`0x200047F4`) = error-code shadow, zeroed on acquire and OR'd with a compressed FLASH_SR error code by `dma_error_clear`. Shared by `spi_register_write`, `flash_word_write`, `memcmp_verify`, `atomic_copy_16words`, `dma_channel_reset_all`. |
 
 ## External flash / EEPROM map
 
@@ -157,6 +158,7 @@ write+verify). `0x0801A800..` is the in-internal-flash OAD staging area.
 | ADC1 | `0x40012400` | 12-bit ADC for cell-voltage acquisition. **IRQ12 (ADC1_COMP, vector slot 28)** services it: EOC stores `DR & 0xFFF` into the sample buffer `@ 0x20002558`, EOS raises the sequence-ready flag `@ 0x20002554`, OVR records an error in the HAL handle `@ 0x200024F4`. Real vector target `0x080004C4` (now wired; was trapping via `Default_Handler`). Regs used: ISR +0x00, IER +0x04, CR +0x08, CFGR1 +0x0C, DR +0x40. |
 | SysTick | `0xE000E010` | 1 ms tick timer — polled by `delay_ms` |
 |FEDL5236 (communicates via SPI)1 | `0x40005400` | Likely FEDL5236 fuel gauge communication |
+| FLASH/EEPROM ctrl | `0x40022000` | STM32L0 flash + data-EEPROM controller. **ACR** +0x00 (PRFTEN/LATENCY), **PECR** +0x04 (PROG=bit3, FPRG=bit10/0x400, ERASE=bit9/0x200), **SR** +0x18 (BSY=bit0, EOP=bit1, error bits 0x100/0x200/0x400/0x800/0x2000/0x10000/0x20000). All flash-program/erase + EEPROM-write paths poll SR via `dma_wait_for_ready`/`dma_wait_done` (mis-named "dma_*"; they are NOT DMA). Half-page program (`atomic_copy_16words`) = FPRG+PROG then 16 words to a fixed PECR latch. Page erase = `dma_channel_reset` sets ERASE+PROG, writes 0 to the page-aligned address. |
 
 ## Key observations
 

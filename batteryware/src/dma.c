@@ -41,15 +41,13 @@ uint32_t dma_transfer(volatile uint32_t *ctx, void *src, uint32_t count)
     if (mode == 3) {
         volatile uint32_t *dst = (volatile uint32_t *)*ctx;
         for (uint32_t i = 0; i < count; i++) {
-            dst[i] = ((volatile uint32_t *)src)[i];
+            *dst = ((volatile uint32_t *)src)[i];
         }
         result = *dst;
     } else if (mode == 1) {
-        extern uint32_t dma_byte_copy(void *ctx, void *src, uint32_t count);
-        result = dma_byte_copy(ctx, src, count);
+        result = bytes_to_words((uint32_t **)ctx, (const uint8_t *)src, count);
     } else if (mode == 2) {
-        extern uint32_t memcpy_hw(void *ctx, void *src, uint32_t count);
-        result = memcpy_hw(ctx, src, count);
+        result = memcpy_halfword((uint32_t **)ctx, (uint32_t)(uintptr_t)src, count);
     }
 
     *status = 1;
@@ -74,15 +72,13 @@ uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count)
     if (mode == 3) {
         volatile uint32_t *dst = (volatile uint32_t *)*ctx;
         for (uint32_t i = 0; i < count; i++) {
-            dst[i] = ((volatile uint32_t *)src)[i];
+            *dst = ((volatile uint32_t *)src)[i];
         }
         result = *dst;
     } else if (mode == 1) {
-        extern uint32_t dma_byte_copy(void *ctx, void *src, uint32_t count);
-        result = dma_byte_copy(ctx, src, count);
+        result = bytes_to_words((uint32_t **)ctx, (const uint8_t *)src, count);
     } else if (mode == 2) {
-        extern uint32_t memcpy_hw(void *ctx, void *src, uint32_t count);
-        result = memcpy_hw(ctx, src, count);
+        result = memcpy_halfword((uint32_t **)ctx, (uint32_t)(uintptr_t)src, count);
     }
 
     *status = 1;
@@ -95,28 +91,30 @@ uint32_t dma_transfer_irq(volatile uint32_t *ctx, void *src, uint32_t count)
  */
 uint8_t atomic_copy_16words(volatile uint32_t *dst, volatile uint32_t *src)
 {
-    volatile uint32_t * const s_periph = (volatile uint32_t *)0x20002000;
-    extern uint8_t dma_lock(void *ctx);  /* FUN_08015360 */
+    /* STM32L0 flash half-page program (FUN_08015294): one half-page is 16
+     * words / 64 bytes. FLASH_PECR @ 0x40022004; FPRG (0x400) + PROG (8)
+     * arm the half-page latch, then the 16 source words are written to the
+     * FIXED destination latch (dst is not advanced — only src), and BSY is
+     * polled via the count-down dma_wait_done before clearing PROG + FPRG. */
+    volatile uint32_t * const s_pecr = (volatile uint32_t *)0x40022004;
 
-    uint8_t ret = dma_lock((void *)s_periph);
+    uint8_t ret = (uint8_t)dma_wait_done(50000);
     if (ret != 0) {
         return ret;
     }
 
-    s_periph[4 / 4] |= 0x400;
-    s_periph[4 / 4] |= 8;
+    *s_pecr |= 0x400;   /* FPRG */
+    *s_pecr |= 8;       /* PROG */
 
     __disable_irq();
-
     for (uint32_t i = 0; i < 16; i++) {
-        dst[i] = src[i];
+        *dst = src[i];
     }
-
     __enable_irq();
 
-    ret = dma_lock((void *)s_periph);
-    s_periph[4 / 4] &= ~8U;
-    s_periph[4 / 4] &= 0xFFFFFFBF;
+    ret = (uint8_t)dma_wait_done(50000);
+    *s_pecr &= ~8U;          /* clear PROG */
+    *s_pecr &= 0xFFFFFBFFU;  /* clear FPRG */
 
     return ret;
 }
@@ -163,6 +161,50 @@ void dma_channel_reset(uint32_t dma_base)
     s_dma_periph[4 / 4] |= 0x200;
     s_dma_periph[4 / 4] |= 8;
     *(volatile uint32_t *)(dma_base & 0xFFFFFF80) = 0;
+}
+
+/*
+ * dma_channel_reset_all (FUN_0800f5c8) — erase a run of flash half-pages.
+ *
+ * `cfg` is the channel struct: cfg[1] = start address, cfg[2] = number of
+ * 0x80-byte pages. Mutex-guarded (0x200047E0[0x10]); for each page it calls
+ * dma_channel_reset, waits on FLASH_SR via dma_wait_for_ready, then clears
+ * PROG (bit 3) + ERASE (bit 9) in FLASH_PECR (0x40022004). Writes 0xFFFFFFFF
+ * to *out on success, or the address of the failing page. Returns 0 on
+ * success, 2 if the mutex is held, else the wait status.
+ */
+int dma_channel_reset_all(void *cfg, void *out_params)
+{
+    volatile uint8_t  * const s_mutex = (volatile uint8_t  *)0x200047E0;
+    volatile uint32_t * const s_pecr  = (volatile uint32_t *)0x40022004;
+    volatile uint32_t * const c       = (volatile uint32_t *)cfg;
+    uint32_t * const out              = (uint32_t *)out_params;
+
+    if (s_mutex[0x10] == 1) {
+        return 2;
+    }
+
+    s_mutex[0x10] = 1;
+    uint8_t ret = (uint8_t)dma_wait_for_ready(50000);
+
+    if (ret == 0) {
+        *out = 0xFFFFFFFFu;
+        uint32_t start = c[1];
+        uint32_t end   = c[2] * 0x80 + start;
+        for (uint32_t addr = start; addr < end; addr += 0x80) {
+            dma_channel_reset(addr);
+            ret = (uint8_t)dma_wait_for_ready(50000);
+            *s_pecr &= 0xFFFFFFF7u;  /* clear PROG */
+            *s_pecr &= 0xFFFFFDFFu;  /* clear ERASE */
+            if (ret != 0) {
+                *out = addr;
+                break;
+            }
+        }
+    }
+
+    s_mutex[0x10] = 0;
+    return ret;
 }
 
 /*
@@ -409,7 +451,8 @@ void dma_byte_done(int *ctx)
  */
 uint32_t dma_wait_for_ready(uint32_t timeout)
 {
-    volatile uint32_t * const s_dma_stat = (volatile uint32_t *)0x40020020;
+    /* poll FLASH_SR (0x40022018), not a DMA register */
+    volatile uint32_t * const s_dma_stat = (volatile uint32_t *)0x40022000;
     uint32_t start = tick_get();
 
     while ((s_dma_stat[6] & 1) == 1) {
@@ -448,50 +491,54 @@ uint32_t dma_wait_for_ready(uint32_t timeout)
  */
 void dma_error_clear(void)
 {
-    volatile uint32_t * const s_dma_status  = (volatile uint32_t *)0x40020020;
-    volatile uint32_t * const s_dma_clear   = (volatile uint32_t *)0x40020020;
+    /* status = FLASH_SR (0x40022018); error codes are latched into the SRAM
+     * shadow word at 0x200047F4 (= 0x200047E0 + 0x14) per error bit. */
+    volatile uint32_t * const s_flash_sr   = (volatile uint32_t *)0x40022000;
+    volatile uint32_t * const s_err_shadow = (volatile uint32_t *)0x200047E0;
     uint32_t clear_mask = 0;
 
-    if ((s_dma_status[6] & 0x100) == 0x100) {
-        s_dma_clear[5] |= 2;
+    if ((s_flash_sr[6] & 0x100) == 0x100) {
+        s_err_shadow[5] |= 2;
         clear_mask |= 0x100;
     }
-    if ((s_dma_status[6] & 0x200) == 0x200) {
-        s_dma_clear[5] |= 1;
+    if ((s_flash_sr[6] & 0x200) == 0x200) {
+        s_err_shadow[5] |= 1;
         clear_mask |= 0x200;
     }
-    if ((s_dma_status[6] & 0x400) == 0x400) {
-        s_dma_clear[5] |= 8;
+    if ((s_flash_sr[6] & 0x400) == 0x400) {
+        s_err_shadow[5] |= 8;
         clear_mask |= 0x400;
     }
-    if ((s_dma_status[6] & 0x800) == 0x800) {
-        s_dma_clear[5] |= 4;
+    if ((s_flash_sr[6] & 0x800) == 0x800) {
+        s_err_shadow[5] |= 4;
         clear_mask |= 0x800;
     }
-    if ((s_dma_status[6] & 0x2000) == 0x2000) {
-        s_dma_clear[5] |= 0x10;
+    if ((s_flash_sr[6] & 0x2000) == 0x2000) {
+        s_err_shadow[5] |= 0x10;
         clear_mask |= 0x2000;
     }
-    if ((s_dma_status[6] & 0x20000) == 0x20000) {
-        s_dma_clear[5] |= 0x20;
+    if ((s_flash_sr[6] & 0x20000) == 0x20000) {
+        s_err_shadow[5] |= 0x20;
         clear_mask |= 0x20000;
     }
-    if ((s_dma_status[6] & 0x10000) == 0x10000) {
-        s_dma_clear[5] |= 0x40;
+    if ((s_flash_sr[6] & 0x10000) == 0x10000) {
+        s_err_shadow[5] |= 0x40;
         clear_mask |= 0x10000;
     }
 
-    s_dma_status[6] = clear_mask;
+    s_flash_sr[6] = clear_mask;
 }
 
 /*
- * DMA error clear duplicate (FUN_08015434) — same as dma_error_clear
- * but uses different SRAM base addresses for the DMA struct.
+ * FLASH error clear (FUN_08015434) — byte-identical to dma_error_clear;
+ * the compiler emitted a second copy. Reads FLASH_SR (0x40022018) error
+ * bits, latches the compressed code into the SRAM shadow 0x200047F4, then
+ * writes the accumulated mask back to FLASH_SR. Called by dma_wait_done.
  */
 void dma_error_clear_v2(void)
 {
-    volatile uint32_t * const s_dma_stat  = (volatile uint32_t *)0x40020040;
-    volatile uint32_t * const s_dma_clear = (volatile uint32_t *)0x40020040;
+    volatile uint32_t * const s_dma_stat  = (volatile uint32_t *)0x40022000;
+    volatile uint32_t * const s_dma_clear = (volatile uint32_t *)0x200047E0;
     uint32_t clear_mask = 0;
 
     if ((s_dma_stat[6] & 0x100) == 0x100) {
@@ -753,24 +800,27 @@ uint32_t dma_timeout_copy(int *ctx, uint32_t param2, uint32_t param3)
 /*
  * memcpy_halfword — copy halfword-aligned data into a destination pointer.
  *
- * Copies param_3 halfwords from param_2 to *param_1. Pairs two halfwords
- * into one 32-bit store. If an odd halfword remains, writes it as a 16-bit
- * store. Returns the last word written (the value at *param_1).
+ * Copies count halfwords from src_base to the fixed destination *(*dst_pp)
+ * (dst_pp points at the channel struct slot holding the dst pointer — the
+ * same double-indirection as bytes_to_words). Two halfwords pack into one
+ * 32-bit store, high half first (src[2i] << 16 | src[2i+1]); an odd trailing
+ * halfword is written as a 16-bit store. Returns the last word written.
  */
-uint32_t memcpy_halfword(volatile uint32_t *dst_ptr, uint32_t src_base, uint32_t count)
+uint32_t memcpy_halfword(uint32_t **dst_pp, uint32_t src_base, uint32_t count)
 {
     uint32_t i;
     const uint16_t *src = (const uint16_t *)src_base;
+    volatile uint32_t *dst = (volatile uint32_t *)(*dst_pp);
 
     for (i = 0; i < (count >> 1); i++) {
-        *dst_ptr = ((uint32_t)src[i * 2 + 1] << 16) | src[i * 2];
+        *dst = ((uint32_t)src[i * 2] << 16) | src[i * 2 + 1];
     }
 
     if ((count & 1) != 0) {
-        *(volatile uint16_t *)dst_ptr = src[i * 2];
+        *(volatile uint16_t *)dst = src[i * 2];
     }
 
-    return *dst_ptr;
+    return *dst;
 }
 
 /*
@@ -810,19 +860,19 @@ uint32_t uart_check_idle_state(uint32_t *ctx)
 }
 
 /*
- * DMA wait-done — poll DMA channel until transfer completes.
+ * dma_wait_done (FUN_08015360) — count-down poll of FLASH_SR (0x40022018).
  *
- * Counts down from the given timeout value while bit 0 (TCIF)
- * remains set in the DMA status register at *ctx + 0x18.
- * If count reaches zero (timeout): returns 3.
- * Otherwise: clears any TCIF (bit 1), then checks for error flags
- * (bits 0x100-0x20000) and triggers fault handler on any error.
- * Returns 0 on clean completion.
+ * `loops` bounds the spin (a raw iteration count, not a tick timeout) while
+ * BSY (bit 0) is set. If the count is exhausted: returns 3. Otherwise clears
+ * EOP (bit 1), then on any FLASH error bit (0x100..0x20000) runs the FLASH
+ * error-clear and returns 1. Returns 0 on clean completion. Used by
+ * atomic_copy_16words (half-page programming).
  */
-uint32_t dma_wait_done(int timeout)
+uint32_t dma_wait_done(uint32_t loops)
 {
-    volatile uint32_t * const s_dma_ch_status = (volatile uint32_t *)0x40020020;
-    int count = timeout;
+    /* count-down poll of FLASH_SR (0x40022018) BSY, not a DMA register */
+    volatile uint32_t * const s_dma_ch_status = (volatile uint32_t *)0x40022000;
+    uint32_t count = loops;
 
     while (((s_dma_ch_status[6] & 1) == 1) && (count != 0)) {
         count--;
@@ -833,7 +883,7 @@ uint32_t dma_wait_done(int timeout)
     }
 
     if ((s_dma_ch_status[6] & 2) == 2) {
-        s_dma_ch_status[6] = 2;  /* clear TCIF */
+        s_dma_ch_status[6] = 2;  /* clear EOP */
     }
 
     uint32_t status = s_dma_ch_status[6];
@@ -841,8 +891,7 @@ uint32_t dma_wait_done(int timeout)
         ((status & 0x400) == 0x400) || ((status & 0x800) == 0x800) ||
         ((status & 0x2000) == 0x2000) || ((status & 0x20000) == 0x20000) ||
         ((status & 0x10000) == 0x10000)) {
-        extern void dma_fault_handler(void);
-        dma_fault_handler();
+        dma_error_clear_v2();
         return 1;
     }
 
