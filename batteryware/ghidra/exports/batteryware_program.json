@@ -258,7 +258,7 @@
       "value": "0x0801324d"
     }
   ],
-  "function_count": 282,
+  "function_count": 286,
   "functions": [
     {
       "addr": "0x08000130",
@@ -310,7 +310,7 @@
       "size": 406,
       "name": "__aeabi_ldivmod",
       "auto_named": false,
-      "signature": "undefined FUN_080002d8(void)",
+      "signature": "undefined __aeabi_ldivmod(void)",
       "thunk": false,
       "external": false
     },
@@ -319,7 +319,7 @@
       "size": 22,
       "name": "__clz64",
       "auto_named": false,
-      "signature": "undefined FUN_08000470(void)",
+      "signature": "undefined __clz64(void)",
       "thunk": false,
       "external": false
     },
@@ -346,7 +346,7 @@
       "size": 392,
       "name": "main_clock_setup",
       "auto_named": false,
-      "signature": "undefined FUN_08000658(void)",
+      "signature": "undefined main_clock_setup(void)",
       "thunk": false,
       "external": false
     },
@@ -373,7 +373,7 @@
       "size": 1614,
       "name": "cell_balance_update",
       "auto_named": false,
-      "signature": "undefined FUN_08000880(void)",
+      "signature": "undefined cell_balance_update(void)",
       "thunk": false,
       "external": false
     },
@@ -391,7 +391,7 @@
       "size": 272,
       "name": "state_timer_0b",
       "auto_named": false,
-      "signature": "undefined state_timer_0b(void)",
+      "signature": "void state_timer_0b(void)",
       "thunk": false,
       "external": false
     },
@@ -409,7 +409,7 @@
       "size": 396,
       "name": "state_timer_0c",
       "auto_named": false,
-      "signature": "undefined state_timer_0c(void)",
+      "signature": "void state_timer_0c(void)",
       "thunk": false,
       "external": false
     },
@@ -427,7 +427,7 @@
       "size": 396,
       "name": "state_timer_12",
       "auto_named": false,
-      "signature": "undefined state_timer_12(void)",
+      "signature": "void state_timer_12(void)",
       "thunk": false,
       "external": false
     },
@@ -445,7 +445,7 @@
       "size": 562,
       "name": "state_timer_13",
       "auto_named": false,
-      "signature": "undefined FUN_0800163c(void)",
+      "signature": "undefined state_timer_13(void)",
       "thunk": false,
       "external": false
     },
@@ -481,7 +481,7 @@
       "size": 358,
       "name": "state_timer_15",
       "auto_named": false,
-      "signature": "undefined FUN_080019b8(void)",
+      "signature": "undefined state_timer_15(void)",
       "thunk": false,
       "external": false
     },
@@ -499,7 +499,7 @@
       "size": 364,
       "name": "state_timer_0d",
       "auto_named": false,
-      "signature": "undefined state_timer_0d(void)",
+      "signature": "void state_timer_0d(void)",
       "thunk": false,
       "external": false
     },
@@ -517,7 +517,7 @@
       "size": 384,
       "name": "state_timer_0e",
       "auto_named": false,
-      "signature": "undefined state_timer_0e(void)",
+      "signature": "void state_timer_0e(void)",
       "thunk": false,
       "external": false
     },
@@ -535,7 +535,7 @@
       "size": 378,
       "name": "state_timer_14",
       "auto_named": false,
-      "signature": "undefined state_timer_14(void)",
+      "signature": "void state_timer_14(void)",
       "thunk": false,
       "external": false
     },
@@ -607,7 +607,7 @@
       "size": 894,
       "name": "ymodem_receive",
       "auto_named": false,
-      "signature": "undefined ymodem_receive(void)",
+      "signature": "void ymodem_receive(byte data)",
       "thunk": false,
       "external": false
     },
@@ -634,7 +634,7 @@
       "size": 1314,
       "name": "fg_scan",
       "auto_named": false,
-      "signature": "undefined FUN_0800325c(void)",
+      "signature": "undefined fg_scan(void)",
       "thunk": false,
       "external": false
     },
@@ -643,7 +643,7 @@
       "size": 2860,
       "name": "fg_coulomb_update",
       "auto_named": false,
-      "signature": "undefined FUN_080039c2(void)",
+      "signature": "undefined fg_coulomb_update(void)",
       "thunk": false,
       "external": false
     },
@@ -670,7 +670,7 @@
       "size": 296,
       "name": "smbus_read_nack",
       "auto_named": false,
-      "signature": "undefined smbus_read_nack(void)",
+      "signature": "void smbus_read_nack(byte addr, byte val)",
       "thunk": false,
       "external": false
     },
@@ -679,7 +679,7 @@
       "size": 312,
       "name": "smbus_read",
       "auto_named": false,
-      "signature": "undefined smbus_read(void)",
+      "signature": "uint smbus_read(byte addr, byte count)",
       "thunk": false,
       "external": false
     },
@@ -688,7 +688,7 @@
       "size": 724,
       "name": "smbus_write_reg",
       "auto_named": false,
-      "signature": "undefined smbus_write_reg(void)",
+      "signature": "void smbus_write_reg(byte reg, byte val, byte mask)",
       "thunk": false,
       "external": false
     },
@@ -760,7 +760,7 @@
       "size": 366,
       "name": "can_transmit",
       "auto_named": false,
-      "signature": "undefined FUN_080055a8(void)",
+      "signature": "undefined can_transmit(void)",
       "thunk": false,
       "external": false
     },
@@ -787,7 +787,7 @@
       "size": 666,
       "name": "main_loop",
       "auto_named": false,
-      "signature": "undefined FUN_080057b0(void)",
+      "signature": "undefined main_loop(void)",
       "thunk": false,
       "external": false
     },
@@ -803,9 +803,9 @@
     {
       "addr": "0x08006328",
       "size": 14,
-      "name": "FUN_08006328",
-      "auto_named": true,
-      "signature": "undefined FUN_08006328(void)",
+      "name": "system_reset_simple",
+      "auto_named": false,
+      "signature": "undefined system_reset_simple(void)",
       "thunk": false,
       "external": false
     },
@@ -1001,18 +1001,18 @@
     {
       "addr": "0x0800724c",
       "size": 36,
-      "name": "uart_check_parity_error",
+      "name": "EXTI0_1_IRQHandler",
       "auto_named": false,
-      "signature": "void uart_check_parity_error(void)",
+      "signature": "void EXTI0_1_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08007278",
       "size": 40,
-      "name": "uart_check_overrun_error",
+      "name": "EXTI4_15_IRQHandler",
       "auto_named": false,
-      "signature": "void uart_check_overrun_error(void)",
+      "signature": "void EXTI4_15_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -1021,7 +1021,7 @@
       "size": 156,
       "name": "batteryware_main",
       "auto_named": false,
-      "signature": "undefined batteryware_main(void)",
+      "signature": "void batteryware_main(void)",
       "thunk": false,
       "external": false
     },
@@ -1192,7 +1192,7 @@
       "size": 238,
       "name": "word_to_bytes",
       "auto_named": false,
-      "signature": "undefined word_to_bytes(void)",
+      "signature": "void word_to_bytes(uint * src, ushort byte_count, int dst)",
       "thunk": false,
       "external": false
     },
@@ -1228,7 +1228,7 @@
       "size": 24,
       "name": "fault_led_trigger",
       "auto_named": false,
-      "signature": "undefined fault_led_trigger(void)",
+      "signature": "void fault_led_trigger(void)",
       "thunk": false,
       "external": false
     },
@@ -1363,7 +1363,7 @@
       "size": 22,
       "name": "fg_clear_status",
       "auto_named": false,
-      "signature": "undefined FUN_08009a80(void)",
+      "signature": "undefined fg_clear_status(void)",
       "thunk": false,
       "external": false
     },
@@ -1469,9 +1469,9 @@
     {
       "addr": "0x0800ab7c",
       "size": 348,
-      "name": "FUN_0800ab7c",
-      "auto_named": true,
-      "signature": "undefined FUN_0800ab7c(void)",
+      "name": "service_uart_init",
+      "auto_named": false,
+      "signature": "undefined service_uart_init(void)",
       "thunk": false,
       "external": false
     },
@@ -1498,7 +1498,7 @@
       "size": 272,
       "name": "uart_resp_handler",
       "auto_named": false,
-      "signature": "undefined FUN_0800adbc(void)",
+      "signature": "undefined uart_resp_handler(void)",
       "thunk": false,
       "external": false
     },
@@ -1532,27 +1532,27 @@
     {
       "addr": "0x0800b328",
       "size": 3690,
-      "name": "HardFault_Handler",
+      "name": "uart_cmd_report_blk_b328",
       "auto_named": false,
-      "signature": "undefined HardFault_Handler(void)",
+      "signature": "undefined uart_cmd_report_blk_b328(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x0800c24c",
       "size": 44,
-      "name": "EXTI0_1_IRQHandler",
+      "name": "cmd_proc_blk_c24c",
       "auto_named": false,
-      "signature": "undefined EXTI0_1_IRQHandler(void)",
+      "signature": "undefined cmd_proc_blk_c24c(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x0800c278",
       "size": 2970,
-      "name": "EXTI4_15_IRQHandler",
+      "name": "cmd_proc_blk_c278",
       "auto_named": false,
-      "signature": "undefined EXTI4_15_IRQHandler(void)",
+      "signature": "undefined cmd_proc_blk_c278(void)",
       "thunk": false,
       "external": false
     },
@@ -1701,6 +1701,24 @@
       "external": false
     },
     {
+      "addr": "0x0800e1f8",
+      "size": 58,
+      "name": "reset_region_e1f8",
+      "auto_named": false,
+      "signature": "undefined reset_region_e1f8(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0800e24c",
+      "size": 2,
+      "name": "exc_default_trap_e24c",
+      "auto_named": false,
+      "signature": "undefined exc_default_trap_e24c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
       "addr": "0x0800e250",
       "size": 58,
       "name": "peripheral_reset",
@@ -1741,7 +1759,7 @@
       "size": 14,
       "name": "tick_val_get",
       "auto_named": false,
-      "signature": "undefined tick_val_get(void)",
+      "signature": "uint tick_val_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1750,7 +1768,7 @@
       "size": 14,
       "name": "tick_ms_get",
       "auto_named": false,
-      "signature": "undefined tick_ms_get(void)",
+      "signature": "uint tick_ms_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1759,7 +1777,7 @@
       "size": 14,
       "name": "tick_timeout_get",
       "auto_named": false,
-      "signature": "undefined tick_timeout_get(void)",
+      "signature": "uint tick_timeout_get(void)",
       "thunk": false,
       "external": false
     },
@@ -1768,7 +1786,7 @@
       "size": 718,
       "name": "flash_op_start",
       "auto_named": false,
-      "signature": "undefined flash_op_start(void)",
+      "signature": "uint flash_op_start(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -1777,7 +1795,7 @@
       "size": 286,
       "name": "usart1_dma_setup",
       "auto_named": false,
-      "signature": "undefined usart1_dma_setup(void)",
+      "signature": "byte usart1_dma_setup(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -1804,7 +1822,7 @@
       "size": 224,
       "name": "dma_deinit",
       "auto_named": false,
-      "signature": "undefined dma_deinit(void)",
+      "signature": "byte dma_deinit(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -1813,7 +1831,7 @@
       "size": 250,
       "name": "nvic_reconfigure",
       "auto_named": false,
-      "signature": "undefined nvic_reconfigure(void)",
+      "signature": "uint nvic_reconfigure(int * ctx, uint * param)",
       "thunk": false,
       "external": false
     },
@@ -2083,7 +2101,7 @@
       "size": 424,
       "name": "gpio_pin_reset",
       "auto_named": false,
-      "signature": "undefined FUN_0800fae0(void)",
+      "signature": "void gpio_pin_reset(uint * gpio_base, uint pin_mask)",
       "thunk": false,
       "external": false
     },
@@ -2146,7 +2164,7 @@
       "size": 312,
       "name": "clock_prescaler_val",
       "auto_named": false,
-      "signature": "undefined FUN_080107e4(void)",
+      "signature": "int clock_prescaler_val(void)",
       "thunk": false,
       "external": false
     },
@@ -2182,7 +2200,7 @@
       "size": 640,
       "name": "rcc_reconfigure",
       "auto_named": false,
-      "signature": "undefined FUN_0801099c(void)",
+      "signature": "uint rcc_reconfigure(uint * param)",
       "thunk": false,
       "external": false
     },
@@ -2191,7 +2209,7 @@
       "size": 310,
       "name": "dma_usart_init",
       "auto_named": false,
-      "signature": "undefined FUN_08010c48(void)",
+      "signature": "uint dma_usart_init(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -2263,7 +2281,7 @@
       "size": 58,
       "name": "dma_byte_done",
       "auto_named": false,
-      "signature": "undefined FUN_0801101c(void)",
+      "signature": "void dma_byte_done(int * ctx)",
       "thunk": false,
       "external": false
     },
@@ -2333,45 +2351,45 @@
     {
       "addr": "0x080114ec",
       "size": 164,
-      "name": "flash_page_program",
+      "name": "hal_uart_init",
       "auto_named": false,
-      "signature": "undefined flash_page_program(void)",
+      "signature": "undefined hal_uart_init(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08011594",
       "size": 16,
-      "name": "flash_program_init",
+      "name": "hal_uart_msp_init",
       "auto_named": false,
-      "signature": "void flash_program_init(void)",
+      "signature": "void hal_uart_msp_init(void)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x080115a4",
       "size": 1218,
-      "name": "flash_prescaler_setup",
+      "name": "uart_set_config",
       "auto_named": false,
-      "signature": "uint flash_prescaler_setup(int * ctx)",
+      "signature": "uint uart_set_config(int * ctx)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08011b20",
       "size": 324,
-      "name": "dma_channel_config",
+      "name": "uart_adv_feature_config",
       "auto_named": false,
-      "signature": "void dma_channel_config(int * ctx)",
+      "signature": "void uart_adv_feature_config(int * ctx)",
       "thunk": false,
       "external": false
     },
     {
       "addr": "0x08011c88",
       "size": 140,
-      "name": "dma_completion_handler",
+      "name": "uart_check_idle_state",
       "auto_named": false,
-      "signature": "undefined dma_completion_handler(void)",
+      "signature": "undefined uart_check_idle_state(void)",
       "thunk": false,
       "external": false
     },
@@ -2380,7 +2398,7 @@
       "size": 248,
       "name": "timeout_poll_v2",
       "auto_named": false,
-      "signature": "undefined FUN_08011d18(void)",
+      "signature": "uint timeout_poll_v2(int * ctx, uint mask, char param_3, int param_4, uint param_5)",
       "thunk": false,
       "external": false
     },
@@ -2389,7 +2407,16 @@
       "size": 10,
       "name": "veneer_11e14",
       "auto_named": false,
-      "signature": "undefined veneer_11e14(void)",
+      "signature": "void veneer_11e14(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x08011e20",
+      "size": 56,
+      "name": "FUN_08011e20",
+      "auto_named": true,
+      "signature": "undefined FUN_08011e20(void)",
       "thunk": false,
       "external": false
     },
@@ -2398,7 +2425,7 @@
       "size": 18,
       "name": "memset_byte_copy",
       "auto_named": false,
-      "signature": "undefined FUN_08011e68(void)",
+      "signature": "void memset_byte_copy(int dst, int src, int count)",
       "thunk": false,
       "external": false
     },
@@ -2407,7 +2434,16 @@
       "size": 16,
       "name": "memset_byte_fill",
       "auto_named": false,
-      "signature": "undefined FUN_08011e7a(void)",
+      "signature": "void memset_byte_fill(byte * dst, byte val, int count)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x08011e8c",
+      "size": 12,
+      "name": "FUN_08011e8c",
+      "auto_named": true,
+      "signature": "undefined FUN_08011e8c(void)",
       "thunk": false,
       "external": false
     },
@@ -2416,7 +2452,7 @@
       "size": 12,
       "name": "veneer_11e98",
       "auto_named": false,
-      "signature": "undefined FUN_08011e98(void)",
+      "signature": "void veneer_11e98(void)",
       "thunk": false,
       "external": false
     },
@@ -2549,9 +2585,9 @@
     {
       "addr": "0x080131f8",
       "size": 128,
-      "name": "Reset_Handler",
+      "name": "coulomb_blk_131f8",
       "auto_named": false,
-      "signature": "undefined Reset_Handler(void)",
+      "signature": "undefined coulomb_blk_131f8(void)",
       "thunk": false,
       "external": false
     },
@@ -2567,9 +2603,9 @@
     {
       "addr": "0x0801324c",
       "size": 502,
-      "name": "NMI_Handler",
+      "name": "coulomb_rsoc_blk_1324c",
       "auto_named": false,
-      "signature": "undefined NMI_Handler(void)",
+      "signature": "undefined coulomb_rsoc_blk_1324c(void)",
       "thunk": false,
       "external": false
     },
@@ -2578,7 +2614,7 @@
       "size": 90,
       "name": "rsoc_set",
       "auto_named": false,
-      "signature": "undefined rsoc_set(void)",
+      "signature": "void rsoc_set(byte pct)",
       "thunk": false,
       "external": false
     },
@@ -2623,7 +2659,7 @@
       "size": 1834,
       "name": "crc8_for_smbus",
       "auto_named": false,
-      "signature": "undefined FUN_080141e4(void)",
+      "signature": "undefined crc8_for_smbus(void)",
       "thunk": false,
       "external": false
     },
@@ -2704,7 +2740,7 @@
       "size": 248,
       "name": "dma_irq_copy",
       "auto_named": false,
-      "signature": "undefined FUN_0801518c(void)",
+      "signature": "undefined dma_irq_copy(void)",
       "thunk": false,
       "external": false
     },
