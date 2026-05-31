@@ -1,40 +1,74 @@
 #include "batteryware.h"
 
-/* SPI mutex and context */
+/* SPI mutex (0x200047E0): [0x10] = held flag, [0x14] = cleared on acquire */
 static volatile uint8_t  * const s_spi_mutex  = (volatile uint8_t *)0x200047E0;
-static volatile uint32_t * const s_spi_addr   = (volatile uint32_t *)0x200047E4;
-static volatile uint32_t * const s_spi_busy   = (volatile uint32_t *)0x20002000;
 
 /*
- * Write to an SPI register (byte, halfword, or word) with mutex guarding.
+ * Write a register byte/halfword/word, guarded by the SPI mutex and the
+ * DMA/EEPROM ready poll.
+ *
+ * `type` selects the access width: 0 = byte, 1 = halfword, 2 = word (the
+ * OEM encoding — note it is the inverse of a width-in-bytes value). The
+ * caller commits a value and, by re-reading `reg`, confirms it landed;
+ * `memcmp_verify` loops on this until the read-back matches.
+ *
+ * Returns 0 on success, 2 if the mutex is already held, 3 on ready-poll
+ * timeout, 1 on an invalid `type`.
  */
 uint8_t spi_register_write(uint8_t type, volatile void *reg, uint32_t val)
 {
-    extern uint8_t dma_lock(void *ctx);
+    uint8_t ret = 1;
 
     if (s_spi_mutex[0x10] == 1) {
         return 2;
     }
 
     s_spi_mutex[0x10] = 1;
-    uint8_t ret = dma_lock((void *)s_spi_busy);
+    ret = (uint8_t)dma_wait_for_ready(50000);
 
     if (ret == 0) {
-        if (type == 1) {
-            *(volatile uint8_t *)reg = (uint8_t)val;
-        } else if (type == 2) {
-            *(volatile uint16_t *)reg = (uint16_t)val;
-        } else {
+        *(volatile uint32_t *)&s_spi_mutex[0x14] = 0;
+
+        if (type == 2) {
             *(volatile uint32_t *)reg = val;
+        } else if (type == 1) {
+            *(volatile uint16_t *)reg = (uint16_t)val;
+        } else if (type == 0) {
+            *(volatile uint8_t *)reg = (uint8_t)val;
+        } else {
+            ret = 1;
         }
 
-        if (ret == 0) {
-            ret = dma_lock((void *)s_spi_busy);
+        if (ret != 0) {
+            ret = (uint8_t)dma_wait_for_ready(50000);
         }
     }
 
     s_spi_mutex[0x10] = 0;
     return ret;
+}
+
+/*
+ * EEPROM/SPI register write-verify (FUN_080093a6).
+ *
+ * For each byte, commit `expected[i]` to the register/EEPROM cell at
+ * `&actual[i]` via spi_register_write(0, …) and re-read until the value
+ * sticks. `actual` is the destination that is read back (r0); `expected`
+ * holds the source bytes to commit (r2). Used by every calibration/config
+ * persist path to push a RAM image out to the FEDL5236 EEPROM block.
+ */
+void memcmp_verify(char *actual, uint32_t len, char *expected)
+{
+    char *dst = actual;
+    char *src = expected;
+
+    for (uint32_t i = 0; i < len; i++) {
+        do {
+            spi_register_write(0, dst, (uint8_t)*src);
+        } while (*src != *dst);
+        dst++;
+        src++;
+    }
 }
 
 /*

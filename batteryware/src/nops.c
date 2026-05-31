@@ -147,24 +147,6 @@ void main_clock_setup(void)
 }
 
 /*
- * BUG (2026-05-27): The OEM address attribution here is WRONG and the
- * body does the wrong thing. See docs/progress.md "Known bug".
- *   - `FUN_08009412` is the OEM `memcpy` (byte-copy, weird (src,u16 count,dst) ABI).
- *   - The real `memcmp_verify` is `FUN_080093a6` and is an SPI register-poll
- *     loop: for each byte, it repeatedly calls `spi_register_write(0, &actual[i],
- *     expected[i])` until the read-back matches, then advances.
- * Current call sites in `cmd.c` / `fuel_gauge.c` therefore silently overwrite
- * RAM with EEPROM target values instead of polling SPI. Left in place to keep
- * the build alive until the real implementation lands.
- */
-void memcmp_verify(char *actual, uint32_t len, char *expected)
-{
-    for (uint32_t i = 0; i < len; i++) {
-        actual[i] = expected[i];
-    }
-}
-
-/*
  * Standard C library `memcpy`. NOT the OEM `FUN_08009412` (which has a
  * non-standard (src, u16 count, dst) ABI). This is the libc-shaped routine
  * GCC emits calls to for aggregate initialisers (e.g. local pointer arrays
