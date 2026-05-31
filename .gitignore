@@ -43,3 +43,12 @@ SPI-Flash_*.rom
 
 # TI SDK vendor directory — user-downloaded, never committed
 bleware/vendor/ti-sdk-3.40/
+
+# Renode
+logs/*
+snapshots/*
+log.html
+report.html
+robot_output.xml
+*.save
+*.log
