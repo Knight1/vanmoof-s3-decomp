@@ -1,0 +1,40 @@
+:name: VanMoof batteryware (STM32L072) harness
+:description: Loads the batteryware application, forces the boot-time clock and
+              flash status registers "ready", and points the vector table at the
+              application header. Use interactively: `renode batteryware/tests/batteryware.resc`.
+
+# Path to the built ELF (override on the command line with: $bin=@/path/to.elf)
+$bin?=@batteryware/build/batteryware.elf
+
+mach create "batteryware"
+machine LoadPlatformDescription @batteryware/tests/batteryware.repl
+
+# --- Unblock the boot-time status-register polls -----------------------------
+# During clock + flash init the firmware spins waiting for "ready" bits. With no
+# silicon model behind those registers they would read 0 forever, so pin them to
+# sane values. Tune these if the firmware stalls in clock init.
+#   RCC_CR   @ 0x40021000 : HSI16RDY(b2) MSIRDY(b9) HSERDY(b17) PLLRDY(b25) set
+#   RCC_CFGR @ 0x4002100C : SWS(b3:2) reads back as the selected clock (PLL=0xC)
+#   FLASH_SR @ 0x40022018 : BSY(b0)=0, no error -> every flash/EEPROM poll exits
+sysbus Tag <0x40021000, 0x40021003> "RCC_CR"   0x0F03FFFF
+sysbus Tag <0x4002100C, 0x4002100F> "RCC_CFGR" 0x0000000C
+sysbus Tag <0x40022018, 0x4002201B> "FLASH_SR" 0x00000000
+
+# --- Load + vector table -----------------------------------------------------
+sysbus LoadELF $bin
+# The Cortex-M0+ vector table sits right after the 40-byte VanMoof header.
+cpu VectorTableOffset 0x08005028
+
+# Show USART1 traffic (the Modbus link) in an analyzer window when interactive.
+showAnalyzer usart1
+
+macro reset
+"""
+    sysbus LoadELF $bin
+    cpu VectorTableOffset 0x08005028
+"""
+runMacro $reset
+
+echo ""
+echo "batteryware loaded. 'start' to run; 'sysbus.usart1' is the Modbus port."
+echo "Reset vector: app @ 0x08005028 (SP) / 0x0800502C (PC)."

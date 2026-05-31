@@ -1,0 +1,38 @@
+// STM32L072CZT6 — minimal Renode platform for the VanMoof batteryware
+// application image.
+//
+// The application is linked at 0x08005000 (the first 20 KB of flash belongs to
+// bmsboot). Only what the firmware needs to boot and to drive the USART1 Modbus
+// link is modelled here; the clock/flash *status* registers it polls are forced
+// "ready" from batteryware.resc / the .robot suite with `sysbus Tag`, so this
+// description stays model-agnostic and loads on any recent Renode.
+//
+// Peripheral bases (STM32L0): RCC 0x40021000, FLASH 0x40022000, CRC 0x40023000,
+// GPIOA 0x50000000, GPIOB 0x50000400, ADC1 0x40012400, USART1 0x40013800.
+// Unmodelled regions read as 0 (Renode logs a warning) and never fault the CPU.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 32000000
+    IRQ -> cpu@0
+
+// Whole 192 KB flash bank: bmsboot region (0x08000000) + application (0x08005000).
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x30000
+
+// 20 KB SRAM (stack top _estack = 0x20005000).
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x5000
+
+// USART1 — the inter-module Modbus RTU link (the BMS answers as slave 0xAA),
+// IRQ 27 (vector slot 43). This is the port the Modbus test talks to.
+usart1: UART.STM32_UART @ sysbus 0x40013800
+    IRQ -> nvic@27
+
+// USART2 — present in the SoC; modelled so the secondary console path that
+// UART_SetConfig can touch doesn't hit unmapped memory.
+usart2: UART.STM32_UART @ sysbus 0x40004400
+    IRQ -> nvic@28
