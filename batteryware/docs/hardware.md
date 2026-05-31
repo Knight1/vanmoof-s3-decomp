@@ -114,6 +114,34 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x2000453E` / `0x20004540` / `0x20004542` / `0x20004544` | — | 2 ea | USART1 RX/TX ring-buffer index cells, zeroed by `service_uart_init` at bring-up. |
 | `0x20002C84` | — | 2 | Zeroed by `service_uart_init` at UART bring-up (role TBD). |
 | `0x20002C80` | `s_bms_flags` | 1/4 | **BMS dispatch-flags byte** — read by the state timers as `uint8` (`ldrb`), bit 0 / bit 2 gate cell-balance and fault-dispatch, cleared after handling. NOTE: `delay.c`/this table previously called it a "SysTick CTRL shadow" (`uint32`) — that interpretation is unverified and likely wrong (SysTick CTRL is a core register at `0xE000E010`, not SRAM). |
+| `0x200047D2` | — | 2 | **UART command RX index / state word.** State machine cursor for the command processor; in the cmd-0x10 streaming path (`flash_stream_handler`) it doubles as the running byte count into the command buffer. Reset to 0 on frame completion or CRC failure. |
+| `0x20004548` | — | 8/var | **UART command / stream buffer.** `[0]`=0xAA, `[1]`=command byte; for cmd-0x10 holds the streamed header (`[2:3]` command word BE, `[4:5]` arg/half-length BE, `[6]` payload length) followed by the payload and trailing CRC-16. |
+| `0x2000474C` | — | 0x80 | **OAD page-assembly buffer.** `flash_stream_handler`'s cw==0x82 path copies payload bytes here, then DMA-programs/verifies a 0x80-byte flash page into the staging area. |
+| `0x20004749` | — | 1 | OAD page byte index into `0x2000474C`; wraps each 0x80-byte page (sign bit = page full). |
+| `0x200047D8` | — | 4 | **OAD received-byte counter.** Bumped per streamed payload byte; compared against `0x5000` (image-complete gate) by the command processor's 0x82 report arm and the cmd-0x80 firmware-update body. |
+| `0x20004088` | — | 0x400 | **USART1 RX ring buffer.** Filled by the RX ISR; drained by `uart_resp_handler` (head `0x20004540` / tail `0x20004544`, wrap at 0x400). |
+| `0x20004510` | — | 0x2c | **ASCII command line buffer** (index at `0x20002C84`). Accumulated by `uart_resp_handler` until CR, then handed to `command_parser`. |
+| `0x20004648` | — | var | **Telemetry response buffer.** `[0]`=0xAA, `[1]`=3, `[2]`=count; `uart_protocol_handler`'s cmd-3 cascade appends fields, then a CRC-16, and transmits `0x200047D0` bytes. |
+| `0x200047D0` | — | 2 | Response length (starts at 3, bumped by each appended field/CRC byte). |
+| `0x200047D4` | — | 2 | **Report count / cascade gate** = `cmdbuf[4:5]*2`; non-zero enables every cmd-3 telemetry field. |
+| `0x20002C72` | — | 1 | cmd-0x80 firmware-update retry counter (reset triggers `system_reset` after 0x32 fails). |
+| `0x200047DC` | — | 1 | cmd-0x80 firmware-update watchdog-clear cell. |
+
+## External flash / EEPROM map
+
+Addresses in `0x08080000..` are the external SPI flash / EEPROM region (accessed
+via the SPI-poll helpers `memcpy_oem` for reads and `memcmp_verify` for
+write+verify). `0x0801A800..` is the in-internal-flash OAD staging area.
+
+| Address | Size | Description |
+| --- | --- | --- |
+| `0x08080001` | 1 | Power-on boot-mode selector (latched into `g_boot_mode`). |
+| `0x0808000F..0x0808001F` | 9×2 | **Calibration pair table** written by `flash_stream_handler` (cmd-0x10, command word < 0x15). One 16-bit pair admitted per threshold step `cw<0x0d..0x15`. |
+| `0x08080021 / 25 / 29` | 4 ea | **Anti-replay tick reference triplet** (`tick_val` / `tick_ms` / `tick_timeout`). Loaded for the differ-check, re-committed after the last calibration pair. |
+| `0x08080200 / 0x08080E00` | 50×0x38 | Two telemetry ring buffers (`bms_set_state` writer; cmd-0xF45 history hex-dump reader). |
+| `0x08080C00` | 0x80 | BMS config/telemetry context persisted by `bms_set_state`. |
+| `0x08004FFC` | 4 | Expected-CRC word read by the cmd-0x80 firmware-update verify loop. |
+| `0x0801A800` | 0x5000 | **OAD image staging area** in internal flash. Pages programmed `(page_addr & ~0x7F) + 0x0801A800` by `flash_stream_handler` (cw==0x82) and the cmd-0x80 body; `0x0801A7FC` holds the preceding descriptor word. |
 
 ## Peripheral usage
 

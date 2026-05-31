@@ -492,7 +492,7 @@ static volatile uint32_t * const s_dma_compare_flags = (volatile uint32_t *)0x20
  */
 uint32_t dma_compare(uint32_t addr_a, uint16_t count, uint32_t addr_b)
 {
-    extern int dma_memcmp(uint32_t a, uint32_t b);  /* veneer_11ea8 */
+    /* veneer_11ea8 → atomic_copy_16words (DMA-gated 0x40-byte block xfer). */
     *s_dma_compare_reg = 0;
     *s_dma_compare_flags = 0;
 
@@ -501,7 +501,7 @@ uint32_t dma_compare(uint32_t addr_a, uint16_t count, uint32_t addr_b)
     uint32_t b = addr_b;
 
     while (remaining != 0) {
-        if (dma_memcmp(a, b) != 0) {
+        if (atomic_copy_16words((volatile uint32_t *)a, (volatile uint32_t *)b) != 0) {
             return 1;
         }
         remaining -= DMA_COMPARE_BLOCK_SIZE;

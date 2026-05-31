@@ -88,7 +88,8 @@ void modem_send_2bytes(uint8_t b1, uint8_t b2);
 void temp_offset_send(uint8_t raw_temp);
 uint8_t bus_ready_check(int ctx);
 uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count);
-void modem_command_handler(uint8_t byte);
+void modem_command_dispatch(void);            /* FUN_0800ce9e */
+void bootloader_entry(void);                   /* FUN_08007178 */
 
 /* Block until all TX bytes are sent */
 void uart_tx_flush(void);
@@ -112,7 +113,7 @@ uint32_t flash_lock_opt(void);
 uint32_t flash_wait_ready(void *ctx);
 uint32_t flash_timeout_check(uint32_t param);
 bool peripheral_reset(void);
-uint32_t flash_verify_header(void);
+uint32_t flash_verify_header(uint32_t base);
 
 /* Flash page erase + interrupt priority setup */
 bool flash_page_erase(uint32_t timeout_ticks);
@@ -126,7 +127,8 @@ uint32_t flash_unlock_both(void);
 void flash_op_cleanup(void *ctx);
 void flash_dma_start(uint32_t dst_addr);
 uint32_t flash_write_verify(volatile uint32_t *dst, uint16_t count, int src_base);
-void flash_program_handler(uint8_t *frame, uint16_t frame_len);
+void flash_stream_handler(uint8_t b);            /* FUN_0800d8f0 */
+uint32_t dma_compare(uint32_t addr_a, uint16_t count, uint32_t addr_b);
 
 /* STM32L0 HAL UART init chain (in uart.c; were mis-named flash_* in flash.c) */
 uint32_t hal_uart_init(int *ctx);        /* FUN_080114EC = HAL_UART_Init */
@@ -206,6 +208,7 @@ typedef struct {
 void cmd_counter_inc(uint16_t frame_word);
 void cmd_counter_inc_v2(uint16_t frame_word);
 void cmd_counter_inc_v3(uint16_t frame_word);
+void cmd_write_and_inc(uint16_t frame_word, volatile uint8_t *struct_base, volatile uint8_t *verify_buf);
 void cmd_send_response(void);
 void cmd_send_8byte(void);
 void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte);

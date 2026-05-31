@@ -320,111 +320,322 @@ uint8_t smbus_transmit(int *ctx, int tx_buf, int rx_buf, int16_t count)
 }
 
 /*
- * Modem command handler (modem_command_handler) — a duplicate/larger
- * version of the command parser that handles commands received over
- * the modem/USART interface, including flash programming commands.
+ * Command dispatch tail (FUN_0800ce9e) — the cmd != 3 branch of the UART
+ * command processor (uart_protocol_handler). Operates on the same command
+ * buffer at 0x20004548. In the OEM image this shares the processor's stack
+ * frame; modelled here as an independent function (the shared slots are not
+ * live across the call).
  *
- * This handler processes commands with additional state tracking for
- * the modem communication layer. It supports:
- *   - Flash page programming commands (0x10, 0x11, 0x12)
- *   - Configuration read/write commands
- *   - Status query commands
- *   - Reset/bootloader commands
- *
- * The command frame format is the same as uart_protocol_handler:
- *   [0xAA] [cmd_byte] [data...] [CRC16]
- *
- * But this handler additionally tracks modem state and handles
- * longer multi-packet exchanges for flash programming.
+ * Dispatches on the 16-bit command word cw = cmdbuf[2:3] (big-endian);
+ * arg = cmdbuf[4:5]:
+ *   0xF020/F021/F022/F023 — counter-store commands
+ *   0xF45                  — history hex-dump readout
+ *   0x95                   — shipping mode (charge off, BMS idle)
+ *   cw < 0x1b              — per-command config table (table1)
+ *   0x80                   — firmware-update / OAD bring-up
+ *   otherwise              — default tail: echo + bootloader entry +
+ *                            config-bit tables (table2/table3)
  */
-void modem_command_handler(uint8_t byte)
+
+/* Config-table index predicate: states whose table2/table3 arm toggles a
+ * control bit (rather than just bumping the counter). */
+static bool cfg_idx_special(uint8_t st)
 {
-    volatile uint8_t  * const s_state    = (volatile uint8_t  *)0x20002CF4;
-    volatile uint8_t  * const s_buf      = (volatile uint8_t  *)0x20002CF5;
-    volatile uint16_t * const s_rx_idx   = (volatile uint16_t *)0x20002CF8;
-    volatile uint16_t * const s_rx_total = (volatile uint16_t *)0x20002CFA;
-    volatile uint8_t  * const s_modem_st = (volatile uint8_t  *)0x20002CFC;
+    switch (st) {
+    case 1: case 3: case 7: case 8: case 11: case 12: case 18: case 19:
+        return true;
+    default:
+        return false;
+    }
+}
 
-    uint8_t state = *s_state;
+/* table2 arm: clear control bit 11 / mode bit 0 for the special states,
+ * then bump the response counter and send. */
+static void table2_arm(uint8_t st)
+{
+    if (cfg_idx_special(st)) {
+        *(volatile uint32_t *)0x20002C00 &= 0xFFFFF7FFu;
+        *(volatile uint8_t *)0x20002870 &= (uint8_t)~1u;
+        bms_configure(*(volatile uint8_t *)0x20002870);
+    }
+    *(volatile uint8_t *)0x20004748 += 1;
+    cmd_send_response();
+}
 
-    if (state == 0) {
-        /* Waiting for sync byte 0xAA */
-        if (byte == 0xAA) {
-            *s_state = 1;
-            s_buf[0] = 0xAA;
-            *s_rx_idx = 1;
+/* table3 arm: set control bit 11 / mode bit 0 for the special states. */
+static void table3_arm(uint8_t st)
+{
+    if (cfg_idx_special(st)) {
+        *(volatile uint32_t *)0x20002C00 |= 0x800u;
+        *(volatile uint8_t *)0x20002870 |= 1u;
+        bms_configure(*(volatile uint8_t *)0x20002870);
+    }
+    *(volatile uint8_t *)0x20004748 += 1;
+    cmd_send_response();
+}
+
+/* Default-tail config dispatch (FUN_0800cfc0): arg selects table3 (set) vs
+ * table2 (clear), indexed by the live state at 0x20002B58. */
+static void dispatch_config_tables(uint16_t arg)
+{
+    uint8_t st = *(volatile uint8_t *)0x20002B58;
+    if (arg != 0) {
+        if (arg != 1) cmd_send_response();
+        table3_arm(st);
+    } else {
+        table2_arm(st);
+    }
+}
+
+/* Default tail (FUN_0800cf72): echo the 8-byte command, drop to the
+ * bootloader-entry hook, then run the config tables. */
+static void dispatch_default_tail(uint16_t arg)
+{
+    uint8_t *cmdbuf = (uint8_t *)0x20004548;
+    if (arg != 0) cmd_send_response();
+    for (uint8_t i = 0; i <= 7; i++) {
+        uart_putchar(cmdbuf[i]);
+    }
+    uart_tx_flush();
+    bootloader_entry();
+    cmd_send_response();
+    dispatch_config_tables(arg);
+}
+
+/* cw 0xF45 — dump a 0x38-byte history record (from the ext-flash ring
+ * buffers 0x08080200 / 0x08080E00) as hex over the service UART. */
+static void history_dump(uint16_t arg)
+{
+    uint8_t *scratch = (uint8_t *)0x20002B10;
+    for (uint8_t i = 0; i < 0x38; i++) scratch[i] = 0;
+
+    uint16_t idx = (uint16_t)(arg / 100);
+    if (idx < 0x32) {
+        memcpy_oem((const uint8_t *)(uintptr_t)(0x08080200 + idx * 0x38), 0x38, scratch);
+    } else {
+        memcpy_oem((const uint8_t *)(uintptr_t)(0x08080E00 + (idx - 0x32) * 0x38), 0x38, scratch);
+    }
+    uart_printf((uint8_t *)0x080173EC);
+    for (uint8_t i = 0; i < 0x38; i += 8) {
+        uart_printf((uint8_t *)0x080173FC);
+    }
+    uart_printf((uint8_t *)0x08017420);
+    uart_tx_flush();
+    *(volatile uint8_t *)0x20004748 += 1;
+    cmd_send_response();
+}
+
+/* cw 0x95 — shipping mode: charge MOSFET off, enable line low, BMS idle. */
+static void shipping_mode(void)
+{
+    *(volatile uint8_t *)0x20004748 += 1;
+    *(volatile uint32_t *)0x200047D8 = 0;
+    charge_mosfet_off();
+    gpio_bit_write(0x50000400, 0x200, 0);
+    *(volatile uint32_t *)0x20002C00 &= 0xFFFFF7FFu;
+    bms_configure(0);
+    cmd_send_response();
+}
+
+/* table1[9] (FUN_0800d0de) — persist a config flag (0x200028D0+5) to
+ * ext-flash 0x08080008 based on arg. */
+static void arm_cfg_flag(uint16_t arg)
+{
+    if (arg == 0) {
+        *(volatile uint8_t *)(0x200028D0 + 5) = 0;
+        memcmp_verify((char *)0x08080008, 2, (char *)0x200028D5);
+    } else if (arg == 1) {
+        *(volatile uint8_t *)(0x200028D0 + 5) = 1;
+        memcmp_verify((char *)0x08080008, 2, (char *)0x200028D5);
+    }
+    *(volatile uint8_t *)0x20004748 += 1;
+    cmd_send_response();
+}
+
+/* table1[10] (FUN_0800d128) — capture the tick triplet, and if all three
+ * differ from the ext-flash references, persist arg to 0x08080006. */
+static void arm_tick_persist(uint16_t arg)
+{
+    uint32_t t1 = tick_val_get();
+    uint32_t t2 = tick_ms_get();
+    uint32_t t3 = tick_timeout_get();
+    uint32_t ref1, ref2, ref3;
+    memcpy_oem((const uint8_t *)0x08080021, 4, (uint8_t *)&ref1);
+    memcpy_oem((const uint8_t *)0x08080025, 4, (uint8_t *)&ref2);
+    memcpy_oem((const uint8_t *)0x08080029, 4, (uint8_t *)&ref3);
+    if (t1 != ref1 && t2 != ref2 && t3 != ref3) {
+        memcmp_verify((char *)0x08080006, 2, (char *)&arg);
+    }
+    *(volatile uint8_t *)0x20004748 += 1;
+    cmd_send_response();
+}
+
+/* table1[26] (FUN_0800d1be) — toggle control bit 12 (0x20002C00) and mode
+ * bit 1 (0x20002870) when the live state is in {1..3, 0xd..0x11}. */
+static void arm_state_bit(uint16_t arg)
+{
+    if (arg == 0) {
+        uint8_t st = *(volatile uint8_t *)0x20002B58;
+        if ((st > 0 && st <= 3) || (st >= 0xd && st <= 0x11)) {
+            *(volatile uint32_t *)0x20002C00 &= 0xFFFFEFFFu;
+            *(volatile uint8_t *)0x20002870 &= (uint8_t)~2u;
+            bms_configure(*(volatile uint8_t *)0x20002870);
+        }
+        *(volatile uint8_t *)0x20004748 += 1;
+        cmd_send_response();
+    } else if (arg == 1) {
+        uint8_t st = *(volatile uint8_t *)0x20002B58;
+        if ((st > 0 && st <= 3) || (st >= 0xd && st <= 0x11)) {
+            *(volatile uint32_t *)0x20002C00 |= 0x1000u;
+            *(volatile uint8_t *)0x20002870 |= 2u;
+            bms_configure(*(volatile uint8_t *)0x20002870);
+        }
+        *(volatile uint8_t *)0x20004748 += 1;
+        cmd_send_response();
+    } else {
+        cmd_send_response();
+    }
+}
+
+/* cw 0x80 (FUN_0800d272) — firmware-update path: quiesce the pack, reinit
+ * the modem UART, and when a full 0x5000-byte image has been staged at
+ * 0x0801A800, reconfigure the oscillator/clock tree and copy the staged
+ * image down to the application area at 0x08000000 (page-verified), then
+ * CRC-check it against 0x08004FFC. */
+static void oad_firmware_update(void)
+{
+    uint8_t *cmdbuf = (uint8_t *)0x20004548;
+    volatile uint8_t *retry = (volatile uint8_t *)0x20002C72;
+
+    gpio_bit_write(0x50000400, 1, 0);
+    charge_mosfet_off();
+    gpio_bit_write(0x50000400, 0x200, 0);
+    *(volatile uint32_t *)0x20002C00 &= 0xFFFFF7FFu;
+    bms_configure(0);
+    modem_init();
+    modem_reinit();
+    nvic_enable_irq_s_dsb(5);
+    nvic_enable_irq_s_dsb(7);
+    *(volatile uint32_t *)(0x40010400 + 0x14) = 1;
+    *(volatile uint32_t *)(0x40010400 + 0x14) = 0x2000;
+    *(volatile uint8_t *)0x20002BFC &= 0xfd;
+    *(volatile uint8_t *)0x20002BFC &= 0xfe;
+    for (uint8_t i = 0; i < 8; i++) {
+        uart_putchar(cmdbuf[i]);
+    }
+    *(volatile uint32_t *)0x20002C04 = 0;
+    uart_tx_flush();
+    delay_ms(10);
+    uart_printf((uint8_t *)0x080173D0);
+    uart_tx_flush();
+    delay_ms(10);
+
+    if (*(volatile uint32_t *)0x200047D8 != 0x5000) {
+        memcmp_verify((char *)0x08080C00, 0x80, (char *)0x200029A8);
+        uint8_t marker = 0xcc;
+        memcmp_verify((char *)0x08080000, 1, (char *)&marker);
+        fault_led_trigger();
+        cmd_send_response();
+        return;
+    }
+
+    uint32_t osc_cfg[14];
+    uint32_t clk_cfg[5];
+    uint32_t rcc_cfg[9];
+    memset_byte_fill((uint8_t *)osc_cfg, 0, 0x38);
+    memset_byte_fill((uint8_t *)clk_cfg, 0, 0x14);
+    memset_byte_fill((uint8_t *)rcc_cfg, 0, 0x24);
+
+    osc_cfg[0] = 10; osc_cfg[3] = 1; osc_cfg[4] = 0x10; osc_cfg[5] = 1;
+    osc_cfg[10] = 2; osc_cfg[12] = 0x40000; osc_cfg[13] = 0x400000;
+    *retry = 0;
+    do {
+        *(volatile uint8_t *)0x200047DC = 0;
+        if (rcc_osc_config(osc_cfg) == 0) {
+            *retry = 0x32;
+        } else if ((uint8_t)(*retry += 1) > 0x31) {
+            system_reset();
+        }
+    } while (*retry < 0x32);
+
+    clk_cfg[0] = 0xf; clk_cfg[1] = 1; clk_cfg[2] = 0; clk_cfg[3] = 0; clk_cfg[4] = 0;
+    *retry = 0;
+    do {
+        *(volatile uint8_t *)0x200047DC = 0;
+        if (rcc_configure(clk_cfg, 1) == 0) {
+            *retry = 0x32;
+        } else if ((uint8_t)(*retry += 1) > 0x31) {
+            system_reset();
+        }
+    } while (*retry < 0x32);
+
+    rcc_cfg[0] = 1; rcc_cfg[2] = 2;
+    *retry = 0;
+    do {
+        *(volatile uint8_t *)0x200047DC = 0;
+        if (rcc_reconfigure(rcc_cfg) == 0) {
+            *retry = 0x32;
+        } else if ((uint8_t)(*retry += 1) > 0x31) {
+            system_reset();
+        }
+    } while (*retry < 0x32);
+
+    do {
+        uint32_t dst = 0x08000000;
+        uint32_t *src = (uint32_t *)0x0801A800;
+        int32_t remaining = 0x5000;
+        do {
+            word_to_bytes(src, 0x80, 0x2000474C);
+            do {
+                flash_dma_start(dst);
+            } while (dma_compare(dst, 0x80, 0x2000474C) != 0);
+            remaining -= 0x80;
+            dst += 0x80;
+            src += 0x20;
+        } while (remaining != 0);
+    } while (dma_transfer_irq((volatile uint32_t *)0x20002C20, (void *)0x08000000,
+                              (*(volatile uint32_t *)0x200047D8 - 4) >> 2) !=
+             *(volatile uint32_t *)0x08004FFC);
+    flash_dma_start(0x0801A800);
+
+    fault_led_trigger();
+    cmd_send_response();
+}
+
+void modem_command_dispatch(void)
+{
+    uint8_t *cmdbuf = (uint8_t *)0x20004548;
+
+    if (cmdbuf[1] != 6) {
+        cmd_send_8byte();
+    }
+    uint16_t cw  = (uint16_t)((cmdbuf[2] << 8) | cmdbuf[3]);
+    uint16_t arg = (uint16_t)((cmdbuf[4] << 8) | cmdbuf[5]);
+
+    if (cw == 0xf020) { cmd_counter_inc(arg); return; }
+    if (cw == 0xf021) { cmd_counter_inc_v2(arg); return; }
+    if (cw == 0xf022) { cmd_counter_inc_v3(arg); return; }
+    if (cw == 0xf023) {
+        cmd_write_and_inc(arg, (volatile uint8_t *)0x200029A8, (volatile uint8_t *)0x08080C00);
+        return;
+    }
+    if (cw == 0xf45) { history_dump(arg); return; }
+    if (cw == 0x95)  { shipping_mode(); return; }
+
+    if (cw < 0x1b) {
+        switch (cw) {
+        case 1:    dispatch_default_tail(arg); break;
+        case 8:    dispatch_config_tables(arg); break;
+        case 9:    arm_cfg_flag(arg); break;
+        case 10:   arm_tick_persist(arg); break;
+        case 0x1a: arm_state_bit(arg); break;
+        default:   cmd_send_response(); break;
         }
         return;
     }
 
-    if (state == 1) {
-        /* Got sync, store command byte */
-        s_buf[*s_rx_idx] = byte;
-        *s_rx_idx = 2;
-        *s_state = 2;
-        *s_modem_st = byte;
+    if (cw == 0x80) { oad_firmware_update(); return; }
 
-        /* Command byte determines expected frame length */
-        if (byte < 0x80) {
-            *s_rx_total = 8;
-        } else if (byte == 0x80) {
-            *s_rx_total = 0x80;
-        } else {
-            *s_rx_total = byte & 0x7F;
-            if (*s_rx_total < 8) {
-                *s_rx_total = 8;
-            }
-        }
-        return;
-    }
-
-    /* State 2+: accumulating data */
-    if (*s_rx_idx < *s_rx_total) {
-        s_buf[*s_rx_idx] = byte;
-        *s_rx_idx += 1;
-    }
-
-    /* Check if frame is complete */
-    if (*s_rx_idx >= *s_rx_total) {
-        uint16_t frame_len = *s_rx_total;
-        uint16_t calc_crc = crc16_calc((uint8_t *)s_buf, (int16_t)(frame_len - 2));
-        uint16_t rx_crc   = (uint16_t)s_buf[frame_len - 1] << 8 | s_buf[frame_len - 2];
-
-        if (calc_crc == rx_crc) {
-            /* CRC OK — dispatch based on command byte */
-            uint8_t cmd = s_buf[1];
-
-            if (cmd == 0x10) {
-                /* Flash page program command */
-                extern void flash_program_handler(uint8_t *data, uint16_t len);
-                flash_program_handler((uint8_t *)s_buf, frame_len);
-            } else if (cmd == 0x11) {
-                /* Flash erase command */
-                extern void flash_erase_handler(uint8_t *data, uint16_t len);
-                flash_erase_handler((uint8_t *)s_buf, frame_len);
-            } else if (cmd == 0x12) {
-                /* Flash verify command */
-                extern void flash_verify_handler(uint8_t *data, uint16_t len);
-                flash_verify_handler((uint8_t *)s_buf, frame_len);
-            } else if (cmd < 0x10) {
-                /* Standard commands — dispatch to command_parser */
-                extern void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd);
-                command_parser((uint32_t)(uintptr_t)s_buf, (int)(frame_len - 2), cmd);
-            } else {
-                /* Unknown modem command */
-                extern void veneer_a6aa(void);
-                veneer_a6aa();
-            }
-        } else {
-            /* CRC error */
-            extern void veneer_a6aa(void);
-            veneer_a6aa();
-        }
-
-        /* Reset state machine */
-        *s_state = 0;
-        *s_rx_idx = 0;
-        *s_rx_total = 0;
-        *s_modem_st = 0;
-    }
+    cmd_send_response();
+    dispatch_default_tail(arg);
 }

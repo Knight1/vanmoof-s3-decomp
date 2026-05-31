@@ -26,6 +26,7 @@ void epilogue(void) { }
 void veneer_a6aa(void) { }
 void veneer_a6ba(void) { }
 void veneer_a6be(void) { }
+void veneer_a6e0(void) { }   /* OEM dispatch-error log hook (command_parser) */
 
 /* Thunk/protocol stubs */
 void cmd_send_response_stub(void)  { }  /* FUN_0800d846 */
@@ -43,10 +44,42 @@ uint32_t dma_get_status(uint32_t reg_val)
     return reg_val;
 }
 
+/* DMA flash-transfer leaves — not yet reconstructed. Provisional stubs so
+ * the now-live command processor / OAD path links; reconstruct as their own
+ * decomp targets. dma_lock returns 0 (bus free) so callers proceed. */
+uint8_t  dma_lock(void *ctx)                              { (void)ctx; return 0; }
+uint32_t dma_byte_copy(void *ctx, void *src, uint32_t n)  { (void)ctx; (void)src; (void)n; return 0; }
+uint32_t memcpy_hw(void *ctx, void *src, uint32_t n)      { (void)ctx; (void)src; (void)n; return 0; }
+
+/* DMA channel reset (FUN_~188 B, not yet reconstructed) — provisional stub
+ * returning 0 (success) so flash_dma_start's retry loop completes. */
+int dma_channel_reset_all(void *ctx, void *params) { (void)ctx; (void)params; return 0; }
+
+/* Modem deinit inner thunk — provisional stub. */
+void modem_deinit_thunk(void *ctx) { (void)ctx; }
+
+/*
+ * CRC-32/MPEG-2 (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection, no final
+ * XOR). The OEM drives the STM32 hardware CRC peripheral; this is the
+ * software equivalent used by flash_verify_header's deferred image check.
+ */
+uint32_t crc32_mpeg2(uint8_t *data, uint32_t len)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= (uint32_t)data[i] << 24;
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 0x80000000u) ? (crc << 1) ^ 0x04C11DB7u : (crc << 1);
+        }
+    }
+    return crc;
+}
+
 /* Epilogue and thunk stubs */
 void epilogue_e1ca(void) { }
 void thunk_e1bc(void) { }
 void thunk_e1c4(void) { }
+void epilogue_thunk(void) { }   /* alias for thunk_e1c4 (cmd.c response tail) */
 void nop_e1c8(void) { }
 void thunk_e1b4(void) { }
 

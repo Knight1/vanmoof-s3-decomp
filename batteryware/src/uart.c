@@ -235,94 +235,408 @@ void uart_putdec_64(uint32_t lo, uint32_t hi, uint8_t digits)
     }
 }
 
+/*
+ * UART RX drain (FUN_0800adbc) — polled from the main loop. Consumes bytes
+ * from the USART1 RX ring buffer (base 0x20004088, 0x400 entries, head
+ * 0x20004540 / tail 0x20004544). When the control word 0x20002C00 selects
+ * command mode (bits 0/1 clear, or bit 2 set), each byte is fed to the
+ * binary command processor (uart_protocol_handler, unless bit 17 is set)
+ * and also accumulated into an ASCII line buffer (0x20004510, max 0x2c)
+ * dispatched to command_parser on CR. Otherwise the byte goes to the
+ * YMODEM receiver.
+ */
 void uart_resp_handler(void)
 {
-    /* Poll UART idle and drain TX buffer */
-    uart_tx_flush();
+    volatile uint16_t * const rx_head  = (volatile uint16_t *)0x20004540;
+    volatile uint16_t * const rx_tail  = (volatile uint16_t *)0x20004544;
+    uint8_t           * const rx_ring  = (uint8_t *)0x20004088;
+    volatile uint32_t * const mode     = (volatile uint32_t *)0x20002C00;
+    volatile uint16_t * const line_len = (volatile uint16_t *)0x20002C84;
+    uint8_t           * const line_buf = (uint8_t *)0x20004510;
+
+    while (*rx_head != *rx_tail) {
+        uint8_t  data = rx_ring[*rx_tail];
+        uint16_t i = *rx_tail;
+        *rx_tail = (uint16_t)(i + 1);
+        if ((uint16_t)(i + 1) > 0x3ff) *rx_tail = 0;
+
+        if ((((*mode & 1) == 0) && (((*mode & 3) >> 1) == 0)) ||
+            (((*mode & 7) >> 2) != 0)) {
+            if (((*mode & 0x3ffff) >> 0x11) == 0) {
+                uart_protocol_handler(data);
+            }
+            if (data == 0xd) {
+                if (*line_len != 0) {
+                    command_parser(1, (int)(uintptr_t)line_buf, (uint8_t)*line_len);
+                }
+                *line_len = 0;
+            } else if (data < 0x20 || (int8_t)data < 0) {
+                *line_len = 0;
+            } else {
+                uint16_t j = *line_len;
+                line_buf[j] = data;
+                *line_len = (uint16_t)(j + 1);
+                if ((uint16_t)(j + 1) > 0x2c) *line_len = 0;
+            }
+        } else {
+            ymodem_receive(data);
+        }
+    }
+}
+
+/* Absolute SRAM/EEPROM reads used by the telemetry cascade. */
+#define RD8(a)   (*(volatile uint8_t  *)(uintptr_t)(a))
+#define RD16(a)  (*(volatile uint16_t *)(uintptr_t)(a))
+#define RD32(a)  (*(volatile uint32_t *)(uintptr_t)(a))
+
+/* Append a 16-bit field big-endian to the response buffer. */
+static void send_be(uint16_t v)
+{
+    modem_send_2bytes((uint8_t)(v >> 8), (uint8_t)v);
+}
+
+/* Signed value mod 10 (sign-preserving), as used by the digit-extract
+ * telemetry fields. */
+static int16_t digit_mod10(int32_t v)
+{
+    if (v < 0) {
+        return (int16_t)(-(int32_t)(((uint32_t)(-v)) % 10));
+    }
+    return (int16_t)(((uint32_t)v) % 10);
 }
 
 /*
- * UART protocol handler (uart_protocol_handler) — byte-at-a-time
- * Modbus-like frame receiver.
- *
- * State machine:
- *   state 0: waiting for 0xAA sync byte → state 1 on match
- *   state 1: got sync, waiting for command byte → state 2
- *   state 2+: accumulating data bytes into buffer
- *
- * On frame completion (state reaches expected length), validates
- * CRC-16 at the end of the frame. On success, dispatches to the
- * command parser. On failure, sends NAK response and resets.
- *
- * The receive buffer is at 0x20002CEC (SRAM).
+ * Report-table arm value (cmd-3 report dispatch, table @0x08018038).
+ * Index = report_state - 3. Arm 0 composes an aggregate fault word from
+ * g_fault_flags (0x20002C44); arms 1..3 yield 0; arms 4..22 yield a
+ * single status bitmask. (Computed-goto in the OEM; the arms set the
+ * field-3 value then fall through into the shared field-4+ cascade.)
  */
-void uart_protocol_handler(uint8_t byte)
+static uint16_t report_arm_value(uint8_t idx)
 {
-    volatile uint8_t  * const s_state    = (volatile uint8_t  *)0x20002CEC;
-    volatile uint8_t  * const s_buf      = (volatile uint8_t  *)0x20002CED;
-    volatile uint16_t * const s_rx_idx   = (volatile uint16_t *)0x20002CF0;
-    volatile uint16_t * const s_rx_total = (volatile uint16_t *)0x20002CF2;
-
-    uint8_t state = *s_state;
-
-    if (state == 0) {
-        /* Waiting for sync byte 0xAA */
-        if (byte == 0xAA) {
-            *s_state = 1;
-            s_buf[0] = 0xAA;
-            *s_rx_idx = 1;
-        }
-        return;
+    switch (idx) {
+    case 0: {
+        uint16_t ff = RD16(0x20002C44);
+        uint16_t rv = 0;
+        if (ff & 0x0001) rv |= 0x2000;
+        if (ff & 0x0002) rv |= 0x1000;
+        if (ff & 0x0100) rv |= 0x0200;
+        if (ff & 0x0200) rv |= 0x0100;
+        return rv;
     }
-
-    if (state == 1) {
-        /* Got sync, store command byte */
-        s_buf[*s_rx_idx] = byte;
-        *s_rx_idx = 2;
-        *s_state = 2;
-
-        /* Command byte determines expected frame length */
-        /* Small frames (cmd < 0x80): 8 bytes, Large frames: variable */
-        if (byte < 0x80) {
-            *s_rx_total = 8;
-        } else {
-            *s_rx_total = byte & 0x7F;
-            if (*s_rx_total == 0) {
-                *s_rx_total = 0x80;
-            }
-        }
-        return;
-    }
-
-    /* State 2+: accumulating data */
-    if (*s_rx_idx < *s_rx_total) {
-        s_buf[*s_rx_idx] = byte;
-        *s_rx_idx += 1;
-    }
-
-    /* Check if frame is complete */
-    if (*s_rx_idx >= *s_rx_total) {
-        /* Validate CRC-16 over the frame (last 2 bytes are CRC) */
-        uint16_t frame_len = *s_rx_total;
-        uint16_t calc_crc = crc16_calc((uint8_t *)s_buf, (int16_t)(frame_len - 2));
-        uint16_t rx_crc   = (uint16_t)s_buf[frame_len - 1] << 8 | s_buf[frame_len - 2];
-
-        if (calc_crc == rx_crc) {
-            /* CRC OK — dispatch to command parser */
-            extern void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd);
-            command_parser((uint32_t)(uintptr_t)s_buf, (int)(frame_len - 2), s_buf[1]);
-        } else {
-            /* CRC error — send NAK and reset */
-            extern void veneer_a6aa(void);
-            veneer_a6aa();
-        }
-
-        /* Reset state machine for next frame */
-        *s_state = 0;
-        *s_rx_idx = 0;
-        *s_rx_total = 0;
+    case 4:  return 0x0080;
+    case 5:  return 0x0040;
+    case 6:  return 0x0020;
+    case 7:  return 0x0010;
+    case 8:  return 0x0200;
+    case 9:  return 0x0100;
+    case 10: return 0x0800;
+    case 11: return 0x0400;
+    case 12: return 0x0008;
+    case 13: return 0x0004;
+    case 14: return 0x0001;
+    case 15: return 0x2000;
+    case 16: return 0x1000;
+    case 17: return 0x8000;
+    case 18: return 0x4000;
+    case 19: return 0x0002;
+    case 20: return 0xFFFF;
+    case 21: return 0x00C0;
+    case 22: return 0x0030;
+    default: return 0;          /* arms 1, 2, 3 */
     }
 }
+
+/*
+ * UART command/telemetry processor (FUN_0800afa4) — invoked per received
+ * byte from the USART1 RX path.
+ *
+ * RX state machine on *(uint16_t*)0x200047D2 into command buffer 0x20004548:
+ *   state 0: wait for 0xAA sync.
+ *   state 1: command byte, accepted only if (1 << cmd) is in mask 0x10048
+ *            (i.e. cmd in {3, 6, 0x10}); zeroes cmdbuf[2..6].
+ *   state>=2: cmd 0x10 streams to flash_stream_handler; cmd 3/6 accumulate
+ *             an 8-byte frame, then CRC-16 check (cmdbuf[6:7], LE).
+ * On a valid frame: cmd != 3 tail-calls modem_command_dispatch(); cmd == 3
+ * builds the telemetry response in buffer 0x20004648 — a long cascade of
+ * report fields each gated by (report_start_index < N) && report_count, where
+ * report_start_index = cmdbuf[2:3] (lower index ⇒ more fields) and
+ * report_count = cmdbuf[4:5]*2 — then appends a CRC-16 and transmits it.
+ */
+void uart_protocol_handler(uint8_t b)
+{
+    volatile uint16_t * const rx_state = (volatile uint16_t *)0x200047D2;
+    uint8_t           * const cmdbuf   = (uint8_t *)0x20004548;
+    uint8_t           * const respbuf  = (uint8_t *)0x20004648;
+
+    if (*rx_state == 0) {
+        if (b == 0xAA) {
+            cmdbuf[0] = 0xAA;
+            *rx_state = 1;
+        } else {
+            *rx_state = 0;
+        }
+        return;
+    }
+
+    if (*rx_state == 1) {
+        if (b <= 0x10 && ((1u << b) & 0x10048u) != 0) {
+            cmdbuf[1] = b;
+            *rx_state = 2;
+            cmdbuf[2] = 0; cmdbuf[3] = 0; cmdbuf[4] = 0; cmdbuf[5] = 0; cmdbuf[6] = 0;
+        } else {
+            *rx_state = 0;
+        }
+        return;
+    }
+
+    /* state >= 2: dispatch / accumulate */
+    {
+        uint8_t cmd = cmdbuf[1];
+        if (cmd == 0x10) { flash_stream_handler(b); return; }
+        if (cmd > 0x10)             { *rx_state = 0; return; }
+        if (cmd != 3 && cmd != 6)   { *rx_state = 0; return; }
+    }
+
+    cmdbuf[*rx_state] = b;
+    *rx_state = (uint16_t)(*rx_state + 1);
+    if (*rx_state < 8) {
+        return;
+    }
+
+    /* Frame complete (8 bytes). */
+    *(volatile uint32_t *)0x20004748 = 0;
+    {
+        uint16_t rx_crc = (uint16_t)(cmdbuf[6] | (cmdbuf[7] << 8));
+        if (crc16_calc(cmdbuf, 6) != rx_crc) {
+            protocol_reset();           /* clears state and ends the handler */
+            return;
+        }
+    }
+    *(volatile uint32_t *)0x20002C04 = 0;
+
+    if (cmdbuf[1] != 3) {
+        modem_command_dispatch();       /* cmd 6 — tail call, ends the handler */
+        return;
+    }
+
+    /* ---- cmd 3: telemetry response cascade ---- */
+    *(volatile uint16_t *)0x200047D0 = 3;                 /* response length */
+    uint16_t r = (uint16_t)((cmdbuf[2] << 8) | cmdbuf[3]); /* report start index */
+    *(volatile uint8_t *)(0x200047D4 + 1) = cmdbuf[4];
+    *(volatile uint8_t *)0x200047D4       = cmdbuf[5];
+    respbuf[0] = 0xAA;
+    respbuf[1] = 3;
+    *(volatile uint16_t *)0x200047D4 = (uint16_t)(*(volatile uint16_t *)0x200047D4 * 2);
+    uint16_t rc = *(volatile uint16_t *)0x200047D4;        /* report count (gate) */
+    respbuf[2] = (uint8_t)rc;
+
+    if (r == 0 && rc)    modem_send_2bytes(1, 0);
+    if (r < 2 && rc)     modem_send_2bytes(0, 1);
+    if (r < 3 && rc) {
+        uint16_t rv = 0;
+        uint8_t rs = RD8(0x20002B58);
+        if ((uint8_t)(rs - 3) < 0x17) rv = report_arm_value((uint8_t)(rs - 3));
+        send_be(rv);
+    }
+
+    /* Pack/cell subsystem (base 0x20002588 / 0x200028D0 / 0x200029A8). */
+    if (r < 4 && rc) {
+        uint8_t v1 = RD8(0x20002589), v2 = RD8(0x2000258A);
+        temp_offset_send(v2 < v1 ? v1 : v2);
+    }
+    if (r < 5 && rc)  send_be(RD16(0x2000281C));
+    if (r < 6 && rc) {
+        temp_offset_send(RD8(0x200029A8 + 0x36));
+        if (RD16(0x200025A0) > 0x1c) *(volatile uint16_t *)0x200025A0 = 0x28;
+    }
+    if (r < 7 && rc) {
+        int32_t v = (int32_t)RD32(0x200028C0);
+        int16_t out = 0;
+        if (v < 0) {
+            uint32_t a = (uint32_t)(-v);
+            if (RD16(0x200028D0 + 0x16) <= a) out += digit_mod10(-(int32_t)a);
+        } else if (RD16(0x200028D0 + 0x16) <= (uint32_t)v) {
+            out += digit_mod10(v);
+        }
+        send_be((uint16_t)out);
+    }
+    if (r < 8 && rc)   send_be(fg_charge_status());
+    if (r < 9 && rc)   modem_send_2bytes(0, fg_status_flag_get());
+    if (r < 10 && rc)  modem_send_2bytes(0, RD8(0x200028D0 + 5) == 1 ? 1 : 0);
+    if (r < 0xb && rc) send_be(RD16(0x200028D0 + 2));
+    if (r < 0xc && rc) send_be(RD16(0x200028D0));
+    if (r < 0xd && rc) modem_send_2bytes(RD8(0x08080010), RD8(0x0808000F));
+    if (r < 0xe && rc) modem_send_2bytes(RD8(0x08080012), RD8(0x08080011));
+    if (r < 0xf && rc) modem_send_2bytes(RD8(0x08080014), RD8(0x08080013));
+    if (r < 0x10 && rc) modem_send_2bytes(RD8(0x08080016), RD8(0x08080015));
+    if (r < 0x11 && rc) modem_send_2bytes(RD8(0x08080018), RD8(0x08080017));
+    if (r < 0x12 && rc) modem_send_2bytes(RD8(0x0808001A), RD8(0x08080019));
+    if (r < 0x13 && rc) modem_send_2bytes(RD8(0x0808001C), RD8(0x0808001B));
+    if (r < 0x14 && rc) modem_send_2bytes(RD8(0x0808001E), RD8(0x0808001D));
+    if (r < 0x15 && rc) modem_send_2bytes(RD8(0x08080020), RD8(0x0808001F));
+    if (r < 0x16 && rc) send_be(RD16(0x200028D0 + 6));
+    if (r < 0x17 && rc) send_be((uint16_t)RD32(0x200029A8 + 0x28));
+    if (r < 0x18 && rc) send_be((uint16_t)RD32(0x200029A8 + 0x2c));
+    if (r < 0x19 && rc) modem_send_2bytes(0, RD8(0x200029A8 + 0x37));
+    if (r < 0x1a && rc) send_be(RD16(0x200029A8 + 0x34));
+    if (r < 0x1b && rc) modem_send_2bytes(0, (RD8(0x20002870) & 2) == 2 ? 1 : 0);
+
+    /* Pack measurement block (base 0x200028A4). */
+    if (r < 0x1c && rc) send_be(RD16(0x200028A4));
+    if (r < 0x1d && rc) send_be(RD16(0x200028A4 + 2));
+    if (r < 0x1e && rc) send_be(RD16(0x200028A4 + 4));
+    if (r < 0x1f && rc) send_be(RD16(0x200028A4 + 6));
+    if (r < 0x20 && rc) send_be(RD16(0x200028A4 + 8));
+    if (r < 0x21 && rc) send_be(RD16(0x200028A4 + 0xa));
+    if (r < 0x22 && rc) send_be(RD16(0x200028A4 + 0xc));
+    if (r < 0x23 && rc) send_be(RD16(0x200028A4 + 0xe));
+    if (r < 0x24 && rc) send_be(RD16(0x200028A4 + 0x10));
+    if (r < 0x25 && rc) send_be(RD16(0x200028A4 + 0x12));
+    if (r < 0x26 && rc) temp_offset_send(RD8(0x20002589));
+    if (r < 0x27 && rc) temp_offset_send(RD8(0x2000258A));
+    if (r < 0x28 && rc) temp_offset_send(RD8(0x20002588));
+    if (r < 0x29 && rc) send_be(RD16(0x20002C0A));
+    if (r < 0x2a && rc) send_be(RD16(0x200027FA));
+    if (r < 0x2b && rc) send_be(RD16(0x2000282A));
+    if (r < 0x2c && rc) modem_send_2bytes(RD8(0x20002821), RD8(0x20002820));
+    if (r < 0x2d && rc) {
+        *(volatile uint32_t *)0x20002A48 = 0x08004FE4;
+        uint32_t s = RD32(0x20002A48);
+        if (RD8(s + 0x17) == '0' && RD8(s + 0x16) == '0') {
+            uint8_t hi = hex_to_nibble((char)RD8(s + 0x17));
+            uint8_t lo = (uint8_t)((hex_to_nibble((char)RD8(s + 0x16)) << 4) |
+                                   hex_to_nibble((char)RD8(s + 0x15)));
+            modem_send_2bytes(hi, lo);
+        } else {
+            modem_send_2bytes(0, 4);
+        }
+    }
+
+    /* Charger telemetry (base 0x20002AD0). */
+    if (r < 0x31 && rc) send_be(RD16(0x20002AD0 + 2));
+    if (r < 0x32 && rc) temp_offset_send(RD8(0x20002AD0 + 0x2a));
+    if (r < 0x33 && rc) temp_offset_send(RD8(0x20002AD0 + 0x2b));
+    if (r < 0x34 && rc) temp_offset_send(RD8(0x20002AD0 + 0x2c));
+    if (r < 0x35 && rc) send_be(RD16(0x20002AD0 + 0x1a));
+    if (r < 0x36 && rc) send_be((uint16_t)digit_mod10((int32_t)RD32(0x20002AD0 + 0x1c)));
+    if (r < 0x37 && rc) send_be((uint16_t)RD32(0x20002AD0 + 0x20));
+    if (r < 0x38 && rc) send_be((uint16_t)RD32(0x20002AD0 + 0x24));
+    if (r < 0x39 && rc) modem_send_2bytes(0, RD8(0x20002AD0 + 0x28));
+    if (r < 0x3a && rc) modem_send_2bytes(0, RD8(0x20002AD0 + 0x29));
+    if (r < 0x3b && rc) send_be(RD16(0x20002AD0 + 4));
+    if (r < 0x3c && rc) send_be(RD16(0x20002AD0 + 6));
+    if (r < 0x3d && rc) send_be(RD16(0x20002AD0 + 8));
+    if (r < 0x3e && rc) send_be(RD16(0x20002AD0 + 0xa));
+    if (r < 0x3f && rc) send_be(RD16(0x20002AD0 + 0xc));
+    if (r < 0x40 && rc) send_be(RD16(0x20002AD0 + 0xe));
+    if (r < 0x41 && rc) send_be(RD16(0x20002AD0 + 0x10));
+    if (r < 0x42 && rc) send_be(RD16(0x20002AD0 + 0x12));
+    if (r < 0x43 && rc) send_be(RD16(0x20002AD0 + 0x14));
+    if (r < 0x44 && rc) send_be(RD16(0x20002AD0 + 0x16));
+    if (r < 0x45 && rc) send_be(RD16(0x20002AD0 + 0x18));
+    if (r < 0x46 && rc) send_be(RD16(0x200029A8));
+
+    /* Context block (base 0x200029A8). */
+    if (r < 0x47 && rc) send_be(RD16(0x200029A8 + 2));
+    if (r < 0x48 && rc) send_be(RD16(0x200029A8 + 4));
+    if (r < 0x49 && rc) send_be(RD16(0x200029A8 + 6));
+    if (r < 0x4a && rc) send_be(RD16(0x200029A8 + 8));
+    if (r < 0x4b && rc) send_be(RD16(0x200029A8 + 0xa));
+    if (r < 0x4c && rc) send_be(RD16(0x200029A8 + 0xc));
+    if (r < 0x4d && rc) send_be(RD16(0x200029A8 + 0xe));
+    if (r < 0x4e && rc) send_be(RD16(0x200029A8 + 0x10));
+    if (r < 0x4f && rc) send_be(RD16(0x200029A8 + 0x12));
+    if (r < 0x50 && rc) send_be(RD16(0x200029A8 + 0x14));
+    if (r < 0x51 && rc) send_be(RD16(0x200029A8 + 0x16));
+    if (r < 0x52 && rc) send_be(RD16(0x200029A8 + 0x18));
+    if (r < 0x53 && rc) send_be(RD16(0x200029A8 + 0x1a));
+    if (r < 0x54 && rc) send_be(RD16(0x200029A8 + 0x1c));
+    if (r < 0x55 && rc) send_be(RD16(0x200029A8 + 0x1e));
+    if (r < 0x56 && rc) send_be(RD16(0x200029A8 + 0x20));
+    if (r < 0x57 && rc) send_be(RD16(0x200029A8 + 0x22));
+
+    /* Charger extended block (bases 0x20002AD0 / 0x200029A8). */
+    if (r < 0x58 && rc) send_be(RD16(0x20002AD0 + 0x40));
+    if (r < 0x59 && rc) send_be(RD16(0x20002AD0 + 0x42));
+    if (r < 0x5a && rc) temp_offset_send(RD8(0x20002AD0 + 0x44));
+    if (r < 0x5b && rc) temp_offset_send(RD8(0x20002AD0 + 0x45));
+    if (r < 0x5c && rc) temp_offset_send(RD8(0x20002AD0 + 0x46));
+    if (r < 0x5d && rc) send_be(RD16(0x200029A8 + 0x2e));
+    if (r < 0x5e && rc) send_be(RD16(0x200029A8 + 0x30));
+    if (r < 0x5f && rc) send_be(RD16(0x200029A8 + 0x32));
+    if (r < 0x60 && rc) send_be(RD16(0x200029A8 + 0x34));
+    if (r < 0x61 && rc) send_be(RD16(0x200029A8 + 0x36));
+
+    /* OAD image verify report. */
+    if (r < 0x82 && rc) {
+        if (RD32(0x200047D8) == 0x5000) {
+            uint32_t n = (RD32(0x200047D8) - 4) >> 2;
+            uint32_t res = dma_transfer_irq((volatile uint32_t *)0x20002C20, (void *)0x0801A800, n);
+            if ((int)res == *(volatile int *)(RD32(0x200047D8) + 0x0801A7FC)) {
+                modem_send_2bytes(0, 0);
+            } else {
+                modem_send_2bytes(0, 1);
+            }
+            dma_transfer_irq((volatile uint32_t *)0x20002C20, (void *)0x0801A800, n);
+            uart_printf((uint8_t *)0x080173B4);
+            uart_tx_flush();
+        } else {
+            modem_send_2bytes(0, (uint8_t)flash_verify_header(0x0801A800));
+        }
+        *(volatile uint32_t *)0x20002C00 &= 0xFFFFFFFBu;
+    }
+
+    /* Diagnostic ranges (base 0x20002B10). */
+    if (r < 0xf31 && rc)  send_be(RD16(0x20002B10 + 2));
+    if (r <= 0xf31 && rc) temp_offset_send(RD8(0x20002B10 + 0x2a));
+    if (r <= 0xf32 && rc) temp_offset_send(RD8(0x20002B10 + 0x2b));
+    if (r <= 0xf33 && rc) temp_offset_send(RD8(0x20002B10 + 0x2c));
+    if (r <= 0xf34 && rc) send_be(RD16(0x20002B10 + 0x1a));
+    if (r <= 0xf35 && rc) send_be((uint16_t)digit_mod10((int32_t)RD32(0x20002B10 + 0x1c)));
+    if (r <= 0xf36 && rc) send_be((uint16_t)RD32(0x20002B10 + 0x20));
+    if (r <= 0xf37 && rc) send_be((uint16_t)RD32(0x20002B10 + 0x24));
+    if (r <= 0xf38 && rc) modem_send_2bytes(0, RD8(0x20002B10 + 0x28));
+    if (r <= 0xf39 && rc) modem_send_2bytes(0, RD8(0x20002B10 + 0x29));
+    if (r <= 0xf3a && rc) send_be(RD16(0x20002B10 + 4));
+    if (r <= 0xf3b && rc) send_be(RD16(0x20002B10 + 6));
+    if (r <= 0xf3c && rc) send_be(RD16(0x20002B10 + 8));
+    if (r <= 0xf3d && rc) send_be(RD16(0x20002B10 + 0xa));
+    if (r <= 0xf3e && rc) send_be(RD16(0x20002B10 + 0xc));
+    if (r < 0xf40 && rc)  send_be(RD16(0x20002B10 + 0xe));
+    if (r < 0xf41 && rc)  send_be(RD16(0x20002B10 + 0x10));
+    if (r <= 0xf41 && rc) send_be(RD16(0x20002B10 + 0x12));
+    if (r <= 0xf42 && rc) send_be(RD16(0x20002B10 + 0x14));
+    if (r <= 0xf43 && rc) send_be(RD16(0x20002B10 + 0x16));
+    if (r <= 0xf44 && rc) send_be(RD16(0x20002B10 + 0x18));
+    if (r <= 0xf45 && rc) send_be(RD16(0x20002B10));
+    if (r > 0xf01f && rc) {
+        if (r <= 0xf020 && rc) modem_send_2bytes(0, RD8(0x200025BE));
+        if (r <= 0xf021 && rc) modem_send_2bytes(0, RD8(0x200025C4));
+        if (r <= 0xf022 && rc) modem_send_2bytes(0, RD8(0x200025BC));
+        if (r <= 0xf023 && rc) send_be(RD16(0x200029A8 + 0x4c));
+        if (r <= 0xf024 && rc) send_be(RD16(0x200027F0));
+    }
+
+    /* ---- response transmit ---- */
+    if (RD8(0x20004748) == 0) {
+        protocol_reset();
+        return;
+    }
+    if (RD16(0x200025A0) > 0x27) config_resend_all();
+
+    uint16_t crc = crc16_calc(respbuf, (int16_t)RD16(0x200047D0));
+    modem_send_2bytes((uint8_t)crc, (uint8_t)(crc >> 8));
+    for (uint8_t i = 0; (uint16_t)i < RD16(0x200047D0); i++) {
+        uart_putchar(respbuf[i]);
+    }
+    *(volatile uint32_t *)0x20002C04 = 0;
+    protocol_reset();
+}
+
+#undef RD8
+#undef RD16
+#undef RD32
 
 /*
  * uart_printf — simplified printf-like formatter over UART.

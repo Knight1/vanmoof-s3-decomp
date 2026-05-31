@@ -179,9 +179,9 @@ uint32_t flash_timeout_check(uint32_t param)
  *   - CRC32 over header + image (MPEG-2 polynomial)
  * Returns 0 on valid header, non-zero on mismatch.
  */
-uint32_t flash_verify_header(void)
+uint32_t flash_verify_header(uint32_t base)
 {
-    volatile uint32_t * const s_header = (volatile uint32_t *)0x08000000;
+    volatile uint32_t * const s_header = (volatile uint32_t *)(uintptr_t)base;
 
     if (s_header[0] != 0xAA55AA55) return 1;
 
@@ -193,8 +193,8 @@ uint32_t flash_verify_header(void)
 
     /* CRC verification deferred — CRC32 MPEG-2 polynomial */
     extern uint32_t crc32_mpeg2(uint8_t *, uint32_t);
-    uint32_t image_size = *(volatile uint32_t *)(0x08000000 + 0x10);
-    uint32_t computed = crc32_mpeg2((uint8_t *)0x08000000, image_size);
+    uint32_t image_size = *(volatile uint32_t *)(uintptr_t)(base + 0x10);
+    uint32_t computed = crc32_mpeg2((uint8_t *)(uintptr_t)base, image_size);
 
     return (computed != crc) ? 1 : 0;
 }
@@ -558,45 +558,150 @@ bool flash_erase_page_wrapper(uint32_t timeout_ticks)
 }
 
 /*
- * Flash program handler (FUN_0800d8f0) — receives data over
- * UART/modem and programs it to flash using DMA.
+ * UART command-0x10 streaming handler (FUN_0800d8f0).
  *
- * Multi-packet flash programming: extracts address, programs in
- * 128-byte blocks via flash_write_verify, validates with CRC-8.
+ * Reached per received byte from uart_protocol_handler while the active
+ * command byte is 0x10. Accumulates a variable-length frame into the
+ * command buffer; once the 7-byte header plus payload are present
+ * (>= 10 bytes), it validates the half-length field and CRC-16, then:
+ *   - command word < 0x15: bulk-writes calibration 16-bit pairs from the
+ *     payload into successive EEPROM slots (0x0808000F..0x0808001F), one
+ *     extra pair admitted per threshold step;
+ *   - command word 0x82: streams an OTA image into the flash staging area
+ *     (0x0801A800 + page address) page-by-page, verifying each page.
+ * EEPROM calibration writes are gated on the 32-bit tick triplet differing
+ * from the reference triplet persisted at 0x08080021/25/29 (anti-replay).
+ * On any completed pass it appends a CRC-16 and echoes the 8-byte frame.
+ *
+ * In the OEM image this shares uart_protocol_handler's stack frame; the
+ * shared slots are never live across the call, so it is modelled here as
+ * an independent function taking only the received byte.
  */
-void flash_program_handler(uint8_t *frame, uint16_t frame_len)
+void flash_stream_handler(uint8_t b)
 {
-    uint32_t dst_addr = (uint32_t)frame[0] | ((uint32_t)frame[1] << 8) |
-                        ((uint32_t)frame[2] << 16) | ((uint32_t)frame[3] << 24);
-    uint16_t data_len = frame_len - 6;
-    uint8_t  rx_crc8  = frame[frame_len - 1];
+    volatile uint16_t * const rx_index = (volatile uint16_t *)0x200047D2;
+    uint8_t           * const cmdbuf   = (uint8_t *)0x20004548;
 
-    if ((dst_addr < 0x08000000 || dst_addr >= 0x08010000) &&
-        (dst_addr < 0x08080000 || dst_addr >= 0x08081000)) {
-        cmd_send_response();
+    cmdbuf[*rx_index] = b;
+    *rx_index = (uint16_t)(*rx_index + 1);
+    if (*rx_index < 10) {
         return;
     }
 
-    /* Program in 128-byte pages */
-    uint16_t offset = 0;
-    while (offset < data_len) {
-        uint16_t chunk = data_len - offset;
-        if (chunk > 128) chunk = 128;
+    uint8_t  flag = 0;
+    uint16_t cw   = (uint16_t)((cmdbuf[2] << 8) | cmdbuf[3]);
+    uint16_t arg  = (uint16_t)((cmdbuf[4] << 8) | cmdbuf[5]);
+    uint8_t  len  = cmdbuf[6];
 
-        if (flash_write_verify((volatile uint32_t *)(dst_addr + offset),
-                               chunk, (int)(frame + 4 + offset)) != 0) {
-            cmd_send_response();
-            return;
+    if (*rx_index <= (uint16_t)(len + 8)) {
+        return;
+    }
+    if (arg != (uint8_t)(len >> 1)) {
+        return;
+    }
+
+    uint16_t crcfield = (uint16_t)(cmdbuf[*rx_index - 2] |
+                                   (cmdbuf[*rx_index - 1] << 8));
+    if (crc16_calc(cmdbuf, (int16_t)(len + 7)) != crcfield) {
+        *rx_index = 0;
+        return;
+    }
+
+    uint32_t t_now = tick_val_get();
+    uint32_t t_ms  = tick_ms_get();
+    uint32_t t_to  = tick_timeout_get();
+    uint32_t r_now, r_ms, r_to;
+    memcpy_oem((const uint8_t *)0x08080021, 4, (uint8_t *)&r_now);
+    memcpy_oem((const uint8_t *)0x08080025, 4, (uint8_t *)&r_ms);
+    memcpy_oem((const uint8_t *)0x08080029, 4, (uint8_t *)&r_to);
+
+    uint16_t pos = 7;
+    uint8_t  pair[2];
+    bool     ticks_differ = (t_now != r_now) && (t_ms != r_ms) && (t_to != r_to);
+
+    static const struct { uint16_t thresh; uint32_t eeprom; } cal_slots[] = {
+        { 0x0d, 0x0808000F }, { 0x0e, 0x08080011 }, { 0x0f, 0x08080013 },
+        { 0x10, 0x08080015 }, { 0x11, 0x08080017 }, { 0x12, 0x08080019 },
+        { 0x13, 0x0808001B }, { 0x14, 0x0808001D }, { 0x15, 0x0808001F },
+    };
+    for (unsigned i = 0; i < sizeof(cal_slots) / sizeof(cal_slots[0]); i++) {
+        if (cw < cal_slots[i].thresh && len > 1) {
+            pair[1] = cmdbuf[pos++];
+            pair[0] = cmdbuf[pos++];
+            if (ticks_differ) {
+                memcmp_verify((char *)cal_slots[i].eeprom, 2, (char *)pair);
+            }
+            if (cal_slots[i].thresh == 0x15) {
+                memcmp_verify((char *)0x08080021, 4, (char *)&t_now);
+                memcmp_verify((char *)0x08080025, 4, (char *)&t_ms);
+                memcmp_verify((char *)0x08080029, 4, (char *)&t_to);
+            }
+            len -= 2;
+            flag++;
         }
-        offset += chunk;
     }
 
-    uint8_t calc_crc8 = crc8_calc(frame + 4, (int8_t)data_len);
-    if (calc_crc8 == rx_crc8) {
-        cmd_send_8byte();
-    } else {
-        cmd_send_response();
+    if (cw == 0x82 && len > 4 && (len & 3) == 0) {
+        volatile uint32_t * const oad_addr  = (volatile uint32_t *)0x200047CC;
+        volatile uint8_t  * const oad_bytes = (volatile uint8_t *)0x200047CC;
+        volatile uint8_t  * const copy_idx  = (volatile uint8_t *)0x20004749;
+        uint8_t           * const page_buf  = (uint8_t *)0x2000474C;
+
+        uint32_t image_addr = *(volatile uint32_t *)0x0801A80C;
+        *(volatile uint32_t *)0x20002C00 |= 4;
+
+        oad_bytes[3] = cmdbuf[pos++];
+        oad_bytes[2] = cmdbuf[pos++];
+        oad_bytes[1] = cmdbuf[pos++];
+        oad_bytes[0] = cmdbuf[pos++];
+        uint16_t saved_pos = pos;
+
+        if ((*oad_addr & 0x7f) == 0) {
+            flash_dma_start(*oad_addr + 0x0801A800);
+            *copy_idx = 0;
+        }
+
+        len -= 4;
+        uint8_t page_len = len;
+        while (len != 0) {
+            page_buf[*copy_idx] = cmdbuf[pos++];
+            *copy_idx += 1;
+            *(volatile uint32_t *)0x200047D8 += 1;
+            len--;
+        }
+
+        if ((image_addr & 0x7f) == 0 ||
+            ((image_addr ^ *oad_addr) & 0xffffff80) != 0) {
+            if ((int8_t)*copy_idx < 0) {
+                uint32_t page = (*oad_addr & 0xffffff80) + 0x0801A800;
+                while (dma_compare(page, *copy_idx, (uint32_t)page_buf) != 0) {
+                    flash_dma_start(page);
+                }
+                *copy_idx = 0;
+            }
+        } else {
+            uint32_t page = (*oad_addr & 0xffffff80) + 0x0801A800;
+            uint32_t r = flash_write_verify(
+                             (volatile uint32_t *)(*oad_addr + 0x0801A800),
+                             page_len, (int)(saved_pos + 0x20004548));
+            while (r != 0) {
+                flash_dma_start(page);
+                r = dma_compare(page, *copy_idx, (uint32_t)page_buf);
+            }
+        }
+        flag++;
     }
+
+    if (flag != 0) {
+        uint16_t crc = crc16_calc(cmdbuf, 6);
+        cmdbuf[6] = (uint8_t)crc;
+        cmdbuf[7] = (uint8_t)(crc >> 8);
+        for (pos = 0; pos < 8; pos++) {
+            uart_putchar(cmdbuf[pos]);
+        }
+        *(volatile uint32_t *)0x20002C04 = 0;
+    }
+    *rx_index = 0;
 }
 
 /*
