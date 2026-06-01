@@ -29,10 +29,10 @@ sram: Memory.MappedMemory @ sysbus 0x20000000
 
 // USART1 — the inter-module Modbus RTU link (the BMS answers as slave 0xAA),
 // IRQ 27 (vector slot 43). This is the port the Modbus test talks to.
-usart1: UART.STM32_UART @ sysbus 0x40013800
+usart1: UART.STM32_UART @ sysbus <0x40013800, +0x100>
     IRQ -> nvic@27
 
 // USART2 — present in the SoC; modelled so the secondary console path that
 // UART_SetConfig can touch doesn't hit unmapped memory.
-usart2: UART.STM32_UART @ sysbus 0x40004400
+usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
     IRQ -> nvic@28

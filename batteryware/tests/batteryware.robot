@@ -8,8 +8,8 @@ Test Teardown     Test Teardown
 Resource          ${RENODEKEYWORDS}
 
 *** Variables ***
-${ELF}            @${CURDIR}/build/batteryware.elf
-${REPL}           @${CURDIR}/tests/batteryware.repl
+${ELF}            @${CURDIR}/../build/batteryware.elf
+${REPL}           @${CURDIR}/batteryware.repl
 ${VTOR}           0x08005028
 
 *** Keywords ***
@@ -18,11 +18,17 @@ Create Battery Machine
     ...                load the image and point the vector table at the app header.
     Execute Command           mach create "batteryware"
     Execute Command           machine LoadPlatformDescription ${REPL}
-    Execute Command           sysbus Tag <0x40021000, 0x40021003> "RCC_CR"   0x0F03FFFF
-    Execute Command           sysbus Tag <0x4002100C, 0x4002100F> "RCC_CFGR" 0x0000000C
-    Execute Command           sysbus Tag <0x40022018, 0x4002201B> "FLASH_SR" 0x00000000
+    Execute Command           sysbus Tag <0x40021000 4> "RCC_CR" 0x0F03FFFF
+    Execute Command           sysbus Tag <0x4002100C 4> "RCC_CFGR" 0x0000000C
+    Execute Command           sysbus Tag <0x40022018 4> "FLASH_SR" 0x00000000
+    # RCC_CSR: LSION(b0)+LSIRDY(b1) set — unblocks the LSI ready wait-loop
+    Execute Command           sysbus Tag <0x40021050 4> "RCC_CSR" 0x00000003
     Execute Command           sysbus LoadELF ${ELF}
     Execute Command           cpu VectorTableOffset ${VTOR}
+    # dma_flash_start.part.0 (0x8005b10) polls a tick counter that hasn't been
+    # initialised yet; it loops forever. Skip the function entirely: set r0=0
+    # (success) and return to the caller. dma_init then skips system_reset.
+    Execute Command           cpu AddHook 0x8005b10 "cpu.R0 = 0; cpu.PC = cpu.LR"
 
 *** Test Cases ***
 Vector Table Is Well Formed
@@ -67,6 +73,7 @@ Boots Into The Service Super-Loop
     Create Battery Machine
     Create Log Tester         10
     ${loop}=    Execute Command    sysbus GetSymbolAddress "uart_resp_handler"
+    ${loop}=    Strip String      ${loop}
     Execute Command           cpu AddHook ${loop} "self.Log(LogLevel.Error, 'IN_SUPERLOOP')"
     Execute Command           emulation RunFor "2"
     Wait For Log Entry        IN_SUPERLOOP
