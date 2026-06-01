@@ -33,3 +33,23 @@ bool mem_compare(const void *a, const void *b, uint16_t len)
     }
     return matches == len;
 }
+
+/* Byte copy (OEM FUN_08011e3c). */
+void mem_copy(void *dst, const void *src, int len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    for (int n = len; n != 0; n--) {
+        *d++ = *s++;
+    }
+}
+
+/* Byte fill (OEM FUN_0801db1e). */
+void mem_set(void *dst, uint8_t val, int len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    uint8_t *end = d + len;
+    for (; d != end; d++) {
+        *d = val;
+    }
+}

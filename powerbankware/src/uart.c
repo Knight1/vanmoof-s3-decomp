@@ -166,19 +166,15 @@ void log_print(uint8_t channel, const char *fmt, ...)
  *
  * The mode word (0x200006a0) selects text-console vs binary mode, exactly as
  * in batteryware's uart_resp_handler: text mode when (bit0 clear AND bit1
- * clear) OR bit2 set. In text mode each byte is echoed (uart_ch_out) and
- * accumulated into a line buffer (0x20001ad0, max 0x2c) dispatched to the
- * command parser on CR; bit2 forces the line empty. Otherwise the byte goes
- * to the binary/Modbus handler. When the RX channel is disabled the ring +
- * line buffer are reset.
+ * clear) OR bit2 set; otherwise the byte goes to the binary/OTA handler. When
+ * the RX channel is disabled the ring + line buffer are reset.
  *
- * Routing callees (own passes): uart_ch_out (FUN_080168c4, console echo),
- * cmd_dispatch (FUN_08014ae8, text command parser), modem_rx_byte
- * (FUN_0800b518, binary protocol handler).
+ * In text mode each byte feeds *both* the Modbus frame processor
+ * (modbus_process = FUN_080168c4) and the line buffer dispatched to the
+ * command parser on CR. modem_rx_byte (FUN_0800b518) is the binary/OTA path.
  */
-extern void uart_ch_out(uint8_t channel, uint8_t c);          /* FUN_080168c4 */
-extern void cmd_dispatch(uint8_t channel, void *line, uint8_t len); /* FUN_08014ae8 */
-extern void modem_rx_byte(uint8_t channel, uint8_t c);        /* FUN_0800b518 */
+extern void modem_rx_byte(uint8_t channel, uint8_t c);        /* FUN_0800b518 (binary/OTA) */
+/* modbus_process / cmd_dispatch are declared in the header. */
 
 void uart_rx_handler(void)
 {
@@ -199,7 +195,7 @@ void uart_rx_handler(void)
             }
 
             if (((*mode & 1) == 0 && (*mode & 2) == 0) || (*mode & 4) != 0) {
-                uart_ch_out(2, b);
+                modbus_process(2, b);
                 if ((*mode & 4) != 0) {
                     *line_len = 0;
                 } else if (b == 0xd) {

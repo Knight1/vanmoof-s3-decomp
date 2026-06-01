@@ -51,6 +51,23 @@ const char s_pdown_over5[]           = "\nFEDL5236_PowerDown() over 5 times\r"; 
 const char s_write_bms_record[] = "\nWrite BMS Record!!\r"; /* 0x0801E35C */
 const char s_check_bms_record[] = "\nCheck BMS Record!!\r"; /* 0x0801E374 */
 
+/* BMS state/config (src/bms.c). */
+const char s_preset_bms[]       = "\nPreset_BMS_System_Value()\r"; /* 0x0801E330 */
+const char s_real_soc[]         = "\nReal SOC = %d\r";            /* 0x0801E34C */
+const char s_shipping_mode2[]   = "\nShipping Mode\r";           /* 0x0801E200 */
+const char s_output_dischg_on[] = "\nOutput_Discharge_On()\r";   /* 0x0801E210 */
+const char s_write_errlog[]     = "\nWrite BMS ErrorLog -> %i!!\r"; /* 0x0801E3E0 */
+const char s_check_errlog[]     = "\nCheck BMS ErrorLog!!\r";    /* 0x0801E400 */
+
+/* Console command responses (src/cmd.c). */
+const char s_iam_ap2[]      = "\nI am VM-BATT AP\r";              /* 0x0801E4F8 */
+const char s_done[]         = "\nDone\r";                        /* 0x0801E50C */
+const char s_ok[]           = "\nOK\r";                          /* 0x0801E514 */
+const char s_chg_cal_q[]    = "\nCHG CAL=%i\r";                  /* 0x0801E51C */
+const char s_dsg_cal_q[]    = "\nDSG CAL=%i\r";                  /* 0x0801E52C */
+const char s_write_rtc[]    = "\nWrite RTC = %d-%d-%d %d:%d:%d\r"; /* 0x0801E53C */
+const char s_charger_v_mv[] = "\nCharger Voltage = %i mV\r";     /* 0x0801E55C */
+
 /* Extend_IO (LED-bar I/O expander) SPI error banners (src/extend_io.c). */
 const char s_extio_busy[]    = "\nExtend_IO_Process()--> SPI Busy\r";    /* 0x0801E484 */
 const char s_extio_retry[]   = "\nExtend_IO_Process()--> Retry Error\r"; /* 0x0801E4A8 */

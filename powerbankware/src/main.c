@@ -42,9 +42,9 @@ void FUN_08009598(void);                      /* cal 0x13 path */
 void FUN_0800aa98(void);                      /* cal 0x14 path */
 void FUN_0800ac44(void);                      /* cal 0x15 path */
 void FUN_08009aa4(int arg);                   /* normal boot, low counter */
-void FUN_0800ede0(uint8_t mode);              /* normal boot, high counter */
+/* boot_mode_enter (0x0800ede0) now in bms.c via the header */
 void FUN_0800bc18(void);                      /* alt path (mode bit 0/1/2 set) */
-void FUN_08016688(void);                      /* tick A — RX/command processor (pending) */
+/* uart_rx_handler (0x08016688) now in uart.c via the header */
 /* uart_tx_isr (0x080167f0) now in uart.c via the header */
 void FUN_08010360(void);                      /* state 0 / out-of-range default */
 
@@ -111,7 +111,7 @@ int main(void)
             goto loop;
         }
         boot_mode = ((*s_mode >> 8) & 1) ? 1 : 3;
-        FUN_0800ede0(boot_mode);
+        boot_mode_enter(boot_mode);
     }
 
 loop:
@@ -149,7 +149,7 @@ loop:
         } else {
             FUN_0800bc18();
         }
-        FUN_08016688();
+        uart_rx_handler();
         uart_tx_isr();
     }
 }

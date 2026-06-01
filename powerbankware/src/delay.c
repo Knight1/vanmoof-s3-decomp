@@ -36,8 +36,6 @@ void delay_ms(int ms)
  * tick it decrements the counter and kicks the IWDG. Used by the slow
  * EEPROM write/verify retries so the host link doesn't stall.
  */
-extern void FUN_08016688(void);   /* RX/command processor (pending decomp) */
-
 void delay_ms_service(int ms)
 {
     volatile uint8_t * const tick = (volatile uint8_t *)0x2000077c;
@@ -49,6 +47,6 @@ void delay_ms_service(int ms)
             **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR reload */
         }
         uart_tx_isr();
-        FUN_08016688();
+        uart_rx_handler();
     }
 }

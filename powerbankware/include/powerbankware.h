@@ -83,6 +83,17 @@ void delay_ms_service(int ms);
 /* ---- Memory helpers (src/mem.c) ---------------------------------------- */
 void mem_zero(void *dst, int len);
 bool mem_compare(const void *a, const void *b, uint16_t len);
+void mem_copy(void *dst, const void *src, int len);
+void mem_set(void *dst, uint8_t val, int len);
+
+/* ---- RTC (src/rtc.c) --------------------------------------------------- */
+void rtc_set(uint32_t lo, uint32_t hi);   /* program RTC from packed date words */
+
+/* ---- BMS state/config (src/bms.c) -------------------------------------- */
+void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */
+void bms_config_reset(void);       /* Preset_BMS_System_Value */
+void boot_mode_enter(uint8_t mode);/* bootloader/upgrade entry */
+void shipping_enter(void);         /* ship-mode power-down */
 
 /* ---- Hardware CRC (src/crc.c) ------------------------------------------ */
 uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len);
@@ -137,6 +148,18 @@ int eeprom_mem_read(void *h, uint8_t dev, uint16_t addr, uint16_t addrsz,
 /* ---- UART TX ring + log formatter (src/uart.c) ------------------------- */
 void uart_putchar(uint8_t c);
 void uart_tx_isr(void);
+void uart_rx_handler(void);   /* RX ring drain + command/binary routing */
+/* ---- Text command parser (src/cmd.c) ----------------------------------- */
+/* Parse a "NAME=HEXVALUE" console line, match the command table, dispatch. */
+void cmd_dispatch(uint8_t channel, void *line, uint8_t len);
+
+/* ---- Modbus RTU host link (src/modbus.c) ------------------------------- */
+/* Modbus CRC-16 (init 0xFFFF, poly 0xA001). */
+uint16_t modbus_crc16(const uint8_t *data, int16_t len);
+/* Emit the holding-register read response (function 0x03) from `base`. */
+void modbus_telemetry(uint16_t base);
+/* Feed one RX byte to the per-channel Modbus frame processor. */
+void modbus_process(uint8_t channel, uint8_t b);
 void uart_flush(void);
 void uart_puts(const char *str);
 char nibble_to_hex(uint8_t nibble);
