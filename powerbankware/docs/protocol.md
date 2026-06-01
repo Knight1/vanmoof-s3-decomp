@@ -80,5 +80,25 @@ Not present in batteryware. Strings imply a control surface for:
   `DAC Over Range`, `Vout <20V over 3Sec`, `Vout <30V over 30min`
 - `Check_Charger_Voltage` / `Check_PUPIN`
 
-Whether these are host-commandable (Modbus registers) or purely autonomous is
-to be determined when the power-path module is decompiled.
+Now decompiled (`src/transitions.c` + `src/vout.c`): the power-path is driven
+**autonomously** by the state machine — the bypass FET (PA12) and DAC set-point
+are sequenced inside the per-state entry routines, not from host commands. The
+charger/load strings are emitted by the state handlers as status logs.
+
+## Periodic status frame (`status_frame_emit` @ `0x0800f02c`)
+
+Beyond Modbus, the firmware emits a packed status frame each cycle (built in TX
+scratch `0x2000048c` via the length-prefixed sub-block packer `FUN_0800ef70`,
+big-endian fields) and logs the human-readable form:
+
+```
+Send SN = %x %x %x %x %x, Version = %w, SOC = %d, SOH = %d, CycleCount = %i, State = %x
+```
+
+Four sub-blocks (tags 0/1/2/3): serial-number bytes (record +0x66..+0x6b),
+firmware version (`0x200006e8+2`) + SN tail (`0x200006e8+1..3`), SOC (record
++0x5a), and SOH (record +0x5b) + cycle count (record +0x50, u16) + state
+(`0x200004b4`). Each sub-block is closed by `crc16_append` (OEM `FUN_0800ef70`):
+the standard Modbus CRC-16 (init `0xFFFF`, reflected poly `0xA001`, no final XOR)
+computed over the block and stored little-endian at its tail — the same algorithm
+as `modbus_crc16` (`FUN_08019094`), but a distinct compute-and-append routine.
