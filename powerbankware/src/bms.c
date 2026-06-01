@@ -14,8 +14,38 @@
 #define CFG ((volatile uint8_t *)0x200004d0)
 static volatile uint16_t * const s_mode = (volatile uint16_t *)0x200006a0;
 
-/* Deeper sub-functions (own passes). */
-extern void FUN_0800a264(void);     /* post-reset value init */
+/*
+ * bms_soc_preset — OEM FUN_0800a264.
+ *
+ * Derive the state-of-charge percent and a nominal capacity figure from the
+ * descending voltage->SOC table (0x0801e620, u16 entries) against the measured
+ * value at 0x200003d2: scan index 100..1 for the first (highest) entry that is
+ * <= the measurement, store it as the SOC (0x2000024c), and 9700 * idx * 0x90 as
+ * the capacity (0x20000238). The OEM's staged read-modify-write stores are kept
+ * verbatim (volatile). Cross-checked against the OEM machine code.
+ */
+void bms_soc_preset(void)
+{
+    const volatile uint16_t *table = (const volatile uint16_t *)0x0801e620;
+    uint16_t meas = *(volatile uint16_t *)0x200003d2;
+    volatile uint8_t  *soc = (volatile uint8_t  *)0x2000024c;
+    volatile uint32_t *cap = (volatile uint32_t *)0x20000238;
+    uint8_t idx = 0;
+
+    for (uint8_t i = 100; i != 0; i--) {
+        if (table[i] <= meas) {
+            idx = i;
+            break;
+        }
+    }
+
+    *soc = 0;
+    *soc = (uint8_t)(*soc + idx);
+    *cap = 0;
+    *cap = *cap + 9700;
+    *cap = *cap * idx;
+    *cap = *cap * 0x90;
+}
 
 extern const char s_preset_bms[], s_real_soc[], s_shipping_mode2[],
                   s_output_dischg_on[], s_write_errlog[], s_check_errlog[];
@@ -112,7 +142,7 @@ void bms_config_reset(void)
 
     *(volatile uint32_t *)(CFG + 0x1c) = 0x25e4;
     CFG[0x5b] = 100;
-    FUN_0800a264();
+    bms_soc_preset();
 
     uint8_t wake_soc = *(volatile uint8_t *)0x2000024c;
     log_print(2, s_real_soc, wake_soc);
@@ -204,4 +234,184 @@ void shipping_enter(void)
     gpio_bit_write(0x48000000, 0x80, 1);               /* PA7 = 1 */
     gpio_bit_write(0x48000400, 0x800, 1);              /* PB11 = 1 */
     gpio_bit_write(0x48000000, 0x200, 0);              /* PA9 = 0 */
+}
+
+/* bms_system_init banners + deeper leaves (own passes). */
+extern const char s_bl_fw_version[], s_date_time[], s_check_poweron_record[],
+                  s_wakeup_soc[], s_discharge_empty[], s_adjust_soc[],
+                  s_vout_offset[], s_iout_offset[], s_ts0_offset[],
+                  s_ts1_offset[], s_ts2_offset[], s_record_ap_state[];
+extern int      FUN_08013f80(void);                 /* load + CRC-verify BMS record (EEPROM) */
+extern int      FUN_08014140(short idx);            /* errlog record read/verify by index */
+
+/*
+ * bms_system_init — OEM FUN_0801156c. Secondary init, run from main() right after
+ * hal_bringup().
+ *
+ * Clears the volatile run-state, reports the BL/FW version (flash header at
+ * 0x08007ff8 / 0x08008004), brings up the FEDL5236 AFE, loads + CRC-checks the
+ * persisted BMS record from EEPROM (falling back to a factory preset on any load
+ * failure, version change, or out-of-range field), reads the wake reason from RTC
+ * backup, derives the wake-up SOC, and logs the restored calibration.
+ *
+ * Cross-checked against the OEM machine code. Two capacity clamps (record +0x56/
+ * +0x58 and +0x70/+0x72) test 0x44b < v && v < 0x385, which can never hold, so
+ * those resets are dead in the OEM — reproduced verbatim. The temperature-offset
+ * clamp (record +8/+9/+0xa, corrupt when 0x14 < t < 0xeb) is live.
+ */
+void bms_system_init(void)
+{
+    *(volatile uint32_t *)0x2000072c = 0;
+    *s_mode = 0;                                       /* 0x200006a0 */
+    *(volatile uint8_t  *)0x2000069c = 0;
+    *(volatile uint16_t *)0x2000260c = 0;
+    *(volatile uint16_t *)(0x2000260c + 2) = 0;
+    *(volatile uint16_t *)0x200006a6 = 0;
+    *(volatile uint16_t *)0x200006bc = 0;
+    *(volatile uint8_t  *)0x200006a4 = 0;
+    *(volatile uint8_t  *)0x200006ec = 0;
+    *(volatile uint8_t  *)0x200006e5 = 0;
+
+    bypass_fet_off();
+
+    if (gpio_bit_read(0x48000400u, 0x100) == 0) {      /* PB8 input */
+        *s_mode |= 0x100;
+        *s_mode |= 0x800;
+    } else {
+        *s_mode &= 0xf7ffu;                            /* clear bit11 */
+    }
+
+    mem_copy((void *)0x20000558, (const void *)0x08008000, 0x28);   /* image header */
+
+    /* version block: byte-reverse the 0x08007ff8 word into a 3-char BL string */
+    uint32_t hdr = *(volatile uint32_t *)0x08007ff8;
+    uint8_t ver[4];
+    ver[0] = (uint8_t)(hdr >> 24);
+    ver[1] = (uint8_t)(hdr >> 16);
+    ver[2] = (uint8_t)(hdr >> 8);
+    ver[3] = 0;
+    *(volatile uint32_t *)0x200006e8 = *(volatile uint32_t *)0x08008004;
+    log_print(2, s_bl_fw_version, ver,
+              *(volatile uint16_t *)0x200006ea, *(volatile uint8_t *)0x200006e9);
+    log_print(2, s_date_time, (const void *)0x20000568, (const void *)0x20000574);
+    uart_flush();
+
+    fedl5236_initialize();
+
+    *(volatile uint32_t *)0x200005a4 = 0x08535900;
+    *(volatile uint32_t *)0x200005a8 = 0x06a91400;
+    log_print(2, s_check_poweron_record);
+    uart_flush();
+
+    if (FUN_08013f80() != 1) {                         /* EEPROM record load + CRC */
+        bms_config_reset();
+    }
+
+    /* pull persisted fields out of the record for range-checking */
+    *(volatile uint16_t *)0x2000023e = *(volatile uint16_t *)(CFG + 0x56);
+    *(volatile uint16_t *)0x2000023c = *(volatile uint16_t *)(CFG + 0x58);
+    *(volatile uint16_t *)0x20000200 = *(volatile uint16_t *)(CFG + 0x70);
+    *(volatile uint16_t *)0x20000210 = *(volatile uint16_t *)(CFG + 0x72);
+    *(volatile uint8_t  *)0x2000020e = CFG[8];
+    *(volatile uint8_t  *)0x2000021b = CFG[9];
+    *(volatile uint8_t  *)0x20000205 = CFG[0xa];
+
+    /* firmware-version change -> refresh stored HW id, reset TS offsets + config */
+    if (*(volatile uint32_t *)0x200006e8 == 0x011105b2 &&
+        (CFG[0x5d] != *(volatile uint8_t *)0x200006e9 ||
+         *(volatile uint16_t *)(CFG + 0x52) != *(volatile uint16_t *)0x200006ea)) {
+        CFG[0x5d] = *(volatile uint8_t *)0x200006e9;
+        *(volatile uint16_t *)(CFG + 0x52) = *(volatile uint16_t *)0x200006ea;
+        *(volatile uint8_t *)0x2000020e = 0;
+        *(volatile uint8_t *)0x2000021b = 3;
+        *(volatile uint8_t *)0x20000205 = 3;
+        bms_config_reset();
+    }
+    if (CFG[0x5d] != *(volatile uint8_t *)0x200006e9 ||
+        *(volatile uint16_t *)(CFG + 0x52) != *(volatile uint16_t *)0x200006ea) {
+        CFG[0x5d] = *(volatile uint8_t *)0x200006e9;
+        *(volatile uint16_t *)(CFG + 0x52) = *(volatile uint16_t *)0x200006ea;
+    }
+
+    /* OEM dead clamp: 0x44b < v && v < 0x385 is unsatisfiable (preserved). */
+    if ((0x44b < *(volatile uint16_t *)0x2000023e && *(volatile uint16_t *)0x2000023e < 0x385) ||
+        (0x44b < *(volatile uint16_t *)0x2000023c && *(volatile uint16_t *)0x2000023c < 0x385)) {
+        *(volatile uint16_t *)0x2000023e = 1000;
+        *(volatile uint16_t *)0x2000023c = 1000;
+        bms_config_reset();
+    }
+    if ((0x44b < *(volatile uint16_t *)0x20000200 && *(volatile uint16_t *)0x20000200 < 0x385) ||
+        (0x44b < *(volatile uint16_t *)0x20000210 && *(volatile uint16_t *)0x20000210 < 0x385)) {
+        *(volatile uint16_t *)0x20000200 = 1000;
+        *(volatile uint16_t *)0x20000210 = 1000;
+        bms_config_reset();
+    }
+
+    /* live clamp: a TS offset in 0x15..0xea is corrupt -> restore defaults */
+    if ((0x14 < *(volatile uint8_t *)0x2000020e && *(volatile uint8_t *)0x2000020e < 0xeb) ||
+        (0x14 < *(volatile uint8_t *)0x2000021b && *(volatile uint8_t *)0x2000021b < 0xeb) ||
+        (0x14 < *(volatile uint8_t *)0x20000205 && *(volatile uint8_t *)0x20000205 < 0xeb)) {
+        *(volatile uint8_t *)0x2000020e = 0;
+        *(volatile uint8_t *)0x2000021b = 3;
+        *(volatile uint8_t *)0x20000205 = 3;
+        bms_config_reset();
+    }
+
+    if (CFG[0x78] == 0 && CFG[0x79] == 0) {
+        CFG[0x79] = 0xff;
+    }
+    if (*(volatile uint16_t *)(CFG + 0x54) == 0) {
+        bms_config_reset();
+    }
+
+    *(volatile uint32_t *)0x20000724 = rtc_backup_read((void *)0x200006f0, 0);   /* RTC BKP0R */
+    bms_soc_preset();
+    log_print(2, s_wakeup_soc, *(volatile uint8_t *)0x2000024c);
+
+    /* SOC high-water debounce: move it when |wake - stored| exceeds 9 */
+    {
+        uint8_t soc = *(volatile uint8_t *)0x2000024c;
+        if (soc < CFG[0x5a]) {
+            if ((int)((uint8_t)CFG[0x5a] - soc) > 9) {
+                *(volatile uint32_t *)(CFG + 0x18) = *(volatile uint32_t *)0x20000238;
+                CFG[0x5a] = soc;
+            }
+        } else if ((int)(soc - (uint8_t)CFG[0x5a]) > 9) {
+            *(volatile uint32_t *)(CFG + 0x18) = *(volatile uint32_t *)0x20000238;
+            CFG[0x5a] = soc;
+        }
+    }
+
+    *(volatile uint32_t *)(CFG + 0x20) = *(volatile uint32_t *)(CFG + 0x18);
+    if (*(volatile uint32_t *)(CFG + 0x20) > 0x383f) {
+        *(volatile uint32_t *)(CFG + 0x20) = *(volatile uint32_t *)(CFG + 0x20) / 0x3840u;
+    } else {
+        *(volatile uint32_t *)(CFG + 0x20) = 0;
+    }
+
+    /* wake-reason bit24 of the RTC backup word -> "discharge empty" recovery */
+    if ((*(volatile uint32_t *)0x20000724 & 0x01000000u) != 0) {
+        CFG[0x5a] = 0;
+        *(volatile uint32_t *)(CFG + 0x18) = 0;
+        *(volatile uint32_t *)(CFG + 0x20) = 0;
+        log_print(2, s_discharge_empty);
+    }
+
+    log_print(2, s_adjust_soc, CFG[0x5a]);
+    log_print(2, s_vout_offset, *(volatile uint16_t *)0x20000200);
+    log_print(2, s_iout_offset, *(volatile uint16_t *)0x20000210);
+    log_print(2, s_ts0_offset, CFG[8]);
+    log_print(2, s_ts1_offset, CFG[9]);
+    log_print(2, s_ts2_offset, CFG[0xa]);
+    uart_flush();
+
+    *(volatile uint8_t *)0x200005ac = *(volatile uint8_t *)0x20000725;
+    log_print(2, s_record_ap_state, *(volatile uint8_t *)0x20000725);
+    mem_zero((void *)0x200005b0, 0x40);
+
+    if (*(volatile int16_t *)(CFG + 0x2a) != 0) {
+        /* FUN_0800823c is the unsigned divmod helper; only the remainder is used */
+        uint16_t rem = (uint16_t)(*(volatile uint16_t *)(CFG + 0x2a) % 1000u);
+        FUN_08014140((short)((rem - 1) & 0xffff));
+    }
 }

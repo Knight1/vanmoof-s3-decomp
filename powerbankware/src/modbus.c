@@ -323,7 +323,6 @@ void modbus_process(uint8_t channel, uint8_t b)
  *           mirror it, and persist.
  * A successful write echoes the 8-byte request frame back as the ack.
  */
-extern void FUN_080161b4(void);                       /* TX flush (ch 1) */
 
 static void mb_echo_frame(volatile uint8_t *frame)
 {
@@ -357,7 +356,7 @@ void modbus_write_single(uint8_t channel)
                 rtc_backup_write(hrtc, 1, *(volatile uint8_t *)0x20000698);
                 mb_echo_frame(frame);
                 if (channel == 1) {
-                    FUN_080161b4();
+                    uart_flush_ch1();
                 } else {
                     uart_flush();
                 }

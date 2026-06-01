@@ -21,10 +21,6 @@
 extern const char s_dac_stop[];   /* "\nDAC_Stop()\r"      0x0801DBD0 */
 extern const char s_dac_value[];  /* "\nDAC_Value= %l mV\r" 0x0801DBE0 */
 
-/* Unsigned 32-bit divide (compiler runtime helper, not part of the firmware
- * logic — left untranslated like the other libgcc-style routines). */
-extern uint32_t FUN_08008130(uint32_t num, uint32_t den);
-
 /*
  * Push the staged DAC set-point into the TIM/DAC compare register: the scaled
  * shadow (0x2000026C+4) is shifted into the high half-word of CCR (handle+0x20),
@@ -62,7 +58,7 @@ void vout_set_dac(uint16_t target)
     *(volatile uint32_t *)(0x2000026Cu + 4) += target;
     *(volatile uint32_t *)(0x2000026Cu + 4) *= 1000u;
     *(volatile uint32_t *)(0x2000026Cu + 4) =
-        FUN_08008130(*(volatile uint32_t *)(0x2000026Cu + 4), 0x325u);
+        ((*(volatile uint32_t *)(0x2000026Cu + 4)) / (0x325u));
 
     vout_dac_apply();
     log_print(2, s_dac_value, target);

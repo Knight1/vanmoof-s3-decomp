@@ -212,11 +212,21 @@ void flash_lock(void)
     FLASH_CR |= 0x80u;
 }
 
-/* FUN_0801c6a2 — write an RTC backup register (RTC base + 0x50 + idx*4). */
-void rtc_backup_write(void *hrtc, int idx, uint8_t val)
+/* FUN_0801c6a2 — write an RTC backup register (RTC base + 0x50 + idx*4). The
+ * register is 32-bit; most callers persist a single status byte, but the state
+ * machine (state_persist_to_backup) packs a full word. */
+void rtc_backup_write(void *hrtc, int idx, uint32_t val)
 {
     uint32_t inst = *(volatile uint32_t *)hrtc;
     *(volatile uint32_t *)(inst + 0x50 + idx * 4) = val;
+}
+
+/* FUN_0801c6d2 — read an RTC backup register (RTC base + 0x50 + idx*4); the read
+ * mirror of rtc_backup_write. bms_system_init reads BKP0R as the wake reason. */
+uint32_t rtc_backup_read(void *hrtc, int idx)
+{
+    uint32_t inst = *(volatile uint32_t *)hrtc;
+    return *(volatile uint32_t *)(inst + 0x50 + idx * 4);
 }
 
 /* FUN_08013b94 — persist + reset for OTA. */

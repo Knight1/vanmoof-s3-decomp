@@ -120,3 +120,17 @@ const char s_send_sn[] = "\nSend SN = %x %x %x %x %x, Version = %w, SOC = %d, SO
 /* State-machine transition trace (src/dispatch.c). */
 const char s_new_state[]  = "\nNew State = %d\r";      /* 0x0801E0F4 */
 const char s_prev_state[] = "\nPrevious State = %d\r"; /* 0x0801E108 */
+
+/* Secondary system init banners (src/bms.c, bms_system_init). */
+const char s_bl_fw_version[]        = "\nBL = V%s ,FW = V%w.%x\r";    /* 0x0801E228 */
+const char s_date_time[]            = "\nDate = %s ,Time = %s\r";     /* 0x0801E240 */
+const char s_check_poweron_record[] = "\nCheck Power On BMS Record()\r"; /* 0x0801E258 */
+const char s_wakeup_soc[]           = "\nWakeup SOC = %d\r";          /* 0x0801E278 */
+const char s_discharge_empty[]      = "\nDischargeEmpty\r";           /* 0x0801E28C */
+const char s_adjust_soc[]           = "\nAdjust SOC = %d\r";          /* 0x0801E2A0 */
+const char s_vout_offset[]          = "\nVout_Offset = %i\r";         /* 0x0801E2B4 */
+const char s_iout_offset[]          = "\nIout_Offset = %i\r";         /* 0x0801E2C8 */
+const char s_ts0_offset[]           = "\nTS0 Offset = %d\r";          /* 0x0801E2DC */
+const char s_ts1_offset[]           = "\nTS1 Offset = %d\r";          /* 0x0801E2F0 */
+const char s_ts2_offset[]           = "\nTS2 Offset = %d\r";          /* 0x0801E304 */
+const char s_record_ap_state[]      = "\nRecord AP_State = %d\r";     /* 0x0801E318 */

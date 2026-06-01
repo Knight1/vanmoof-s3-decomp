@@ -34,7 +34,6 @@ extern const char s_msg_rec_dutp[];    /* 0x0801E0E0 "\nRecord DUTP Mode\r"     
 
 void hal_bringup(void);                       /* 0x080114dc */
 /* log_print now declared in powerbankware.h (variadic, src/uart.c) */
-void FUN_0801156c(void);                      /* secondary init */
 /* uart_flush (0x08016898) now in uart.c via the header */
 /* boot_mode_enter (0x0800ede0) now in bms.c via the header */
 /* bms_core_update (0x0800bc18) now in state_handlers.c via the header */
@@ -50,7 +49,7 @@ int main(void)
     uint8_t boot_mode;
 
     hal_bringup();
-    FUN_0801156c();
+    bms_system_init();
     log_print(2, s_msg_iam_ap);
     uart_flush();
 

@@ -105,6 +105,59 @@ high-water at record+0x7a. Sample counter `0x200001ac` (window < 0x32);
 sample-ready flag `0x20000204` bit0. `0x20000218`: **[0] SOC index, [1]/[2] temp
 sensors** (byte; the alarm monitors and coulomb temp-derate read [1]/[2]).
 
+### RTC + measurement ADC
+
+`rtc_timestamp_read` (`0x080121f0`) reads the RTC via the HAL handle at
+**`0x200006f0`** (Instance = RTC base `0x40002800`; `RTC_TR` @+0 masked
+`0x007F7F7F`, `RTC_DR` @+4 masked `0x00FFFF3F`), BCD-decodes the six fields with
+`bcd_to_bin` (`(x&0xf)+(x>>4)*10`) through a scratch pair at `0x20000730` into an
+8-byte stamp at **`0x20000718`** (sec, min, hour, 0, day, month&0x1F, year, 0).
+The dispatcher copies that into its trace records.
+
+`rtc_set_time` (`0x0801c288`) / `rtc_set_date` (`0x0801c410`) program `RTC_TR` /
+`RTC_DR` through the same handle. Both follow the HAL write sequence: unlock with
+`WPR`(Instance +0x24) ← `0xCA`,`0x53`; enter init mode (`RTC_EnterInitMode`); write
+the masked register; clear `ISR.INIT` (Instance +0xc bit7) to leave init; if
+`CR.BYPSHAD` (Instance +0x8 bit5) is clear, `RTC_WaitForSynchro`; re-lock `WPR` ←
+`0xFF`. The handle's `Lock`/`State` bytes live at **+0x1c / +0x1d**. SetTime reads
+`DayLightSaving`/`StoreOperation` at struct **+0xc / +0x10** even for a BIN-format
+set, so callers must pass a word-aligned, fully-zeroed time struct.
+
+### Power-on identity / version header
+
+`bms_system_init` (`0x0801156c`) reads the image's version words straight from
+flash: **`0x08007ff8`** (byte-reversed into a 3-char BL-version string) and
+**`0x08008004`** → cached at **`0x200006e8`**. A match against the magic
+**`0x011105b2`** (= firmware **v1.11.05**) gates the stored HW-id refresh; the
+sub-fields are the byte at `0x200006e9` and the halfword at `0x200006ea`, mirrored
+into the BMS record at +0x5d / +0x52. The 28-byte block at flash `0x08008000` is
+copied to **`0x20000558`**. The wake reason is RTC backup register `BKP0R` (read
+via `0x0801c6d2`) cached at **`0x20000724`**; bit24 set means "discharge empty".
+The descending voltage→SOC table at **`0x0801e620`** maps the measurement at
+`0x200003d2` to the wake-up SOC (`bms_soc_preset`).
+
+### Channel-1 UART drain (`uart_flush_ch1`, `0x080161b4`)
+
+The host UART HAL handle is at **`0x200007ac`**; its `gState` byte at **+0x69**
+tracks transmit progress (`HAL_UART_STATE_READY` = `0x20`). Before an OTA/Modbus
+reset, `uart_flush_ch1` kicks the TX engine (`FUN_08016110`) and spins until
+`gState` returns to READY so the final reply leaves the wire.
+
+The 3-cell measurement ADC is started in interrupt mode by `adc_start_it`
+(`0x080195d0` = HAL_ADC_Start_IT) over the HAL handle at **`0x200001b4`**
+(Instance ISR @+0 ← `0x1C`, IER @+4 ← EOC/EOS/OVR, CR @+8 bit2 = ADSTART; handle
+lock @+0x40, State @+0x44, ErrorCode @+0x48). `bms_measure_prime` calls it on the
+first sample-window iteration.
+
+When the handle's `NbrOfConversion` field isn't 1, `adc_start_it` first runs
+`adc_enable` (`0x080198d0` = HAL `ADC_Enable`): sets `CR.ADEN` (bit0) only when no
+calibrate/stop/convert/disable bit is in flight (`CR & 0x80000017 == 0`), spins a
+stabilization delay of **`SystemCoreClock/1000000`** iterations, then polls
+`ISR.ADRDY` (bit0) with a 2-tick timeout (`tick_get` @ `0x20002614`). The clock
+figure is the OEM **`SystemCoreClock`** global at **`0x200000C0`** — the first word
+of `.data` (`_sdata`, see `memory-map.md`); it is read, never written, by the ADC
+path.
+
 ### State-entry / protection GPIO map (`src/transitions.c`)
 
 | Line | Pin | Role |
@@ -144,6 +197,16 @@ wrapping the index at `0xfde7` and committing it to the EEPROM error log
 (`errlog_erase((idx-1)/1000)`). Its tail hook `afe_fet_status_refresh`
 (`0x0800e1ac`) re-reads FEDL5236 reg 0x0D and caches the FET/balance status byte
 (AFE buffer +2) to the **FET-status shadow `0x200003a5`** on each transition.
+
+`state_persist_to_backup` (`0x08014280`) then mirrors the state across reset: the
+identity/state word **`0x20000724`** is a packed u32 — byte 0 = 0, byte 1 =
+current state, byte 2 = previous state, byte 3 = mode/balance flags (bit 24 is the
+balance enable the state handlers toggle). On every transition its low three bytes
+are repacked, the 32-bit complement is staged at **`0x20000698`**, and both words
+are written to **RTC backup registers BKP0/BKP1** (RTC HAL handle `0x200006f0`,
+`RTC+0x50`/`+0x54`) via `rtc_backup_write`. modbus.c/ota.c persist a single status
+byte the same way; the cross-check word/complement guards against backup-domain
+corruption.
 
 ### Alarm / request word `0x200006e4` (`src/alarms.c`)
 

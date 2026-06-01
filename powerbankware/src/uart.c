@@ -223,3 +223,22 @@ void uart_rx_handler(void)
         *line_len = 0;
     }
 }
+
+/*
+ * uart_flush_ch1 — OEM FUN_080161b4.
+ *
+ * Drain the channel-1 UART before a reset: if the HAL handle's gState byte
+ * (handle base 0x200007ac, +0x69) isn't RESET, kick the TX engine and spin until
+ * gState returns to HAL_UART_STATE_READY (0x20). Called from the Modbus/OTA
+ * reset paths so the final reply leaves the wire before the MCU resets.
+ */
+extern void FUN_08016110(void);   /* UART TX kick: push next ring byte (own pass) */
+
+void uart_flush_ch1(void)
+{
+    if (*(volatile uint8_t *)(0x200007ac + 0x69) != 0) {
+        FUN_08016110();
+        while (*(volatile uint8_t *)(0x200007ac + 0x69) != 0x20) {
+        }
+    }
+}

@@ -88,7 +88,12 @@ void mem_set(void *dst, uint8_t val, int len);
 
 /* ---- RTC (src/rtc.c) --------------------------------------------------- */
 void rtc_set(uint32_t lo, uint32_t hi);   /* program RTC from packed date words */
-void rtc_backup_write(void *hrtc, int idx, uint8_t val);  /* RTC BKPxR (src/flash.c) */
+void rtc_backup_write(void *hrtc, int idx, uint32_t val); /* RTC BKPxR write (src/flash.c) */
+uint32_t rtc_backup_read(void *hrtc, int idx);            /* RTC BKPxR read (src/flash.c) */
+uint8_t bcd_to_bin(uint8_t bcd);          /* packed BCD -> binary */
+uint32_t *rtc_timestamp_read(uint32_t *out); /* RTC TR/DR -> 8-byte BCD-decoded stamp */
+int rtc_set_time(void *hrtc, uint8_t *sTime, int format); /* HAL_RTC_SetTime */
+int rtc_set_date(void *hrtc, uint8_t *sDate, int format); /* HAL_RTC_SetDate */
 
 /* ---- FLASH / OTA driver (src/flash.c) ---------------------------------- */
 void flash_erase_page(uint32_t addr);                          /* erase one 2 KB page */
@@ -150,6 +155,8 @@ void coulomb_discharge_sub(uint32_t mag);  /* drain remaining capacity, clamp at
 void cell_balance_update(void);            /* FEDL5236 balance governor */
 void bms_measure_update(void);             /* ADC scaling + SOC-index lookup */
 void bms_measure_prime(void);              /* first-iteration AFE priming */
+char adc_start_it(uint32_t *handle);       /* HAL_ADC_Start_IT (src/adc.c) */
+char adc_enable(uint32_t *handle);         /* HAL ADC_Enable: ADEN + wait ADRDY */
 
 /* ---- Charger / telemetry / timer (src/charger.c, telemetry.c, timer.c) - */
 void charger_afe_refresh(void);            /* charger-attach AFE re-init handshake */
@@ -164,6 +171,8 @@ void system_reset_request(void);
 /* ---- BMS state/config (src/bms.c) -------------------------------------- */
 void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */
 void bms_config_reset(void);       /* Preset_BMS_System_Value */
+void bms_soc_preset(void);         /* SOC% + capacity from voltage table (FUN_0800a264) */
+void bms_system_init(void);        /* secondary init: version, AFE, record restore (FUN_0801156c) */
 void boot_mode_enter(uint8_t mode);/* bootloader/upgrade entry */
 void shipping_enter(void);         /* ship-mode power-down */
 
@@ -233,6 +242,7 @@ void modbus_telemetry(uint16_t base);
 /* Feed one RX byte to the per-channel Modbus frame processor. */
 void modbus_process(uint8_t channel, uint8_t b);
 void uart_flush(void);
+void uart_flush_ch1(void);                 /* drain ch-1 UART before reset (FUN_080161b4) */
 void uart_puts(const char *str);
 char nibble_to_hex(uint8_t nibble);
 /* printf-like log over the TX ring. Specifiers: %d(u8) %i(u16) %l(u32) decimal,

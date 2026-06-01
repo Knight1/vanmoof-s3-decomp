@@ -19,19 +19,16 @@
  * (0x325AA0 - base) can go negative, hence the signed 64-bit type.
  */
 
-/* HAL conversion start over the measurement DMA/ADC handle (deeper leaf). */
-extern void FUN_080195d0(void *handle);
-
 /*
  * bms_measure_prime — OEM FUN_08008980. First-iteration AFE priming: clear the
  * "sample ready" flag (0x20000204 bit0) and the scratch byte 0x20000213, then
- * kick the conversion HAL over the measurement handle at 0x200001B4.
+ * start the measurement ADC in interrupt mode (handle at 0x200001B4).
  */
 void bms_measure_prime(void)
 {
     *(volatile uint8_t *)0x20000204 &= 0xFEu;
     *(volatile uint8_t *)0x20000213 = 0;
-    FUN_080195d0((void *)0x200001B4);
+    adc_start_it((uint32_t *)0x200001B4);
 }
 
 #define CNT (*(volatile uint16_t *)0x200001AC)

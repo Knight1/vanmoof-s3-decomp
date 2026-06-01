@@ -18,10 +18,12 @@
  * jump tables (0x0801E75C main, 0x0801E7CC event-code), so the original renders
  * as a mangled indirect call; both are plain switch(state) blocks here.
  *
- * Callees kept extern (deeper leaves / runtime helpers, own pass):
- *   FUN_080121F0  read 64-bit uptime/timestamp into an 8-byte buffer
- *   FUN_08008410  64-bit unsigned divmod (libgcc-style; quotient in the high word)
- *   FUN_08014280  state-byte consumer (LED bar / host notify)
+ * Callee kept extern (deeper leaf, own pass):
+ *   rtc_timestamp_read  read the BCD-decoded RTC time/date into an 8-byte buffer
+ *
+ * The OEM circular-trace index math used the compiler's signed divmod helper
+ * FUN_08008410 (= __aeabi_idivmod); expressed here as a native `%` so the
+ * toolchain emits the identical routine.
  */
 
 #define MODE    (*(volatile uint16_t *)0x200006A0)
@@ -32,10 +34,6 @@
 #define REC ((volatile uint8_t *)0x200004D0)         /* BMS record */
 #define LOG ((volatile uint8_t *)0x200005B0)         /* circular trace entry */
 
-extern void FUN_080121f0(void *out8);
-extern uint64_t FUN_08008410(uint32_t num, uint32_t den);
-extern void FUN_08014280(int state);
-
 /* transition-trace log strings (src/strings.c). */
 extern const char s_new_state[];   /* "\nNew State = %d\r"      0x0801E0F4 */
 extern const char s_prev_state[];  /* "\nPrevious State = %d\r" 0x0801E108 */
@@ -43,6 +41,26 @@ extern const char s_prev_state[];  /* "\nPrevious State = %d\r" 0x0801E108 */
 static inline volatile uint16_t *rec16(uint32_t off)
 {
     return (volatile uint16_t *)(0x200004D0u + off);
+}
+
+/*
+ * state_persist_to_backup — OEM FUN_08014280. Pack {0, state, prev-state} into
+ * the low three bytes of the identity/state word 0x20000724 (byte 3 keeps the
+ * mode/balance flags), store its 32-bit complement at 0x20000698, and persist
+ * both words into RTC backup registers 0/1 (via rtc_backup_write, RTC handle at
+ * 0x200006F0) so the state machine survives a reset/brownout. Only the
+ * dispatcher calls it.
+ */
+static void state_persist_to_backup(uint8_t state)
+{
+    volatile uint8_t *packed = (volatile uint8_t *)0x20000724;
+
+    packed[0] = 0;
+    packed[1] = state;
+    packed[2] = *(volatile uint8_t *)0x200004B0;        /* previous state */
+    *(volatile uint32_t *)0x20000698 = ~*(volatile uint32_t *)0x20000724;
+    rtc_backup_write((void *)0x200006F0, 0, *(volatile uint32_t *)0x20000724);
+    rtc_backup_write((void *)0x200006F0, 1, *(volatile uint32_t *)0x20000698);
 }
 
 /*
@@ -115,7 +133,7 @@ void bms_state_enter(int state_in)
         if (LOGGING) {
             uint32_t ts[2];
             (*rec16(0x44))++;
-            FUN_080121f0(ts);
+            rtc_timestamp_read(ts);
             *(volatile uint32_t *)(0x200004D0 + 0x10) = ts[0];
             *(volatile uint32_t *)(0x200004D0 + 0x14) = ts[1];
         }
@@ -124,7 +142,7 @@ void bms_state_enter(int state_in)
         if (LOGGING) {
             uint32_t ts[2];
             (*rec16(0x46))++;
-            FUN_080121f0(ts);
+            rtc_timestamp_read(ts);
             *(volatile uint32_t *)(0x200004D0 + 0x10) = ts[0];
             *(volatile uint32_t *)(0x200004D0 + 0x14) = ts[1];
         }
@@ -199,12 +217,12 @@ void bms_state_enter(int state_in)
         }
 
         idx = *rec16(0x2a);
-        errlog_erase((int16_t)(uint16_t)(FUN_08008410(idx - 1, 1000) >> 32));
+        errlog_erase((int16_t)(((int32_t)idx - 1) % 1000));
     }
 
     afe_fet_status_refresh();
     fedl5236_record_save();
-    FUN_08014280(STATEB);
+    state_persist_to_backup(STATEB);
     log_print(2, s_new_state, STATEB);
     log_print(2, s_prev_state, PREVB);
     uart_flush();

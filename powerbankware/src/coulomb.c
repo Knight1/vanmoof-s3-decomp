@@ -16,9 +16,6 @@
  *   +0x50 cycle count (u16)     +0x5a SOC% (u8)  +0x5b SOC2% (u8)  +0x7a (history)
  */
 
-/* Unsigned 32-bit divide (runtime helper). */
-extern uint32_t FUN_08008130(uint32_t num, uint32_t den);
-
 #define REC ((volatile uint8_t  *)0x200004D0)
 
 /*
@@ -99,7 +96,7 @@ void coulomb_integrate(uint32_t current)
                             *(volatile uint32_t *)(0x200004D0 + 0x1c) = 0x25E4;
                             *(volatile uint32_t *)(0x200004D0 + 0x18) = *(volatile uint32_t *)0x200005A4;
                         } else {
-                            *(volatile uint32_t *)(0x200004D0 + 0x1c) = FUN_08008130(sum, 0x3840);
+                            *(volatile uint32_t *)(0x200004D0 + 0x1c) = ((sum) / (0x3840));
                             *(volatile uint32_t *)(0x200004D0 + 0x18) = sum;
                         }
                         REC[0x5a] = 100;
@@ -107,10 +104,10 @@ void coulomb_integrate(uint32_t current)
                         int scaled = 0x25E4;
                         uint8_t lo = (temp[1] < temp[2]) ? temp[1] : temp[2];
                         if (lo < 0x3A) {
-                            char d = (char)FUN_08008130(0x3Au - lo, 3);
-                            scaled = (int)FUN_08008130((uint32_t)(uint8_t)(100 - d) * 0x25E4, 100);
+                            char d = (char)((0x3Au - lo) / (3));
+                            scaled = (int)(((uint32_t)(uint8_t)(100 - d) * 0x25E4) / (100));
                         }
-                        REC[0x5b] = (uint8_t)FUN_08008130((uint32_t)(full * 100), (uint32_t)scaled);
+                        REC[0x5b] = (uint8_t)(((uint32_t)(full * 100)) / ((uint32_t)scaled));
                         if (100 < REC[0x5b]) REC[0x5b] = 100;
                     }
                 } else {
@@ -121,16 +118,16 @@ void coulomb_integrate(uint32_t current)
                         *(volatile uint32_t *)(0x200004D0 + 0x18) = *(volatile uint32_t *)0x200005A4;
                     } else {
                         *(volatile uint32_t *)(0x200004D0 + 0x1c) =
-                            FUN_08008130(*(volatile uint32_t *)(0x200004D0 + 0x18), 0x3840);
+                            ((*(volatile uint32_t *)(0x200004D0 + 0x18)) / (0x3840));
                     }
                     int full = (int)*(volatile uint32_t *)(0x200004D0 + 0x1c);
                     int scaled = 0x25E4;
                     uint8_t lo = (temp[1] < temp[2]) ? temp[1] : temp[2];
                     if (lo < 0x3A) {
-                        char d = (char)FUN_08008130(0x3Au - lo, 3);
-                        scaled = (int)FUN_08008130((uint32_t)(uint8_t)(100 - d) * 0x25E4, 100);
+                        char d = (char)((0x3Au - lo) / (3));
+                        scaled = (int)(((uint32_t)(uint8_t)(100 - d) * 0x25E4) / (100));
                     }
-                    REC[0x5b] = (uint8_t)FUN_08008130((uint32_t)(full * 100), (uint32_t)scaled);
+                    REC[0x5b] = (uint8_t)(((uint32_t)(full * 100)) / ((uint32_t)scaled));
                     if (100 < REC[0x5b]) REC[0x5b] = 100;
                     *lrnC = 0;
                 }
@@ -155,16 +152,14 @@ void coulomb_integrate(uint32_t current)
     *(volatile uint32_t *)(0x200004D0 + 0x20) = *(volatile uint32_t *)(0x200004D0 + 0x18);
     if (0x383F < *(volatile uint32_t *)(0x200004D0 + 0x20)) {
         *(volatile uint32_t *)(0x200004D0 + 0x20) =
-            FUN_08008130(*(volatile uint32_t *)(0x200004D0 + 0x20), 0x3840);
+            ((*(volatile uint32_t *)(0x200004D0 + 0x20)) / (0x3840));
     } else {
         *(volatile uint32_t *)(0x200004D0 + 0x20) = 0;
     }
     if (*(volatile uint32_t *)(0x200004D0 + 0x1c) < *(volatile uint32_t *)(0x200004D0 + 0x20)) {
         *(volatile uint32_t *)(0x200004D0 + 0x20) = *(volatile uint32_t *)(0x200004D0 + 0x1c);
     }
-    REC[0x5a] = (uint8_t)FUN_08008130(
-        (uint32_t)((int)*(volatile uint32_t *)(0x200004D0 + 0x20) * 100),
-        *(volatile uint32_t *)(0x200004D0 + 0x1c));
+    REC[0x5a] = (uint8_t)(((uint32_t)((int)*(volatile uint32_t *)(0x200004D0 + 0x20) * 100)) / (*(volatile uint32_t *)(0x200004D0 + 0x1c)));
     if (100 < REC[0x5a]) REC[0x5a] = 100;
 }
 
