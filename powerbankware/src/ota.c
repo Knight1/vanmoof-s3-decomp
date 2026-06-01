@@ -15,7 +15,6 @@
  * OTA staging 0x08024000.
  */
 
-extern void flash_lock(void);                      /* FUN_0801a298 (src/flash.c) */
 extern int  image_verify_ap(int *image);           /* FUN_0800fe48: AP-header CRC verify */
 void image_copy(uint32_t dst, uint32_t src, uint32_t len);  /* FUN_0800ff18 — below */
 

@@ -134,3 +134,11 @@ const char s_ts0_offset[]           = "\nTS0 Offset = %d\r";          /* 0x0801E
 const char s_ts1_offset[]           = "\nTS1 Offset = %d\r";          /* 0x0801E2F0 */
 const char s_ts2_offset[]           = "\nTS2 Offset = %d\r";          /* 0x0801E304 */
 const char s_record_ap_state[]      = "\nRecord AP_State = %d\r";     /* 0x0801E318 */
+
+/* BMS record / errorlog EEPROM read (src/bms.c). */
+const char s_record_read_proc[] = "\nBMS_Record_Read_EEPROM_Process()\r";        /* 0x0801E38C */
+const char s_record_read_fail[] = "\nBMS Record Read Fail\r";                     /* 0x0801E3B0 */
+const char s_record_crc_error[] = "\nBMS Record CRC Error\r";                     /* 0x0801E3C8 */
+const char s_errlog_read_proc[] = "\nBMS_ErrorLog_Read_EEPROM_Process() --> %i\r";/* 0x0801E418 */
+const char s_errlog_read_fail[] = "\nBMS ErrorLog Read Fail -> %i!!\r";           /* 0x0801E444 */
+const char s_errlog_crc_error[] = "\nBMS ErrorLog CRC Error\r";                   /* 0x0801E468 */

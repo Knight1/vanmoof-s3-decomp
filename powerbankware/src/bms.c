@@ -236,13 +236,13 @@ void shipping_enter(void)
     gpio_bit_write(0x48000000, 0x200, 0);              /* PA9 = 0 */
 }
 
-/* bms_system_init banners + deeper leaves (own passes). */
+/* bms_system_init banners (own passes). */
 extern const char s_bl_fw_version[], s_date_time[], s_check_poweron_record[],
                   s_wakeup_soc[], s_discharge_empty[], s_adjust_soc[],
                   s_vout_offset[], s_iout_offset[], s_ts0_offset[],
                   s_ts1_offset[], s_ts2_offset[], s_record_ap_state[];
-extern int      FUN_08013f80(void);                 /* load + CRC-verify BMS record (EEPROM) */
-extern int      FUN_08014140(short idx);            /* errlog record read/verify by index */
+extern const char s_record_read_proc[], s_record_read_fail[], s_record_crc_error[],
+                  s_errlog_read_proc[], s_errlog_read_fail[], s_errlog_crc_error[];
 
 /*
  * bms_system_init — OEM FUN_0801156c. Secondary init, run from main() right after
@@ -303,7 +303,7 @@ void bms_system_init(void)
     log_print(2, s_check_poweron_record);
     uart_flush();
 
-    if (FUN_08013f80() != 1) {                         /* EEPROM record load + CRC */
+    if (bms_record_load() != 1) {                      /* EEPROM record load + CRC */
         bms_config_reset();
     }
 
@@ -412,6 +412,105 @@ void bms_system_init(void)
     if (*(volatile int16_t *)(CFG + 0x2a) != 0) {
         /* FUN_0800823c is the unsigned divmod helper; only the remainder is used */
         uint16_t rem = (uint16_t)(*(volatile uint16_t *)(CFG + 0x2a) % 1000u);
-        FUN_08014140((short)((rem - 1) & 0xffff));
+        bms_errlog_load((short)((rem - 1) & 0xffff));
     }
+}
+
+/*
+ * bms_record_load — OEM FUN_08013f80 (BMS_Record_Read_EEPROM_Process).
+ *
+ * Read the 128-byte BMS record from the I2C EEPROM (device 0xa0, address 0xff80)
+ * into the record at 0x200004d0 and verify its stored CRC (word at +0x7c) against
+ * a fresh CRC over the first 0x1f words. Retries up to 10 times on a read failure
+ * or CRC mismatch. Returns 1 on success, 0 if the retries are exhausted (the
+ * caller then falls back to a factory preset). Cross-checked against the OEM image.
+ */
+int bms_record_load(void)
+{
+    uint8_t retries = 0;
+
+    log_print(2, s_record_read_proc);
+    uart_flush();
+
+    bool again;
+    do {
+        again = false;
+        mem_zero((void *)0x200004d0, 0x80);
+        int rc = eeprom_mem_read((void *)0x20000434, 0xa0, 0xff80, 2,
+                                 (void *)0x200004d0, 0x80, 6);
+        if (rc == 0) {
+            uint32_t stored = *(volatile uint32_t *)(0x200004d0 + 0x7c);
+            uint32_t calc = bms_record_crc((const void *)0x200004d0, 0x1f);
+            if (stored != calc) {
+                retries++;
+                if (retries < 10) {
+                    again = true;
+                    log_print(2, s_record_crc_error);
+                    uart_flush();
+                }
+            }
+        } else {
+            retries++;
+            if (retries < 10) {
+                again = true;
+                log_print(2, s_record_read_fail);
+                uart_flush();
+            }
+        }
+    } while (again);
+
+    return retries < 10;
+}
+
+/*
+ * bms_errlog_load — OEM FUN_08014140 (BMS_ErrorLog_Read_EEPROM_Process).
+ *
+ * Read one 64-byte error-log record at EEPROM offset `index * 0x40` (device 0xa0)
+ * into a stack buffer and verify its stored CRC (word at +0x3c) over the first
+ * 0xf words, retrying up to 10 times. On success the validated record is copied
+ * to 0x200005b0. Returns 1 on success, 0 on exhaustion. The buffer is word-aligned
+ * so the +0x3c CRC load is a valid Cortex-M0 word access. Disasm-confirmed.
+ */
+int bms_errlog_load(short index)
+{
+    uint32_t buf32[16];                        /* 64 bytes, word-aligned */
+    uint8_t *buf = (uint8_t *)buf32;
+    uint8_t retries = 0;
+
+    log_print(2, s_errlog_read_proc, index);
+    uart_flush();
+
+    uint16_t addr = (uint16_t)(index * 0x40);
+
+    char again;
+    do {
+        again = 0;
+        mem_zero(buf, 0x40);
+        int rc = eeprom_mem_read((void *)0x20000434, 0xa0, addr, 2, buf, 0x40, 6);
+        if (rc == 0) {
+            uint32_t stored = *(uint32_t *)(buf + 0x3c);
+            uint32_t calc = bms_record_crc(buf, 0xf);
+            if (stored != calc) {
+                retries++;
+                if (retries < 10) {
+                    again = 1;
+                    log_print(2, s_errlog_crc_error);
+                    uart_flush();
+                }
+            }
+        } else {
+            retries++;
+            if (retries < 10) {
+                again = 1;
+                log_print(2, s_errlog_read_fail, index);
+                uart_flush();
+            }
+        }
+    } while (again);
+
+    int ok = retries < 10;
+    if (ok) {
+        block_copy((void *)0x200005b0, buf, 0x40);
+    }
+    return ok;
 }

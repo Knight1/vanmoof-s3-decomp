@@ -225,6 +225,42 @@ void uart_rx_handler(void)
 }
 
 /*
+ * uart_ch1_tx_pump — OEM FUN_08016110.
+ *
+ * Push the next byte of the channel-1 TX ring into the UART when it is idle. The
+ * ring (20-byte buffer at 0x20000784, tail 0x2000084a, head 0x2000084e) feeds the
+ * HAL handle at 0x200007ac. When gState is READY (0x20) and the ring is non-empty,
+ * pop ring[tail], advance tail (wrap at 20), mark the handle BUSY_TX (0x21), write
+ * the byte to USART TDR (Instance +0x28) and enable TXEIE (CR1 bit7) so the ISR
+ * carries on. When gState is RESET (0), the indices are cleared. Disasm-confirmed.
+ */
+void uart_ch1_tx_pump(void)
+{
+    volatile uint8_t  *gstate = (volatile uint8_t  *)(0x200007ac + 0x69);
+    volatile uint16_t *tail   = (volatile uint16_t *)0x2000084a;
+    volatile uint16_t *head   = (volatile uint16_t *)0x2000084e;
+    volatile uint8_t  *ring   = (volatile uint8_t  *)0x20000784;
+
+    if (*gstate == 0x20) {                     /* HAL_UART_STATE_READY */
+        if (*tail != *head) {
+            uint16_t t = *tail;
+            uint8_t b = ring[t];
+            *gstate = 0x21;                    /* HAL_UART_STATE_BUSY_TX */
+            *tail = (uint16_t)(t + 1);
+            if ((uint16_t)(t + 1) > 0x13) {    /* wrap at 20 entries */
+                *tail = 0;
+            }
+            volatile uint32_t *inst = (volatile uint32_t *)*(volatile uint32_t *)0x200007ac;
+            *(volatile uint16_t *)((uint8_t *)inst + 0x28) = b;   /* USART TDR */
+            inst[0] |= 0x80u;                  /* CR1.TXEIE */
+        }
+    } else if (*gstate == 0) {                 /* HAL_UART_STATE_RESET */
+        *head = 0;
+        *tail = 0;
+    }
+}
+
+/*
  * uart_flush_ch1 — OEM FUN_080161b4.
  *
  * Drain the channel-1 UART before a reset: if the HAL handle's gState byte
@@ -232,12 +268,10 @@ void uart_rx_handler(void)
  * gState returns to HAL_UART_STATE_READY (0x20). Called from the Modbus/OTA
  * reset paths so the final reply leaves the wire before the MCU resets.
  */
-extern void FUN_08016110(void);   /* UART TX kick: push next ring byte (own pass) */
-
 void uart_flush_ch1(void)
 {
     if (*(volatile uint8_t *)(0x200007ac + 0x69) != 0) {
-        FUN_08016110();
+        uart_ch1_tx_pump();
         while (*(volatile uint8_t *)(0x200007ac + 0x69) != 0x20) {
         }
     }

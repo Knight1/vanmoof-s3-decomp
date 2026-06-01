@@ -32,8 +32,7 @@ extern const char s_msg_rec_cutp[];    /* 0x0801E0B8 "\nRecord CUTP Mode\r"     
 extern const char s_msg_rec_dotp[];    /* 0x0801E0CC "\nRecord DOTP Mode\r"        (sel 0x14) */
 extern const char s_msg_rec_dutp[];    /* 0x0801E0E0 "\nRecord DUTP Mode\r"        (sel 0x15) */
 
-void hal_bringup(void);                       /* 0x080114dc */
-/* log_print now declared in powerbankware.h (variadic, src/uart.c) */
+/* hal_bringup + log_print now declared in powerbankware.h */
 /* uart_flush (0x08016898) now in uart.c via the header */
 /* boot_mode_enter (0x0800ede0) now in bms.c via the header */
 /* bms_core_update (0x0800bc18) now in state_handlers.c via the header */

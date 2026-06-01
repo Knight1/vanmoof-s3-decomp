@@ -44,6 +44,17 @@ void mem_copy(void *dst, const void *src, int len)
     }
 }
 
+/* Forward byte copy (OEM FUN_0801db0c) — the compiler memcpy paired with the
+ * mem_set below; behaviourally identical to mem_copy but a distinct OEM routine. */
+void block_copy(void *dst, const void *src, int len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    for (int i = 0; i != len; i++) {
+        d[i] = s[i];
+    }
+}
+
 /* Byte fill (OEM FUN_0801db1e). */
 void mem_set(void *dst, uint8_t val, int len)
 {

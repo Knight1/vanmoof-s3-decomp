@@ -9,27 +9,27 @@
  * counter (0x20002614) is zeroed alongside.
  *
  * rtc_set_time = HAL_RTC_SetTime, rtc_set_date = HAL_RTC_SetDate; format 0 = BIN.
+ * The shared HAL leaves (rtc_byte_to_bcd / rtc_enter_init / rtc_wait_synchro) are
+ * defined at the bottom of this file.
  */
-
-/* RTC HAL leaves shared by the two setters (own pass). */
-extern uint32_t FUN_0801c622(uint32_t bin);   /* RTC_ByteToBcd2 (bin -> packed BCD) */
-extern int      FUN_0801c5ca(void *hrtc);     /* RTC_EnterInitMode */
-extern int      FUN_0801c578(void *hrtc);     /* RTC_WaitForSynchro */
 
 void rtc_set(uint32_t lo, uint32_t hi)
 {
     void * const hrtc = (void *)0x200006f0;
 
     /* RTC_TimeTypeDef is 0x14 bytes: SetTime reads DayLightSaving(+0xc) and
-     * StoreOperation(+0x10) and OR-s them into CR even in BIN mode, so the
-     * struct must be word-aligned (Cortex-M0 word load) and those fields zero.
-     * The OEM clears only DayLightSaving; we zero the whole struct, which is the
-     * same observable result for a basic set and avoids reading stack garbage. */
-    uint32_t time_words[5] = { 0 };
+     * StoreOperation(+0x10) and OR-s them into CR even in BIN mode, so the struct
+     * must be word-aligned (Cortex-M0 word load) and those two fields cleared. The
+     * OEM clears only DayLightSaving; we also clear StoreOperation, which avoids
+     * reading stack garbage with the same observable result for a basic set.
+     * (Set the two fields explicitly rather than `= {0}` so no memset is emitted.) */
+    uint32_t time_words[5];
     uint8_t *time = (uint8_t *)time_words;
     time[0] = (uint8_t)(lo >> 16);     /* hours   */
     time[1] = (uint8_t)(lo >> 8);      /* minutes */
     time[2] = (uint8_t)lo;             /* seconds */
+    time_words[3] = 0;                 /* DayLightSaving (+0xc) */
+    time_words[4] = 0;                 /* StoreOperation (+0x10) */
 
     /* RTC_DateTypeDef leading bytes, in the order SetDate reads them. */
     uint8_t date[4];
@@ -112,9 +112,9 @@ int rtc_set_time(void *hrtc, uint8_t *sTime, int format)
             sTime[3] = 0;
         }
         tr = ((uint32_t)sTime[3] << 16)
-           | (FUN_0801c622(sTime[0]) << 16)
-           | (FUN_0801c622(sTime[1]) << 8)
-           |  FUN_0801c622(sTime[2]);
+           | (rtc_byte_to_bcd(sTime[0]) << 16)
+           | (rtc_byte_to_bcd(sTime[1]) << 8)
+           |  rtc_byte_to_bcd(sTime[2]);
     } else {                                           /* already BCD */
         if ((inst[2] & 0x40) == 0) {
             sTime[3] = 0;
@@ -129,7 +129,7 @@ int rtc_set_time(void *hrtc, uint8_t *sTime, int format)
 
     inst[9] = 0xca;                                    /* WPR: unlock */
     inst[9] = 0x53;
-    if (FUN_0801c5ca(hrtc) != 0) {                     /* enter init mode */
+    if (rtc_enter_init(hrtc) != 0) {                     /* enter init mode */
         inst[9] = 0xff;
         h[0x1d] = 4;
         h[0x1c] = 0;
@@ -142,7 +142,7 @@ int rtc_set_time(void *hrtc, uint8_t *sTime, int format)
     inst[3] = inst[3] & 0xffffff7fu;                   /* ISR: exit init */
 
     if ((inst[2] & 0x20) == 0) {                       /* !BYPSHAD */
-        if (FUN_0801c578(hrtc) != 0) {
+        if (rtc_wait_synchro(hrtc) != 0) {
             inst[9] = 0xff;
             h[0x1d] = 4;
             h[0x1c] = 0;
@@ -181,9 +181,9 @@ int rtc_set_date(void *hrtc, uint8_t *sDate, int format)
 
     if (format == 0) {                                 /* BIN -> BCD */
         dr = ((uint32_t)sDate[0] << 13)                /* WeekDay */
-           | (FUN_0801c622(sDate[3]) << 16)            /* Year */
-           | (FUN_0801c622(sDate[1]) << 8)             /* Month */
-           |  FUN_0801c622(sDate[2]);                  /* Day */
+           | (rtc_byte_to_bcd(sDate[3]) << 16)            /* Year */
+           | (rtc_byte_to_bcd(sDate[1]) << 8)             /* Month */
+           |  rtc_byte_to_bcd(sDate[2]);                  /* Day */
     } else {                                           /* already BCD */
         bcd_to_bin(sDate[1]);                          /* OEM assert_param checks */
         bcd_to_bin(sDate[2]);
@@ -195,7 +195,7 @@ int rtc_set_date(void *hrtc, uint8_t *sDate, int format)
 
     inst[9] = 0xca;                                    /* WPR: unlock */
     inst[9] = 0x53;
-    if (FUN_0801c5ca(hrtc) != 0) {
+    if (rtc_enter_init(hrtc) != 0) {
         inst[9] = 0xff;
         h[0x1d] = 4;
         h[0x1c] = 0;
@@ -206,7 +206,7 @@ int rtc_set_date(void *hrtc, uint8_t *sDate, int format)
     inst[3] = inst[3] & 0xffffff7fu;                   /* ISR: exit init */
 
     if ((inst[2] & 0x20) == 0) {
-        if (FUN_0801c578(hrtc) != 0) {
+        if (rtc_wait_synchro(hrtc) != 0) {
             inst[9] = 0xff;
             h[0x1d] = 4;
             h[0x1c] = 0;
@@ -217,5 +217,61 @@ int rtc_set_date(void *hrtc, uint8_t *sDate, int format)
     inst[9] = 0xff;
     h[0x1d] = 1;
     h[0x1c] = 0;
+    return 0;
+}
+
+/* rtc_byte_to_bcd — OEM FUN_0801c622 (RTC_ByteToBcd2). Binary -> packed BCD via
+ * repeated subtraction (no divide). Disasm-confirmed. */
+uint32_t rtc_byte_to_bcd(uint8_t val)
+{
+    uint32_t tens = 0;
+    while (val > 9) {
+        tens++;
+        val = (uint8_t)(val - 10);
+    }
+    return (uint8_t)((tens << 4) | val);
+}
+
+/*
+ * rtc_enter_init — OEM FUN_0801c5ca (RTC_EnterInitMode).
+ *
+ * If the calendar isn't already in init mode (ISR.INITF, Instance +0xc bit6),
+ * request it (ISR = 0xffffffff) and poll INITF with a 1000-tick (tick_get)
+ * timeout. Returns 0 on success, 3 on timeout.
+ */
+int rtc_enter_init(void *hrtc)
+{
+    volatile uint32_t *inst = (volatile uint32_t *)(*(uint32_t *)hrtc);
+
+    if ((inst[3] & 0x40) == 0) {                       /* ISR.INITF clear */
+        inst[3] = 0xffffffffu;                         /* request init mode */
+        uint32_t start = tick_get();
+        while ((inst[3] & 0x40) == 0) {
+            if ((uint32_t)(tick_get() - start) >= 0x3e9) {
+                return 3;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * rtc_wait_synchro — OEM FUN_0801c578 (RTC_WaitForSynchro).
+ *
+ * Clear ISR.RSF (RTC_RSF_MASK 0xffffff5f, which also drops INIT), then poll for
+ * the shadow registers to resynchronise (ISR.RSF, Instance +0xc bit5) with a
+ * 1000-tick timeout. Returns 0 on success, 3 on timeout.
+ */
+int rtc_wait_synchro(void *hrtc)
+{
+    volatile uint32_t *inst = (volatile uint32_t *)(*(uint32_t *)hrtc);
+
+    inst[3] = inst[3] & 0xffffff5fu;                   /* clear RSF */
+    uint32_t start = tick_get();
+    while ((inst[3] & 0x20) == 0) {                    /* wait for RSF */
+        if ((uint32_t)(tick_get() - start) >= 0x3e9) {
+            return 3;
+        }
+    }
     return 0;
 }

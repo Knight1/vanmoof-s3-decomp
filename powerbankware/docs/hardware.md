@@ -132,16 +132,31 @@ flash: **`0x08007ff8`** (byte-reversed into a 3-char BL-version string) and
 sub-fields are the byte at `0x200006e9` and the halfword at `0x200006ea`, mirrored
 into the BMS record at +0x5d / +0x52. The 28-byte block at flash `0x08008000` is
 copied to **`0x20000558`**. The wake reason is RTC backup register `BKP0R` (read
-via `0x0801c6d2`) cached at **`0x20000724`**; bit24 set means "discharge empty".
+via `rtc_backup_read`) cached at **`0x20000724`**; bit24 set means "discharge empty".
 The descending voltage→SOC table at **`0x0801e620`** maps the measurement at
 `0x200003d2` to the wake-up SOC (`bms_soc_preset`).
 
 ### Channel-1 UART drain (`uart_flush_ch1`, `0x080161b4`)
 
 The host UART HAL handle is at **`0x200007ac`**; its `gState` byte at **+0x69**
-tracks transmit progress (`HAL_UART_STATE_READY` = `0x20`). Before an OTA/Modbus
-reset, `uart_flush_ch1` kicks the TX engine (`FUN_08016110`) and spins until
-`gState` returns to READY so the final reply leaves the wire.
+tracks transmit progress (`HAL_UART_STATE_RESET` 0, `READY` `0x20`, `BUSY_TX`
+`0x21`). The ch-1 TX ring is a 20-byte buffer at **`0x20000784`** with tail
+**`0x2000084a`** and head **`0x2000084e`**. `uart_ch1_tx_pump` (`0x08016110`), when
+gState is READY and the ring is non-empty, pops `ring[tail]`, advances tail
+(wrapping at 20), marks the handle BUSY_TX, writes the byte to USART `TDR`
+(Instance +0x28) and sets `CR1.TXEIE` (bit7). Before an OTA/Modbus reset,
+`uart_flush_ch1` calls it and spins until `gState` returns to READY so the final
+reply leaves the wire.
+
+### BMS record / error-log EEPROM layout
+
+`bms_record_load` (`0x08013f80`) reads the 128-byte BMS record from the I2C EEPROM
+(device `0xa0`, address `0xff80`, handle `0x20000434`) into the record at
+**`0x200004d0`** and checks the stored CRC word at **+0x7c** against a CRC over the
+first 0x1f words. `bms_errlog_load` (`0x08014140`) reads a 64-byte error-log record
+at EEPROM offset **`index * 0x40`** into a scratch buffer, checks the CRC word at
+**+0x3c** over the first 0xf words, and on success copies it to **`0x200005b0`**.
+Both retry up to ten times on a read failure or CRC mismatch.
 
 The 3-cell measurement ADC is started in interrupt mode by `adc_start_it`
 (`0x080195d0` = HAL_ADC_Start_IT) over the HAL handle at **`0x200001b4`**

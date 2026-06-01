@@ -84,16 +84,21 @@ void delay_ms_service(int ms);
 void mem_zero(void *dst, int len);
 bool mem_compare(const void *a, const void *b, uint16_t len);
 void mem_copy(void *dst, const void *src, int len);
+void block_copy(void *dst, const void *src, int len);    /* compiler memcpy (FUN_0801db0c) */
 void mem_set(void *dst, uint8_t val, int len);
 
 /* ---- RTC (src/rtc.c) --------------------------------------------------- */
 void rtc_set(uint32_t lo, uint32_t hi);   /* program RTC from packed date words */
 void rtc_backup_write(void *hrtc, int idx, uint32_t val); /* RTC BKPxR write (src/flash.c) */
 uint32_t rtc_backup_read(void *hrtc, int idx);            /* RTC BKPxR read (src/flash.c) */
+void flash_lock(void);                                    /* re-lock flash (FUN_0801a298, src/flash.c) */
 uint8_t bcd_to_bin(uint8_t bcd);          /* packed BCD -> binary */
 uint32_t *rtc_timestamp_read(uint32_t *out); /* RTC TR/DR -> 8-byte BCD-decoded stamp */
 int rtc_set_time(void *hrtc, uint8_t *sTime, int format); /* HAL_RTC_SetTime */
 int rtc_set_date(void *hrtc, uint8_t *sDate, int format); /* HAL_RTC_SetDate */
+uint32_t rtc_byte_to_bcd(uint8_t val);     /* RTC_ByteToBcd2 (bin -> packed BCD) */
+int rtc_enter_init(void *hrtc);            /* RTC_EnterInitMode */
+int rtc_wait_synchro(void *hrtc);          /* RTC_WaitForSynchro */
 
 /* ---- FLASH / OTA driver (src/flash.c) ---------------------------------- */
 void flash_erase_page(uint32_t addr);                          /* erase one 2 KB page */
@@ -172,7 +177,10 @@ void system_reset_request(void);
 void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */
 void bms_config_reset(void);       /* Preset_BMS_System_Value */
 void bms_soc_preset(void);         /* SOC% + capacity from voltage table (FUN_0800a264) */
+void hal_bringup(void);            /* earliest boot init: flash/vector-remap/clocks (FUN_080114dc) */
 void bms_system_init(void);        /* secondary init: version, AFE, record restore (FUN_0801156c) */
+int bms_record_load(void);         /* read+CRC the BMS record from EEPROM (FUN_08013f80) */
+int bms_errlog_load(short index);  /* read+CRC one errlog record from EEPROM (FUN_08014140) */
 void boot_mode_enter(uint8_t mode);/* bootloader/upgrade entry */
 void shipping_enter(void);         /* ship-mode power-down */
 
@@ -243,6 +251,7 @@ void modbus_telemetry(uint16_t base);
 void modbus_process(uint8_t channel, uint8_t b);
 void uart_flush(void);
 void uart_flush_ch1(void);                 /* drain ch-1 UART before reset (FUN_080161b4) */
+void uart_ch1_tx_pump(void);               /* push next ch-1 TX ring byte (FUN_08016110) */
 void uart_puts(const char *str);
 char nibble_to_hex(uint8_t nibble);
 /* printf-like log over the TX ring. Specifiers: %d(u8) %i(u16) %l(u32) decimal,
