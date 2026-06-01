@@ -33,9 +33,9 @@ extern const char s_msg_rec_dotp[];    /* 0x0801E0CC "\nRecord DOTP Mode\r"     
 extern const char s_msg_rec_dutp[];    /* 0x0801E0E0 "\nRecord DUTP Mode\r"        (sel 0x15) */
 
 void hal_bringup(void);                       /* 0x080114dc */
-void log_print(uint8_t channel, const char *fmt); /* 0x08012fa8 */
+/* log_print now declared in powerbankware.h (variadic, src/uart.c) */
 void FUN_0801156c(void);                      /* secondary init */
-void FUN_08016898(void);                      /* per-pass refresh (also pre-loop) */
+/* uart_flush (0x08016898) now in uart.c via the header */
 void FUN_0800f258(void);                      /* state 0x17/0x18 entry */
 void FUN_080093ac(void);                      /* cal 0x12 path */
 void FUN_08009598(void);                      /* cal 0x13 path */
@@ -44,8 +44,8 @@ void FUN_0800ac44(void);                      /* cal 0x15 path */
 void FUN_08009aa4(int arg);                   /* normal boot, low counter */
 void FUN_0800ede0(uint8_t mode);              /* normal boot, high counter */
 void FUN_0800bc18(void);                      /* alt path (mode bit 0/1/2 set) */
-void FUN_08016688(void);                      /* tick A */
-void FUN_080167f0(void);                      /* tick B */
+void FUN_08016688(void);                      /* tick A — RX/command processor (pending) */
+/* uart_tx_isr (0x080167f0) now in uart.c via the header */
 void FUN_08010360(void);                      /* state 0 / out-of-range default */
 
 /* Per-state routines, indexed by s_state (switch targets from the OEM jump
@@ -71,7 +71,7 @@ int main(void)
     hal_bringup();
     FUN_0801156c();
     log_print(2, s_msg_iam_ap);
-    FUN_08016898();
+    uart_flush();
 
     if (s_idblk[1] == 6 && (s_idblk[2] == 0x17 || s_idblk[2] == 0x18)) {
         /* factory/aging entry */
@@ -115,7 +115,7 @@ int main(void)
     }
 
 loop:
-    FUN_08016898();
+    uart_flush();
     for (;;) {
         if ((*s_mode & 7) == 0) {        /* mode bits 0,1,2 all clear */
             switch (*s_state) {
@@ -150,6 +150,6 @@ loop:
             FUN_0800bc18();
         }
         FUN_08016688();
-        FUN_080167f0();
+        uart_tx_isr();
     }
 }

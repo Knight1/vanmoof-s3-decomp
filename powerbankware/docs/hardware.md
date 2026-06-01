@@ -11,12 +11,18 @@ the smaller F0 parts; F091xC is the fit.
 | Peripheral | Base | Evidence |
 | --- | --- | --- |
 | FLASH | `0x40022000` | HAL init sets `+0x00 |= 0x10` (ACR) |
-| SYSCFG | `0x40010000` | `+0x00 |= 3` → MEM_MODE=3 (SRAM remap) |
-| RCC | `0x40021000` | `+0x18`, `+0x1C` clock enables |
+| SYSCFG | `0x40010000` | `+0x00 |= 3` → MEM_MODE=3 (SRAM remap); EXTICR1 @ `+0x08` |
+| EXTI | `0x40010400` | IMR `+0x00` / EMR `+0x04` / RTSR `+0x08` / FTSR `+0x0C` (gpio_pin_config) |
+| RCC | `0x40021000` | APB2ENR `+0x18` (SYSCFG en, bit0), AHBENR for GPIO clocks |
 | RTC | `0x40002800` | HAL RTC handle instance |
 | USART1 | `0x40013800` | (F0 APB2) — Modbus link, TBC |
 | DAC | `0x40007400` | (F0 APB1) — Vout regulation, TBC |
-| GPIO | `0x48000000`? | F0 AHB convention — **confirm against pin code** |
+| GPIO | `0x48000000` | **confirmed** A=`…000` B=`…400` C=`…800` D=`…c00` E=`…1000`, 0x400 stride (gpio_pin_config port→EXTICR map) |
+
+> **F0 vs L0 register-offset trap.** powerbankware (F091) and batteryware
+> (L072) share the GPIO/EXTI *layout* but differ on RCC offsets: F0 puts
+> `APB2ENR` at RCC+`0x18` where L0 uses `0x34`. Always resolve the literal
+> pool from *this* image; do not copy register offsets from batteryware.
 
 ## SRAM globals (from main @ `0x0800f52c`)
 
@@ -28,6 +34,28 @@ the smaller F0 parts; F091xC is the fit.
 | `0x20000724` | version / ID block (main reads `+1`, `+2`) |
 | `0x20000218` | value/limit block (cal threshold checks: 0x51 / 0x2c / 99 / 0x18) |
 | `0x200003CE` / `0x200006A0` | boot-delay counter vs `0x752F` threshold |
+
+## FEDL5236 AFE wiring (confirmed from the SPI driver + init)
+
+| Signal | Pin | Notes |
+| --- | --- | --- |
+| SPI CS | GPIOA **PA15** (0x8000) | driven low per transfer, raised in TxRxCpltCallback |
+| (aux) | GPIOA **PA8** (0x100) | raised alongside CS in TxRxCpltCallback |
+| AFE INT / busy | GPIOC **PC13** (0x2000) | held high while converting; init polls it |
+| Wake pulse | GPIOB **PB2** (0x4) + **PB10** (0x400) | pulsed in `fedl5236_wakeup` |
+| TS-fault output | GPIOB **PB12** (0x1000) | raised then cleared on the power-down/halt path |
+| Power-on handshake | GPIOA **PA11** (0x800) | init waits for it high before clearing PB12 |
+
+SPI HAL handle @ SRAM `0x20000634`; ms tick counter @ `0x20002614`; IWDG-kick
+pointer cell @ `0x200006ac`; SysTick software flag byte @ `0x2000077c` (bit 0
+= 1 ms, bit 2 = periodic). FEDL5236 frame CRC-8 is a runtime-installed routine
+(pointer @ `0x200000c4`, populated by the reset `.data` copy).
+
+Key BMS SRAM cells (from `fedl5236_initialize`): total voltage `0x20000418`,
+cell-voltage table `0x20000380[10]`, cell sum `0x200003ce`, max/min
+`0x200003a2`/`0x200003d2` (+u8 indices `0x20000430`/`0x200003c4`), charger
+voltage `0x2000042c`, TS0/TS1 temps `0x20000219`/`0x2000021a`, current state
+`0x200005ac`, mode word `0x200006a0`.
 
 ## Power-path layer (powerbank-specific — strings)
 
