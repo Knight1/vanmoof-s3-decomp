@@ -135,8 +135,15 @@ Two payload modes by command word `cw`:
 
 When the control word `0x20002C00` selects command mode, printable bytes are
 *also* accumulated into a line buffer (`0x20004510`, max 0x2c) and dispatched
-on CR to `command_parser` (FUN_08009ac4), a 23-entry name table: `who`, `now`,
-`pf`, `reset_bms`, `df`, `upgrade_ap`, `upgrade_bl`, `into_bootloader`,
-`chg_cal_set/get`, `dsg_cal_set/get`, `reset_esn`, `log_clear`,
-`ts0/1/2_set/get`, `ts_reset`, `fcc`, `soc`. When that word selects
-bootloader mode instead, bytes go to the YMODEM receiver (`ymodem_receive`).
+on CR to `command_parser` (FUN_08009ac4), a 23-entry name table: `Who?`, `Now?`,
+`PF`, `Reset BMS`, `DF`, `Upgrade AP`, `Upgrade BL`, `Into BootLoader`,
+`CHG CAL`/`CHG CAL?`, `DSG CAL`/`DSG CAL?`, `Reset ESN`, `Log Clear`,
+`TS0/1/2`(+`?`), `TS Reset`, `FCC`, `SOC`. After matching, `command_parser`
+tail-jumps (`mov pc`) into a 24-pointer dispatch table at runtime
+`0x08017FD8` (file `0x17fd8` in `bmsv007.bin`; Ghidra `0x08012FD8` via the
+−0x5000 runtime/Ghidra offset). The handlers run in `command_parser`'s own
+frame. The `Reset BMS` handler (action 4, runtime `0x0800ef20`) arms a reset
+flag at SRAM `0x20002C48`, persists it to data-EEPROM `0x08080001`, prints
+`"\nOK\r"`, flushes the UART, then `NVIC_SystemReset()`
+(`SCB->AIRCR = 0x05FA0004`). When the control word selects bootloader mode
+instead, bytes go to the YMODEM receiver (`ymodem_receive`).

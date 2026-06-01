@@ -158,10 +158,32 @@ void cmd_send_8byte(void)
  *   Failed match calls `veneer_a6aa()` then continues anyway — that
  *   thunk is OEM logging, not a fatal abort.
  *
- * Dispatch: `jump_table[best_action](...)`. OEM jump table lives at
- *   0x08017FD8 — past the end of this .bin (image size 0x15610), so
- *   we stub the dispatch with NULL pointers. The 23 entries here
- *   exactly mirror the OEM 47-byte slots at 0x08012B9C..0x08012FD5.
+ * Dispatch: `jump_table[best_action]()` via a `mov pc` tail-jump (NOT a
+ *   call) — each handler continues in command_parser's own frame and
+ *   reads its locals (e.g. value_pos at [r7+0x64]). The OEM jump table is
+ *   24 word pointers at *runtime* 0x08017FD8 (= file offset 0x17fd8 in
+ *   bmsv007.bin, Ghidra 0x08012FD8 — the -0x5000 runtime/Ghidra offset
+ *   documented in progress.md). It is fully present in the image; the
+ *   23 name slots here mirror the OEM 47-byte entries at Ghidra
+ *   0x08012B9C..0x08012FD5 (runtime 0x08017B9C..). Recovered handlers
+ *   (runtime addr; subtract 0x5000 for Ghidra):
+ *     [0] 0x0800f6e0 nop_a6e0 (unused/dispatch-error sink)
+ *     [1] 0x0800edf8  [2] 0x0800ee3c  [3] 0x0800eecc
+ *     [4] 0x0800ef20  "Reset BMS": persist reset flag, "\nOK\r", reboot
+ *     [5] 0x0800ef50  [6] 0x0800f01c  [7] 0x0800f036  [8] 0x0800f050
+ *     [9] 0x0800f0e8 ... (entries 10..23 sit past bmsv007.bin's 0x18000
+ *     end and cannot be read from this dump).
+ *
+ *   jump[4] (Reset BMS) decompiles to:
+ *     if (value_pos != 0) veneer_a6be();          // takes no =VALUE
+ *     *(uint8_t*)0x20002C48 = 1;                   // arm reset flag
+ *     memcmp_verify((char*)0x08080001, 1, (char*)0x20002C48); // -> EEPROM
+ *     uart_printf("\nOK\r"); uart_tx_flush();
+ *     nvic_system_reset_v3();                      // SCB->AIRCR=0x05FA0004
+ *
+ *   These handlers share command_parser's frame, so they are not yet
+ *   modelled as standalone C functions — the table below stays NULL
+ *   until the frame-sharing dispatch is reworked.
  */
 static const cmd_entry_t s_cmd_table[] = {
     {  1,  4, cmd_who             },  /* 0x08012b9c */
@@ -191,10 +213,11 @@ static const cmd_entry_t s_cmd_table[] = {
 
 #define CMD_TABLE_LEN  (sizeof(s_cmd_table) / sizeof(s_cmd_table[0]))
 
-/* Jump table — OEM stores 24 function pointers at flash 0x08017FD8,
- * indexed by entry.idx. That address is past the end of this .bin
- * (0x15610), so the table contents are unknown to this decomp.
- * Indices 1..23 are valid; 0 is unused. */
+/* Jump table — OEM stores 24 function pointers at runtime 0x08017FD8
+ * (file offset 0x17fd8, present in the image — see the dispatch note
+ * above), indexed by entry.idx. Stubbed NULL here because the handlers
+ * are frame-sharing continuations of command_parser, not standalone
+ * functions. Indices 1..23 are valid; 0 is the dispatch-error sink. */
 static void (* const s_jump_table[24])(uint32_t, int, uint8_t) = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
