@@ -104,6 +104,15 @@ void bms_state_5(void);
 void bms_state_fault(void);          /* states 23..26 */
 void bms_state_shipping_wait(void);  /* state 27 */
 
+/* ---- Per-state super-loop routines, states 1..22 (src/states.c) -------- */
+void bms_state_1(void);  void bms_state_2(void);  void bms_state_3(void);
+void bms_state_4(void);  void bms_state_6(void);  void bms_state_7(void);
+void bms_state_8(void);  void bms_state_9(void);  void bms_state_10(void);
+void bms_state_11(void); void bms_state_12(void); void bms_state_13(void);
+void bms_state_14(void); void bms_state_15(void); void bms_state_16(void);
+void bms_state_17(void); void bms_state_18(void); void bms_state_19(void);
+void bms_state_20(void); void bms_state_21(void); void bms_state_22(void);
+
 /* ---- BMS state/config (src/bms.c) -------------------------------------- */
 void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */
 void bms_config_reset(void);       /* Preset_BMS_System_Value */

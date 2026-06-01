@@ -82,3 +82,21 @@ const char s_charger_v_mv[] = "\nCharger Voltage = %i mV\r";     /* 0x0801E55C *
 const char s_extio_busy[]    = "\nExtend_IO_Process()--> SPI Busy\r";    /* 0x0801E484 */
 const char s_extio_retry[]   = "\nExtend_IO_Process()--> Retry Error\r"; /* 0x0801E4A8 */
 const char s_extio_timeout[] = "\nExtend_IO_Process()--> SPI Timeout\r"; /* 0x0801E4D0 */
+
+/* Per-state super-loop handler log strings (src/states.c). */
+const char s_no_load_d2[]            = "\nNo Load -> %d\r";                    /* 0x0801DB58 */
+const char s_no_load_bypass_off[]    = "\nNo Load -> ByPass Off\r";           /* 0x0801DB68 */
+const char s_charger_absent[]        = "\nCharger Absent\r";                  /* 0x0801DB80 */
+const char s_charger_voltage_l[]     = "\nCharger_Voltage = %l\r";            /* 0x0801DBF4 */
+const char s_charger_load_exist[]    = "\nCharger In & Load Exist -> ByPass On\r";   /* 0x0801DC0C */
+const char s_charger_load_absent[]   = "\nCharger In & Load Absent -> ByPass Off\r"; /* 0x0801DC34 */
+const char s_no_load_d[]             = "\nNo Load -> %d\r";                   /* 0x0801DC60 */
+const char s_dd_on[]                 = "\nDD On\r";                           /* 0x0801DC70 */
+const char s_vout_under_20v_3s[]     = "\nVout <20V over 3Sec\r";             /* 0x0801DC78 */
+const char s_dac_over_range[]        = "\nDAC Over Range!!\r";                /* 0x0801DC90 */
+const char s_vout_under_30v_30min[]  = "\nVout <30V over 30min.\r";           /* 0x0801DCA4 */
+const char s_state6_charge_mode[]    = "\nShipping_Mode_Process() --> KeyPressed\r"; /* 0x0801E168 */
+const char s_state6_charger_present[]= "\nCharger Plugin\r";                  /* 0x0801E194 */
+const char s_state6_powerdown_a[]    = "\nFEDL5236_PowerDown_Start()\r";      /* 0x0801E1A8 */
+const char s_state6_powerdown_b[]    = "\nFEDL5236_PowerDown_Finish()\r";     /* 0x0801E1C8 */
+const char s_state6_progress[]       = "\nShipping Count -> %d\r";            /* 0x0801E1E8 */

@@ -116,10 +116,10 @@ void bms_state_shipping_wait(void)
  * from the OEM. The AFE per-step handlers (jump tables 0x801e598 / 0x801e5c8)
  * and the cell-voltage capture (FUN_0800c6ec) stay forward-declared.
  */
-extern void bms_afe_cell_step(uint8_t step);     /* jump table 0x801e598 */
-extern void bms_afe_charger_step(uint8_t step);  /* jump table 0x801e5c8 */
-extern void cell_voltage_scan(void);             /* FUN_0800c6ec */
-extern void afe_reset_return(void);              /* FUN_0800d526 (empty) */
+static void bms_afe_cell_step(uint8_t step);     /* cell-read sub-states (jt 0x801e598) */
+static void bms_afe_charger_step(uint8_t step);  /* AFE channel-select steps (jt 0x801e5c8) */
+void cell_voltage_scan(uint8_t status);          /* FUN_0800c6ec — current/coulomb integrator */
+extern void afe_reset_return(void);              /* FUN_0800d526 (empty epilogue) */
 /* The protection cascade + current/coulomb counter + temperature + charger
  * step (OEM 0x0800bd0e..end). Safety-critical: it sets the MOSFET-cutoff fault
  * bits in 0x20000410 from the exact OEM thresholds/debounce limits, with
@@ -162,13 +162,20 @@ void bms_core_update(void)
         fedl5236_command_write(3, 0);
     }
     if ((status & 1) == 0) {
-        cell_voltage_scan();
+        cell_voltage_scan(status);
     }
 
-    /* AFE cell-measurement sub-state dispatch. */
-    if (*(volatile uint8_t *)0x2000041a < 0xc) {
-        bms_afe_cell_step(*(volatile uint8_t *)0x2000041a);
-        return;
+    /* AFE cell-measurement sub-state dispatch (jump table 0x801e598). Sub-states
+     * 2..10 each read one cell and return; sub-state 11 reads the last cell then
+     * falls through to the full aggregate update; sub-states 0/1 (and any >=0xc)
+     * alias straight to the full update — exactly the OEM jump table where
+     * jt[0]=jt[1] point at the full-update entry. */
+    uint8_t ss = *(volatile uint8_t *)0x2000041a;
+    if (ss >= 2 && ss < 0xc) {
+        bms_afe_cell_step(ss);
+        if (ss < 11) {
+            return;
+        }
     }
 
     /* --- cell sum / max / min --- */
@@ -305,6 +312,74 @@ static void bms_temp_step(uint8_t status)
     fedl5236_command_write(8, 0x91);
 }
 
+/* FUN_0800e2d4 — convert the latest AFE register sample (rx[2..3], 12-bit ADC)
+ * to millivolts: raw * 5000 / 4095. */
+static uint16_t afe_adc_to_mv(void)
+{
+    volatile uint8_t * const rx = (volatile uint8_t *)0x20000614;
+    uint32_t raw = (uint32_t)(rx[2] | (rx[3] << 8));
+    return (uint16_t)((5000u * raw) / 4095u);
+}
+
+/* bms_afe_cell_step — the cell-measurement sub-state handlers (OEM jump table
+ * 0x801e598, cases inside FUN_0800bc18 at 0x0800bcf0..). Sub-state `step`
+ * (2..11) reads cell `step-2` from AFE register 0x1a+2*(step-2), captures it
+ * (gated by the same scan rule as the aggregate scan), then for steps 2..10
+ * advances the sub-state and selects the next AFE channel; step 11 reads the
+ * last cell only and the caller falls through to the full update. */
+static void bms_afe_cell_step(uint8_t step)
+{
+    static const uint8_t rd_reg[12] =
+        { 0, 0, 0x1a, 0x1c, 0x1e, 0x20, 0x22, 0x24, 0x26, 0x28, 0x2a, 0x2c };
+    volatile uint16_t * const cells = (volatile uint16_t *)0x20000380;
+    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
+
+    if (fedl5236_read_data(rd_reg[step], 2) != 0) {
+        int scan = ((*mode & 0x20) != 0) ? (*(volatile uint8_t *)0x2000041c == 2) : 1;
+        if (scan) {
+            cells[step - 2] = afe_adc_to_mv();
+        }
+    }
+    if (step >= 11) {
+        return;                                  /* falls through to the full update */
+    }
+    (*(volatile uint8_t *)0x2000041a)++;
+    switch (step) {
+    case 2:  fedl5236_command_write(5, 0x85); break;
+    case 3:  fedl5236_command_write(5, 0x86); break;
+    case 4:  fedl5236_command_write(8, 0x91); break;
+    case 5:  fedl5236_command_write(5, 0x88); break;
+    case 6:  fedl5236_command_write(5, 0x89); break;
+    case 7:  fedl5236_command_write(8, 0x91); break;
+    case 8:  fedl5236_command_write(5, 0x8b); break;
+    case 9:  fedl5236_command_write(8, 0x91); break;
+    case 10: fedl5236_command_write(8, 0x91); break;
+    default: break;
+    }
+}
+
+/* bms_afe_charger_step — the AFE channel-select sub-state handlers (OEM jump
+ * table 0x801e5c8, cases at 0x0800d4ae..). Each issues the command that selects
+ * the next charger/cell channel for the FEDL5236 to convert, then returns. */
+static void bms_afe_charger_step(uint8_t step)
+{
+    switch (step) {
+    case 0:  fedl5236_command_write(8, 0x91); break;
+    case 1:  fedl5236_command_write(7, 0x81); break;
+    case 2:  fedl5236_command_write(5, 0x84); break;
+    case 3:  fedl5236_command_write(5, 0x85); break;
+    case 4:  fedl5236_command_write(5, 0x86); break;
+    case 5:  fedl5236_command_write(5, 0x87); break;
+    case 6:  fedl5236_command_write(5, 0x88); break;
+    case 7:  fedl5236_command_write(5, 0x89); break;
+    case 8:  fedl5236_command_write(5, 0x8a); break;
+    case 9:  fedl5236_command_write(5, 0x8b); break;
+    case 10: fedl5236_command_write(5, 0x8c); break;
+    case 11: fedl5236_command_write(5, 0x8d); break;
+    default: break;
+    }
+}
+
 /* ----------------------------------------------------------------------- *
  * bms_periodic_update — the tail of OEM FUN_0800bc18 (0x0800bd0e..end): the
  * safety-critical protection cascade, the current → coulomb-counter / RSOC
@@ -323,18 +398,11 @@ static void bms_temp_step(uint8_t status)
  */
 void bms_periodic_update(uint8_t status)
 {
-    volatile uint8_t  * const rx   = (volatile uint8_t  *)0x20000614;
     volatile uint16_t * const vmax = (volatile uint16_t *)0x200003a2;
     volatile uint16_t * const vmin = (volatile uint16_t *)0x200003d2;
     volatile uint32_t * const dsg_i = (volatile uint32_t *)0x20000420;
     volatile uint32_t * const chg_i = (volatile uint32_t *)0x200003a8;
-    volatile int32_t  * const avg  = (volatile int32_t  *)0x20000424;
-    volatile uint32_t * const inst = (volatile uint32_t *)0x2000039c;
-    volatile int32_t  * const ring = (volatile int32_t  *)0x200003ac;
     volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const chgcal = (volatile uint16_t *)0x2000023c;
-    volatile uint16_t * const dsgcal = (volatile uint16_t *)0x2000023e;
-    volatile uint32_t * const rsoc = (volatile uint32_t *)0x20000250;
 
     /* --- OVP1: max cell > 4249 mV (60-tick set) / < 4150 mV (6-tick clear) -- */
     if (*vmax > 0x1099) {
@@ -467,6 +535,32 @@ void bms_periodic_update(uint8_t status)
         }
         *(volatile uint32_t *)((uint32_t)i * 4 + 0x200003d4) = 0;
     }
+
+    cell_voltage_scan(status);
+}
+
+/* ----------------------------------------------------------------------- *
+ * cell_voltage_scan — OEM FUN_0800c6ec, the current/coulomb integrator. It is
+ * the exact shared tail of the BMS core update (byte-identical to the inline
+ * code at FUN_0800bc18 0x0800bd0e..end, same literal pool) and is also called
+ * directly from bms_core_update when AFE status bit0 is clear. (The OEM name is
+ * a misnomer — it integrates current, it does not scan cell voltages.) Captures
+ * the zero-current offset, scales the instantaneous current ((|sample-offset|*
+ * 69000)>>16), runs the 4-deep moving average + charge/discharge calibration +
+ * 40-sample RSOC accumulation, the charge/discharge over-current protection,
+ * then the temperature/charger step. */
+void cell_voltage_scan(uint8_t status)
+{
+    volatile uint8_t  * const rx   = (volatile uint8_t  *)0x20000614;
+    volatile uint32_t * const dsg_i = (volatile uint32_t *)0x20000420;
+    volatile uint32_t * const chg_i = (volatile uint32_t *)0x200003a8;
+    volatile int32_t  * const avg  = (volatile int32_t  *)0x20000424;
+    volatile uint32_t * const inst = (volatile uint32_t *)0x2000039c;
+    volatile int32_t  * const ring = (volatile int32_t  *)0x200003ac;
+    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+    volatile uint16_t * const chgcal = (volatile uint16_t *)0x2000023c;
+    volatile uint16_t * const dsgcal = (volatile uint16_t *)0x2000023e;
+    volatile uint32_t * const rsoc = (volatile uint32_t *)0x20000250;
 
     if (!(status & 2)) {
         bms_temp_step(status);

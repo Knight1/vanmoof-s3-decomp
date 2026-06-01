@@ -57,6 +57,42 @@ cell-voltage table `0x20000380[10]`, cell sum `0x200003ce`, max/min
 voltage `0x2000042c`, TS0/TS1 temps `0x20000219`/`0x2000021a`, current state
 `0x200005ac`, mode word `0x200006a0`.
 
+### BMS fault register `0x20000410` (u16) — from `bms_periodic_update`
+
+The protection cascade debounces each fault into this bitfield. **The bit
+layout differs from batteryware** (there bit0=UVP1/bit2=OVP1/bit10=imbalance) —
+derive from *this* image, never reuse batteryware's names:
+
+| Bit | Mask | Fault | Set when | Clear when | Debounce |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `0x001` | OVP1 | max cell > 4249 mV | < 4150 mV | 60 set / 6 clr |
+| 1 | `0x002` | OVP2 | max cell > 4299 mV | < 4150 mV | 6 / 6 |
+| 2 | `0x004` | UVP1 | min cell ≤ 3000 mV | > 3299 mV | 60 / 6 |
+| 3 | `0x008` | UVP2 | min cell < 2801 mV | > 3299 mV | 6 / 6 |
+| 4 | `0x010` | COCP1 | charge I > 4499 (·mA) | I < 200, MOS<3 | 60 / 90 |
+| 5 | `0x020` | COCP2 | charge I > 5999 | I < 200, MOS<3 | 6 / 90 |
+| 6 | `0x040` | DOCP1 | discharge I > 7999 | I < 200 | 60 / 90 |
+| 7 | `0x080` | DOCP2 | discharge I > 9999 | I < 200 | 6 / 90 |
+| 10 | `0x400` | TS/temperature | AFE status rx[3]&2 | discharge I < 200 | — / 90 |
+| 11 | `0x800` | cell imbalance | max>3599 & (max−min)≥501 mV | — | 100 |
+
+Hard discharge (>199) auto-clears OVP1/2; hard charge (>199) auto-clears UVP1/2
+(opposite-direction current relieves the voltage condition). SET branches reset
+their debounce counter when they fire; CLEAR branches do not.
+
+### Coulomb counter / current SRAM cells (`bms_periodic_update`)
+
+Current = `(|AFE-reg-0x2e − offset| · 69000) >> 16`; offset cache `0x20000418`.
+Sign in `0x2000039c` (neg=discharge), 4-deep moving average `0x200003ac[4]` →
+signed avg `0x20000424`; discharge magnitude `0x20000420`, charge magnitude
+`0x200003a8`. CHG cal `0x2000023c`→CFG+0x58, DSG cal `0x2000023e`→CFG+0x56
+(**applied crossed**: CHG cal in the discharge branch, DSG cal in charge —
+OEM quirk). 40-sample RSOC accumulator `0x20000250`, divisor `0x20000228`,
+sample counter `0x2000022c`. Peak currents → CFG+0x74 (charge) / CFG+0x76
+(discharge), `/10`, 20-tick debounce. Charger-detect round-robin array
+`0x200003d4[15]` (u32) → charger voltage `0x2000042c` (held > 19999, dropped
+after 900 ticks). Temp peaks → CFG+0x78/+0x79; TS cal `0x20000205`/`0x2000021b`.
+
 ## Power-path layer (powerbank-specific — strings)
 
 Output stage absent from batteryware: **bypass FET** (`ByPass On/Off`),

@@ -48,21 +48,8 @@ void FUN_08009aa4(int arg);                   /* normal boot, low counter */
 /* uart_tx_isr (0x080167f0) now in uart.c via the header */
 
 
-/* Per-state routines, indexed by s_state (switch targets from the OEM jump
- * table @ 0x0801E6EC). Addresses retained in comments for later naming. */
-void FUN_0801010c(void); /* 1  */  void FUN_08009600(void); /* 2  */
-void FUN_0800acac(void); /* 3  */  void FUN_0800e9bc(void); /* 4  */
-  void FUN_08010f50(void); /* 6  */
-void FUN_080103c8(void); /* 7  */  void FUN_08010580(void); /* 8  */
-void FUN_08015b1c(void); /* 9  */  void FUN_08015cd0(void); /* 10 */
-void FUN_08008e88(void); /* 11 */  void FUN_08009058(void); /* 12 */
-void FUN_0800a5ac(void); /* 13 */  void FUN_0800a77c(void); /* 14 */
-void FUN_08010738(void); /* 15 */  void FUN_080108a0(void); /* 16 */
-void FUN_08010a3c(void); /* 17 */  void FUN_08009228(void); /* 18 */
-void FUN_08009414(void); /* 19 */  void FUN_0800a94c(void); /* 20 */
-void FUN_0800ab00(void); /* 21 */  void FUN_0800f33c(void); /* 22 */
-
-  
+/* Per-state routines, states 1..22, are declared in powerbankware.h
+ * (src/states.c) and dispatched by the switch below. */
 
 int main(void)
 {
@@ -119,28 +106,28 @@ loop:
     for (;;) {
         if ((*s_mode & 7) == 0) {        /* mode bits 0,1,2 all clear */
             switch (*s_state) {
-            case 1:  FUN_0801010c(); break;
-            case 2:  FUN_08009600(); break;
-            case 3:  FUN_0800acac(); break;
-            case 4:  FUN_0800e9bc(); break;
-            case 5:  bms_state_5(); break;
-            case 6:  FUN_08010f50(); break;
-            case 7:  FUN_080103c8(); break;
-            case 8:  FUN_08010580(); break;
-            case 9:  FUN_08015b1c(); break;
-            case 10: FUN_08015cd0(); break;
-            case 11: FUN_08008e88(); break;
-            case 12: FUN_08009058(); break;
-            case 13: FUN_0800a5ac(); break;
-            case 14: FUN_0800a77c(); break;
-            case 15: FUN_08010738(); break;
-            case 16: FUN_080108a0(); break;
-            case 17: FUN_08010a3c(); break;
-            case 18: FUN_08009228(); break;
-            case 19: FUN_08009414(); break;
-            case 20: FUN_0800a94c(); break;
-            case 21: FUN_0800ab00(); break;
-            case 22: FUN_0800f33c(); break;
+            case 1:  bms_state_1();  break;
+            case 2:  bms_state_2();  break;
+            case 3:  bms_state_3();  break;
+            case 4:  bms_state_4();  break;
+            case 5:  bms_state_5();  break;
+            case 6:  bms_state_6();  break;
+            case 7:  bms_state_7();  break;
+            case 8:  bms_state_8();  break;
+            case 9:  bms_state_9();  break;
+            case 10: bms_state_10(); break;
+            case 11: bms_state_11(); break;
+            case 12: bms_state_12(); break;
+            case 13: bms_state_13(); break;
+            case 14: bms_state_14(); break;
+            case 15: bms_state_15(); break;
+            case 16: bms_state_16(); break;
+            case 17: bms_state_17(); break;
+            case 18: bms_state_18(); break;
+            case 19: bms_state_19(); break;
+            case 20: bms_state_20(); break;
+            case 21: bms_state_21(); break;
+            case 22: bms_state_22(); break;
             case 23: case 24: case 25: bms_state_fault(); break;
             case 26: bms_state_fault(); break;
             case 27: bms_state_shipping_wait(); break;
