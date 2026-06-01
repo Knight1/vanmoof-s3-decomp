@@ -100,3 +100,23 @@ const char s_state6_charger_present[]= "\nCharger Plugin\r";                  /*
 const char s_state6_powerdown_a[]    = "\nFEDL5236_PowerDown_Start()\r";      /* 0x0801E1A8 */
 const char s_state6_powerdown_b[]    = "\nFEDL5236_PowerDown_Finish()\r";     /* 0x0801E1C8 */
 const char s_state6_progress[]       = "\nShipping Count -> %d\r";            /* 0x0801E1E8 */
+
+/* Power-path output stage (src/vout.c). */
+const char s_dac_stop[]  = "\nDAC_Stop()\r";       /* 0x0801DBD0 */
+const char s_dac_value[] = "\nDAC_Value= %l mV\r"; /* 0x0801DBE0 */
+
+/* Boot operating-entry bypass states (src/transitions.c). */
+const char s_bypass_on[]           = "\nByPass On\r";                  /* 0x0801DB94 */
+const char s_bypass_off_batt_low[] = "\nByPass Off --> Battery Low\r"; /* 0x0801DBA0 */
+const char s_bypass_off[]          = "\nByPass Off\r";                 /* 0x0801DBC0 */
+
+/* Charger-attach AFE refresh (src/charger.c). */
+const char s_fedl_proc_busy[]    = "\nFEDL5236_Process()--> SPI Busy\r";          /* 0x0801DCBC */
+const char s_fedl_proc_fet_err[] = "\nFEDL5236_Process()--> FET Control Error\r"; /* 0x0801DCE0 */
+
+/* Periodic status frame (src/telemetry.c). */
+const char s_send_sn[] = "\nSend SN = %x %x %x %x %x, Version = %w, SOC = %d, SOH = %d, CycleCount = %i, State = %x\r"; /* 0x0801E000 */
+
+/* State-machine transition trace (src/dispatch.c). */
+const char s_new_state[]  = "\nNew State = %d\r";      /* 0x0801E0F4 */
+const char s_prev_state[] = "\nPrevious State = %d\r"; /* 0x0801E108 */

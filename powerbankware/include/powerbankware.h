@@ -113,6 +113,54 @@ void bms_state_14(void); void bms_state_15(void); void bms_state_16(void);
 void bms_state_17(void); void bms_state_18(void); void bms_state_19(void);
 void bms_state_20(void); void bms_state_21(void); void bms_state_22(void);
 
+/* ---- BMS state-entry / protection transitions (src/transitions.c) ------ *
+ * Each drives the gate-driver GPIOs and FEDL5236 reg-9 FET byte for a state,
+ * then hands off to the state-machine dispatcher. */
+void bms_enter_state_b(void);   void bms_enter_state_c(void);
+void bms_enter_cotp(void);      void bms_enter_cutp(void);
+void bms_enter_state_d(void);   void bms_enter_state_e(void);
+void bms_enter_dotp(void);      void bms_enter_dutp(void);
+void bms_enter_state_16(void);  void bms_enter_afe_latch(void);
+void bms_enter_ovp1(void);      void bms_enter_ovp2(void);
+void bms_enter_uvp1(void);      void bms_enter_uvp2(void);
+void bms_enter_idle3(void);     void bms_enter_ov2_record(void);
+void boot_enter_operating(int from_recovery);
+void bms_enter_afe_fault(void); /* AFE-fault latch entry (state 0x1B) */
+void bms_state_noop(void);
+
+/* ---- State-machine transition dispatcher (src/dispatch.c) -------------- */
+void bms_state_enter(int state); /* commit a state: park power path + trace */
+
+/* ---- Power-path output stage (src/vout.c) ------------------------------ */
+void bypass_fet_on(void);       /* PA12 high + mode bit10 */
+void bypass_fet_off(void);      /* PA12 low  + clear mode bit10 */
+void vout_set_dac(uint16_t target);
+void vout_bypass_off(void);
+void vout_enable(void);
+void vout_dac_apply(void);       /* push staged set-point to TIM/DAC compare */
+
+/* ---- Slow-tick alarm-debounce monitors (src/alarms.c) ------------------ */
+void alarm_scan_b0(void); void alarm_scan_b1(void); void alarm_scan_b2(void);
+void alarm_scan_b3(void); void alarm_scan_b4(void); void alarm_scan_b5(void);
+void alarm_scan_b6(void); void alarm_scan_b7(void);
+
+/* ---- Fuel gauge (src/coulomb.c, src/fuelgauge.c) ----------------------- */
+void coulomb_integrate(uint32_t current);  /* signed sample into capacity counters */
+void coulomb_discharge_sub(uint32_t mag);  /* drain remaining capacity, clamp at 0 */
+void cell_balance_update(void);            /* FEDL5236 balance governor */
+void bms_measure_update(void);             /* ADC scaling + SOC-index lookup */
+void bms_measure_prime(void);              /* first-iteration AFE priming */
+
+/* ---- Charger / telemetry / timer (src/charger.c, telemetry.c, timer.c) - */
+void charger_afe_refresh(void);            /* charger-attach AFE re-init handshake */
+void status_frame_emit(void);              /* periodic status frame + log */
+void crc16_append(volatile uint8_t *buf, int len); /* Modbus CRC-16, stored LE */
+uint32_t timer_start_it(uint32_t *handle); /* arm a timer (CR1.CEN + DIER.UIE) */
+
+/* ---- System reset (src/reset.c) ---------------------------------------- */
+void system_reset_hang(void);
+void system_reset_request(void);
+
 /* ---- BMS state/config (src/bms.c) -------------------------------------- */
 void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */
 void bms_config_reset(void);       /* Preset_BMS_System_Value */

@@ -6,15 +6,12 @@
  * the periodic tick processing keyed off the SysTick flag byte 0x2000077c:
  *   bit0  1 ms      bit1  slower     bit2  IWDG kick     bit3  1 s uptime
  *
- * The heavy shared callees (the BMS core, the AFE status poll, the state-machine
- * (re)init) stay forward-declared until their own passes.
+ * The heavy shared callees (the BMS core, the AFE status poll) stay forward-
+ * declared until their own passes; the state-machine dispatcher is now real C
+ * (`bms_state_enter`, src/dispatch.c).
  */
 
 static volatile uint8_t * const s_tick = (volatile uint8_t *)0x2000077c;
-
-extern void FUN_0800bad4(void);   /* FEDL5236 status poll (298 B) */
-extern void FUN_0800f7b4(int s);  /* state-machine (re)init */
-extern void FUN_08013be4(void);   /* GPIO pulse */
 
 /* FUN_080100a0 — tail tick: IWDG kick (bit2) and the 1 s uptime counters (bit3). */
 void tick_uptime(void)
@@ -53,11 +50,11 @@ void bms_state_idle(void)
     gpio_bit_write(0x48000000, 0x80, 0);     /* PA7 = 0 */
     gpio_bit_write(0x48000400, 1, 1);        /* PB0 = 1 */
     gpio_bit_write(0x48000400, 0x800, 0);    /* PB11 = 0 */
-    FUN_08013be4();
+    bypass_fet_off();
     gpio_bit_write(0x48000400, 0x200, 0);    /* PB9 = 0 */
     *(volatile uint8_t *)0x20000412 = 0;
     fedl5236_command_write(9, 0);
-    FUN_0800f7b4(1);
+    bms_state_enter(1);
 }
 
 /* State 5 (FUN_08011480) — idle, no work. */
@@ -77,7 +74,7 @@ void bms_state_fault(void)
         *s_tick &= (uint8_t)~2u;
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
     tick_uptime();
 }

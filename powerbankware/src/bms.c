@@ -15,8 +15,6 @@
 static volatile uint16_t * const s_mode = (volatile uint16_t *)0x200006a0;
 
 /* Deeper sub-functions (own passes). */
-extern void FUN_08013be4(void);     /* GPIO toggle (PA12) in the power sequence */
-extern void FUN_0800f7b4(int arg);  /* BMS state-machine init for the given mode */
 extern void FUN_0800a264(void);     /* post-reset value init */
 
 extern const char s_preset_bms[], s_real_soc[], s_shipping_mode2[],
@@ -142,7 +140,7 @@ void bms_config_reset(void)
 /*
  * Enter the bootloader/upgrade mode (`mode` byte). Configures PA9 out / PA10
  * in, drives the FET/charge GPIOs into the safe pattern, resets the AFE
- * (reg 9) and re-arms the state machine via FUN_0800f7b4, then latches the
+ * (reg 9) and re-arms the state machine via bms_state_enter, then latches the
  * requested boot mode at 0x200004b4.
  */
 void boot_mode_enter(uint8_t mode)
@@ -174,11 +172,11 @@ void boot_mode_enter(uint8_t mode)
     gpio_bit_write(0x48000000, 0x80, 1);               /* PA7 = 1 */
     gpio_bit_write(0x48000400, 1, 1);                  /* PB0 = 1 */
     gpio_bit_write(0x48000400, 0x800, 0);              /* PB11 = 0 */
-    FUN_08013be4();
+    bypass_fet_off();
     gpio_bit_write(0x48000400, 0x200, 0);              /* PB9 = 0 */
     *(volatile uint8_t *)0x20000412 = 0;
     fedl5236_command_write(9, 0);
-    FUN_0800f7b4(4);
+    bms_state_enter(4);
     gpio_bit_write(0x48000000, 0x200, 0);              /* PA9 = 0 */
     *(volatile uint8_t *)0x200004b4 = mode;
 }
@@ -194,11 +192,11 @@ void shipping_enter(void)
     gpio_bit_write(0x48000000, 0x80, 0);               /* PA7 = 0 */
     gpio_bit_write(0x48000400, 1, 1);                  /* PB0 = 1 */
     gpio_bit_write(0x48000400, 0x800, 0);              /* PB11 = 0 */
-    FUN_08013be4();
+    bypass_fet_off();
     gpio_bit_write(0x48000400, 0x200, 0);              /* PB9 = 0 */
     *(volatile uint8_t *)0x20000412 = 0;
     fedl5236_command_write(9, 0);
-    FUN_0800f7b4(6);
+    bms_state_enter(6);
     extend_io_update();
 
     log_print(2, s_output_dischg_on);

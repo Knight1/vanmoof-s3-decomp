@@ -36,12 +36,6 @@ void hal_bringup(void);                       /* 0x080114dc */
 /* log_print now declared in powerbankware.h (variadic, src/uart.c) */
 void FUN_0801156c(void);                      /* secondary init */
 /* uart_flush (0x08016898) now in uart.c via the header */
-void FUN_0800f258(void);                      /* state 0x17/0x18 entry */
-void FUN_080093ac(void);                      /* cal 0x12 path */
-void FUN_08009598(void);                      /* cal 0x13 path */
-void FUN_0800aa98(void);                      /* cal 0x14 path */
-void FUN_0800ac44(void);                      /* cal 0x15 path */
-void FUN_08009aa4(int arg);                   /* normal boot, low counter */
 /* boot_mode_enter (0x0800ede0) now in bms.c via the header */
 /* bms_core_update (0x0800bc18) now in state_handlers.c via the header */
 /* uart_rx_handler (0x08016688) now in uart.c via the header */
@@ -64,37 +58,37 @@ int main(void)
         /* factory/aging entry */
         log_print(2, s_idblk[2] == 0x17 ? s_msg_rec_mosfail : s_msg_rec_ov2);
         *s_mode |= 0x2000;
-        FUN_0800f258();
+        bms_enter_ov2_record();
     } else {
         /* calibration command entry (bytes 0x12..0x15), else normal boot */
         if (s_idblk[2] == 0x12) {
             log_print(2, s_msg_rec_cotp);
             if (s_limit[1] > 0x51 || s_limit[2] > 0x51) {
-                FUN_080093ac();
+                bms_enter_cotp();
                 goto loop;
             }
         } else if (s_idblk[2] == 0x13) {
             log_print(2, s_msg_rec_cutp);
             if (s_limit[1] <= 0x2b || s_limit[2] <= 0x2b) {
-                FUN_08009598();
+                bms_enter_cutp();
                 goto loop;
             }
         } else if (s_idblk[2] == 0x14) {
             log_print(2, s_msg_rec_dotp);
             if (s_limit[1] > 0x63 || s_limit[2] > 0x63) {
-                FUN_0800aa98();
+                bms_enter_dotp();
                 goto loop;
             }
         } else if (s_idblk[2] == 0x15) {
             log_print(2, s_msg_rec_dutp);
             if (s_limit[1] <= 0x17 || s_limit[2] <= 0x17) {
-                FUN_0800ac44();
+                bms_enter_dutp();
                 goto loop;
             }
         }
 
         if (*s_bootcnt <= 0x752F) {
-            FUN_08009aa4(0);
+            boot_enter_operating(0);
             goto loop;
         }
         boot_mode = ((*s_mode >> 8) & 1) ? 1 : 3;

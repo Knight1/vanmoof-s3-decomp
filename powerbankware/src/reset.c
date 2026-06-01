@@ -16,3 +16,19 @@ void system_reset_hang(void)
     for (;;) {
     }
 }
+
+/*
+ * system_reset_request — OEM FUN_08010F30.
+ *
+ * The same SYSRESETREQ idiom, reached from a state-handler fault path; a third
+ * compiler-duplicated copy in the image, kept separate to preserve the OEM
+ * call structure.
+ */
+void system_reset_request(void)
+{
+    __DSB();
+    *(volatile uint32_t *)(0xE000ED00u + 0x0C) = 0x05FA0004u;   /* SCB_AIRCR */
+    __DSB();
+    for (;;) {
+    }
+}

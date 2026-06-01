@@ -323,7 +323,6 @@ void modbus_process(uint8_t channel, uint8_t b)
  *           mirror it, and persist.
  * A successful write echoes the 8-byte request frame back as the ack.
  */
-extern void FUN_08013be4(void);                       /* GPIO pulse */
 extern void FUN_080161b4(void);                       /* TX flush (ch 1) */
 
 static void mb_echo_frame(volatile uint8_t *frame)
@@ -348,7 +347,7 @@ void modbus_write_single(uint8_t channel)
         if (addr == 0x80) {
             if ((*(volatile uint16_t *)0x200006a0 & 4) != 0) {   /* mode bit 2 */
                 void * const hrtc = (void *)0x200006f0;
-                FUN_08013be4();
+                bypass_fet_off();
                 gpio_bit_write(0x48000400, 0x200, 0);            /* PB9 = 0 */
                 *(volatile uint8_t *)0x20000412 = 0;
                 fedl5236_command_write(9, 0);

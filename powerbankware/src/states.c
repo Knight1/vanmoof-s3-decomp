@@ -19,43 +19,6 @@ extern const char s_charger_absent[], s_charger_load_absent[], s_charger_load_ex
 
 /* untranslated transition / sequence callees (forward-declared; own passes) */
 void FUN_0800823c(void);
-void FUN_080089b0(void);
-void FUN_08008ff0(void);
-void FUN_080091c0(void);
-void FUN_080093ac(void);
-void FUN_08009598(void);
-void FUN_08009aa4(int);
-void FUN_08009bfc(void);
-void FUN_08009d80(uint32_t avg);
-void FUN_0800a3fc(void);
-void FUN_0800a440(void);
-void FUN_0800a490(int target);
-void FUN_0800a714(void);
-void FUN_0800a8e4(void);
-void FUN_0800aa98(void);
-void FUN_0800ac44(void);
-void FUN_0800b476(void);
-void FUN_0800b49c(void);
-void FUN_0800bad4(void);
-void FUN_0800f02c(void);
-void FUN_0800f258(void);
-void FUN_0800f4a4(void);
-void FUN_080104fc(void);
-void FUN_080106b4(void);
-void FUN_08010be4(void);
-void FUN_08010f30(void);
-void FUN_08013be4(void);
-void FUN_08013c10(void);
-void FUN_08013c60(void);
-void FUN_08013cb0(void);
-void FUN_08013d00(void);
-void FUN_08013d50(void);
-void FUN_08013d98(void);
-void FUN_08013df4(void);
-void FUN_08013e64(void);
-void FUN_08015c68(void);
-void FUN_08015e1c(void);
-void FUN_0801cf70(uint32_t p);
 
 /* State 1 (bms_state_1) — primary operating state: run the BMS core update,
  * bail to the AFE-latch handler on a hard AFE fault, then process the three
@@ -74,7 +37,7 @@ void bms_state_1(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -83,54 +46,54 @@ void bms_state_1(void)
         if ((*mode & 0x10) != 0) {                         /* mode bit4 */
             *mode &= 0xffefu;
             if ((*fault & 2) != 0) {                        /* OVP2 */
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {                        /* OVP1 */
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & 8) != 0) {                        /* UVP2 */
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 4) != 0) {                        /* UVP1 */
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 0x800) != 0) {                    /* cell imbalance */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013cb0();
-        FUN_08013d00();
-        FUN_08013d50();
-        FUN_08013d98();
-        FUN_08013df4();
-        FUN_08013e64();
+        alarm_scan_b2();
+        alarm_scan_b3();
+        alarm_scan_b4();
+        alarm_scan_b5();
+        alarm_scan_b6();
+        alarm_scan_b7();
         if (*req != 0) {
             if ((*req & 4) != 0) {                          /* req bit2 */
-                FUN_0800aa98();
+                bms_enter_dotp();
                 return;
             }
             if ((*req & 8) != 0) {                          /* req bit3 */
-                FUN_0800ac44();
+                bms_enter_dutp();
                 return;
             }
             if ((*req & 0x10) != 0) {                       /* req bit4 */
-                FUN_0800f4a4();
+                bms_enter_state_16();
                 return;
             }
             if ((*req & 0x20) != 0 ||                       /* req bit5/6/7 */
                 (*req & 0x40) != 0 ||
                 (*req & 0x80) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
@@ -141,14 +104,14 @@ void bms_state_1(void)
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
                 if ((*(volatile uint32_t *)0x20000724 & 0x1000000u) != 0) {  /* bit24 */
-                    FUN_08009aa4(0);
+                    boot_enter_operating(0);
                     return;
                 }
                 if ((*mode & 0x1000) != 0) {                /* mode bit12 */
-                    FUN_08009aa4(1);
+                    boot_enter_operating(1);
                     return;
                 }
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         } else {
@@ -156,13 +119,13 @@ void bms_state_1(void)
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
         **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR */
-        FUN_08009d80(*(volatile uint32_t *)0x20000424);
+        coulomb_integrate(*(volatile uint32_t *)0x20000424);
     }
 
     if ((*s_tick & 8) != 0) {
@@ -191,7 +154,7 @@ void bms_state_2(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -200,52 +163,52 @@ void bms_state_2(void)
         if ((*mode & (1u << 4)) != 0) {                  /* mode bit4 gate */
             *mode &= 0xffefu;
             if ((*fault & (1u << 1)) != 0) {             /* OVP2 */
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {                     /* OVP1 */
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & (1u << 4)) != 0) {             /* COCP1 */
-                FUN_08008ff0();
+                bms_enter_state_b();
                 return;
             }
             if ((*fault & (1u << 5)) != 0) {             /* COCP2 */
-                FUN_080091c0();
+                bms_enter_state_c();
                 return;
             }
             if ((*fault & (1u << 11)) != 0) {            /* cell imbalance */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013c10();
-        FUN_08013c60();
-        FUN_08013d50();
-        FUN_08013d98();
+        alarm_scan_b0();
+        alarm_scan_b1();
+        alarm_scan_b4();
+        alarm_scan_b5();
         if (*fault2 != 0) {
             if ((*fault2 & 1) != 0) {                    /* bit0 */
-                FUN_080093ac();
+                bms_enter_cotp();
                 return;
             }
             if ((*fault2 & (1u << 1)) != 0) {            /* bit1 */
-                FUN_08009598();
+                bms_enter_cutp();
                 return;
             }
             if ((*fault2 & (1u << 4)) != 0) {            /* bit4 */
-                FUN_0800f4a4();
+                bms_enter_state_16();
                 return;
             }
             if ((*fault2 & (1u << 5)) != 0 ||            /* bit5 */
                 (*fault2 & (1u << 6)) != 0 ||            /* bit6 */
                 (*fault2 & (1u << 7)) != 0) {            /* bit7 */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
@@ -337,16 +300,16 @@ void bms_state_2(void)
                 charger_shipping_check();
             }
         }
-        FUN_08009bfc();
+        cell_balance_update();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
         **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR */
         if ((*mode & (1u << 12)) == 0) {                    /* mode bit12 clear */
-            FUN_08009d80(*(volatile uint32_t *)0x20000424);
+            coulomb_integrate(*(volatile uint32_t *)0x20000424);
         }
     }
 
@@ -361,21 +324,21 @@ void bms_state_2(void)
  * state. Runs the BMS core every loop, then three tick-gated phases off the SysTick
  * flag byte 0x2000077c:
  *   bit0 1ms  — mode-bit4 (gated) fault refresh: re-issue the latched protection
- *               handlers (fault bits 3/2/6/7/11), then FUN_080089b0.
+ *               handlers (fault bits 3/2/6/7/11), then bms_measure_update.
  *   bit1 slow — the bypass / no-load / DD-on / output-enable logic: protection-mask
  *               (0x200006e4) dispatch, charger-voltage timeout (>10s) -> boot mode,
  *               20-tick "No Load" report, PB8 (0x100) edge-debounced output enable
  *               (mode bit8), charger/extend IO refresh, DD-on pulse (mode bit10),
  *               shipping entry when CFG+0x5a == 0.
- *   bit2 IWDG — kick IWDG_KR (=0xAAAA) + run FUN_08009d80(current-avg @0x20000424).
+ *   bit2 IWDG — kick IWDG_KR (=0xAAAA) + run coulomb_integrate(current-avg @0x20000424).
  *   bit3 1s   — uptime counters; >=180s timeout -> boot mode 1; then the DAC/Vout
  *               regulation cascade keyed on charger voltage (0x20000202), pack voltage
  *               (0x200001ae), TS temps (0x20000218[0..2]) and mode bits 6/7 (charge/
- *               discharge allowed) -> FUN_0800a440/FUN_0800a490(target)/FUN_0800a3fc,
+ *               discharge allowed) -> vout_bypass_off/vout_set_dac(target)/vout_enable,
  *               plus the <20V/3s and <30V/30min shutdown timers (-> shipping_enter).
  *
  * Bit-test idiom (uint)X<<K < 0 tests bit (31-K); translated to direct masks below.
- * FUN_0800b476 here is a plain epilogue helper (uart/LED flush) — only the variants
+ * bms_state_noop here is a plain epilogue helper (uart/LED flush) — only the variants
  * IMMEDIATELY followed by `return;` are tail-transitions; the others fall through.
  */
 void bms_state_3(void)
@@ -386,8 +349,8 @@ void bms_state_3(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
-        FUN_0800b476();
+        bms_enter_afe_latch();
+        bms_state_noop();
     }
 
     /* --- bit0: fault-handler refresh, gated on mode bit4 --- */
@@ -396,54 +359,54 @@ void bms_state_3(void)
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 3)) != 0) {
-                FUN_08015e1c();
-                FUN_0800b476();
+                bms_enter_uvp2();
+                bms_state_noop();
             }
             if ((*fault & (1u << 2)) != 0) {
-                FUN_08015c68();
-                FUN_0800b476();
+                bms_enter_uvp1();
+                bms_state_noop();
             }
             if ((*fault & (1u << 6)) != 0) {
-                FUN_0800a714();
-                FUN_0800b476();
+                bms_enter_state_d();
+                bms_state_noop();
             }
             if ((*fault & (1u << 7)) != 0) {
-                FUN_0800a8e4();
-                FUN_0800b476();
+                bms_enter_state_e();
+                bms_state_noop();
             }
             if ((*fault & (1u << 11)) != 0) {
-                FUN_0800f258();
-                FUN_0800b476();
+                bms_enter_ov2_record();
+                bms_state_noop();
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     /* --- bit1: bypass / output / DD-on slow logic --- */
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013c10();
-        FUN_08013c60();
-        FUN_08013cb0();
-        FUN_08013d00();
-        FUN_08013d50();
-        FUN_08013d98();
+        alarm_scan_b0();
+        alarm_scan_b1();
+        alarm_scan_b2();
+        alarm_scan_b3();
+        alarm_scan_b4();
+        alarm_scan_b5();
         if (*ext != 0) {
             if ((*ext & (1u << 2)) != 0) {
-                FUN_0800aa98();
-                FUN_0800b476();
+                bms_enter_dotp();
+                bms_state_noop();
             }
             if ((*ext & (1u << 3)) != 0) {
-                FUN_0800ac44();
-                FUN_0800b476();
+                bms_enter_dutp();
+                bms_state_noop();
             }
             if ((*ext & (1u << 4)) != 0) {
-                FUN_0800f4a4();
-                FUN_0800b476();
+                bms_enter_state_16();
+                bms_state_noop();
             }
             if ((*ext & (1u << 5)) != 0 || (*ext & (1u << 6)) != 0 || (*ext & (1u << 7)) != 0) {
-                FUN_0800f258();
-                FUN_0800b476();
+                bms_enter_ov2_record();
+                bms_state_noop();
                 return;
             }
         }
@@ -461,12 +424,12 @@ void bms_state_3(void)
                 if (*(volatile uint16_t *)0x200001ae < 200) {
                     log_print(2, s_charger_load_absent);
                     boot_mode_enter(2);
-                    FUN_0800b476();
+                    bms_state_noop();
                     return;
                 }
                 log_print(2, s_charger_load_exist);
                 boot_mode_enter(3);
-                FUN_0800b476();
+                bms_state_noop();
                 return;
             }
         } else {
@@ -495,7 +458,7 @@ void bms_state_3(void)
                     *(volatile uint8_t *)0x20000710 = 0;
                     *mode |= 0x100u;
                     boot_mode_enter(1);
-                    FUN_0800b476();
+                    bms_state_noop();
                     return;
                 }
             }
@@ -523,7 +486,7 @@ void bms_state_3(void)
                 *(volatile uint8_t *)0x20000720 = 0;
                 gpio_bit_write(0x48000400, 1, 0);       /* PB0 = 0 */
                 gpio_bit_write(0x48000400, 0x800, 1);   /* PB11 = 1 */
-                FUN_08013be4();
+                bypass_fet_off();
                 log_print(2, s_dd_on);
                 *(volatile uint16_t *)0x200006a2 = 0;
             }
@@ -533,22 +496,22 @@ void bms_state_3(void)
         if (*(volatile int8_t *)(0x200004d0 + 0x5a) == 0) {
             *(volatile uint32_t *)0x20000724 |= 0x1000000u;   /* mode bit24 */
             shipping_enter();
-            FUN_0800b476();
+            bms_state_noop();
             return;
         }
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     /* --- bit2: IWDG kick + current-average service --- */
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
         **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;       /* IWDG_KR */
-        FUN_08009d80(*(volatile uint32_t *)0x20000424);
+        coulomb_integrate(*(volatile uint32_t *)0x20000424);
     }
 
     /* --- bit3: 1 s uptime + DAC/Vout regulation cascade --- */
     if ((*s_tick & 8) == 0) {
-        FUN_0800b476();
+        bms_state_noop();
         return;
     }
     *s_tick &= (uint8_t)~8u;
@@ -558,7 +521,7 @@ void bms_state_3(void)
         *(volatile uint32_t *)0x20000594 = up + 1;
         if (up + 1 > 0xb3) {                          /* >= 180 s -> boot mode 1 */
             boot_mode_enter(1);
-            FUN_0800b476();
+            bms_state_noop();
             return;
         }
     }
@@ -570,8 +533,8 @@ void bms_state_3(void)
         if (ts[0] < 0x79 && ts[1] < 0x6d && ts[2] < 0x6d) {
             if (ts[0] < 0x73 && ts[1] < 0x69 && ts[2] < 0x69) {
                 *(volatile uint16_t *)0x200006bc = 0;
-                FUN_0800a440();
-                FUN_0800b476();
+                vout_bypass_off();
+                bms_state_noop();
                 return;
             }
             if ((*mode & (1u << 6)) != 0) {                  /* charge allowed */
@@ -579,35 +542,35 @@ void bms_state_3(void)
                     if ((*mode & (1u << 7)) == 0) {          /* discharge not active */
                         uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
                         if (dac > 0xce3) {
-                            FUN_0800a440();
+                            vout_bypass_off();
                             *mode |= 0x80u;
                             log_print(2, s_dac_over_range);
-                            FUN_0800b476();
+                            bms_state_noop();
                             return;
                         }
                         if ((int)(dac + 5) > 0xce4) {
-                            FUN_0800a490(0xce4);
-                            FUN_0800b476();
+                            vout_set_dac(0xce4);
+                            bms_state_noop();
                             return;
                         }
-                        FUN_0800a490(dac + 5);
-                        FUN_0800b476();
+                        vout_set_dac(dac + 5);
+                        bms_state_noop();
                         return;
                     }
                 } else if (*pv <= 0xaef) {                   /* <= 2799 mV */
                     uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
                     if (dac == 0) {
-                        FUN_0800a440();
-                        FUN_0800b476();
+                        vout_bypass_off();
+                        bms_state_noop();
                         return;
                     }
                     if (dac < 5) {
-                        FUN_0800a490(0);
-                        FUN_0800b476();
+                        vout_set_dac(0);
+                        bms_state_noop();
                         return;
                     }
-                    FUN_0800a490(dac - 5);
-                    FUN_0800b476();
+                    vout_set_dac(dac - 5);
+                    bms_state_noop();
                     return;
                 }
             }
@@ -616,27 +579,27 @@ void bms_state_3(void)
                 if ((*mode & (1u << 6)) != 0) {              /* charge allowed */
                     uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
                     if (dac > 0xce3) {
-                        FUN_0800a440();
+                        vout_bypass_off();
                         *mode |= 0x80u;
                         log_print(2, s_dac_over_range);
                     } else if ((int)(dac + 5) > 0xce4) {
-                        FUN_0800a490(0xce4);
+                        vout_set_dac(0xce4);
                     } else {
-                        FUN_0800a490(dac + 5);
+                        vout_set_dac(dac + 5);
                     }
                 } else {
-                    FUN_0800a3fc();
-                    FUN_0800a490(0x5b4);
+                    vout_enable();
+                    vout_set_dac(0x5b4);
                 }
             }
         } else if ((*mode & (1u << 6)) != 0 && *pv <= 0xaef) {
             uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
             if (dac == 0) {
-                FUN_0800a440();
+                vout_bypass_off();
             } else if (dac < 5) {
-                FUN_0800a490(0);
+                vout_set_dac(0);
             } else {
-                FUN_0800a490(dac - 5);
+                vout_set_dac(dac - 5);
             }
         }
         return;
@@ -647,30 +610,30 @@ void bms_state_3(void)
             if ((*mode & (1u << 6)) != 0 && *pv <= 0x31f) {   /* charge allowed & <= 799 mV */
                 uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
                 if (dac == 0) {
-                    FUN_0800a440();
+                    vout_bypass_off();
                 } else if (dac < 5) {
-                    FUN_0800a490(0);
+                    vout_set_dac(0);
                 } else {
-                    FUN_0800a490(dac - 5);
+                    vout_set_dac(dac - 5);
                 }
             }
         } else if ((*mode & (1u << 7)) == 0) {        /* discharge not active */
             if ((*mode & (1u << 6)) != 0) {           /* charge allowed */
                 uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
                 if (dac == 0x5b4) {
-                    FUN_0800a490(0x5dc);
+                    vout_set_dac(0x5dc);
                 } else if (dac > 0xce3) {
-                    FUN_0800a440();
+                    vout_bypass_off();
                     *mode |= 0x80u;
                     log_print(2, s_dac_over_range);
                 } else if ((int)(dac + 5) > 0xce4) {
-                    FUN_0800a490(0xce4);
+                    vout_set_dac(0xce4);
                 } else {
-                    FUN_0800a490(dac + 5);
+                    vout_set_dac(dac + 5);
                 }
             } else {
-                FUN_0800a3fc();
-                FUN_0800a490(0x5b4);
+                vout_enable();
+                vout_set_dac(0x5b4);
             }
         }
 
@@ -683,14 +646,14 @@ void bms_state_3(void)
                 if (*(volatile uint32_t *)0x2000042c <= 0x4e1f) {
                     log_print(2, s_vout_under_30v_30min);
                     shipping_enter();
-                    FUN_0800b476();
+                    bms_state_noop();
                     return;
                 }
-                FUN_0800b476();
+                bms_state_noop();
                 return;
             }
         }
-        FUN_0800b476();
+        bms_state_noop();
         return;
     }
 
@@ -699,7 +662,7 @@ void bms_state_3(void)
         uint16_t v = *(volatile uint16_t *)0x200006bc;
         *(volatile uint16_t *)0x200006bc = (uint16_t)(v + 1);
         if ((uint16_t)(v + 1) < 3) {
-            FUN_0800b476();
+            bms_state_noop();
             return;
         }
     }
@@ -707,17 +670,17 @@ void bms_state_3(void)
     if (*(volatile uint32_t *)0x2000042c <= 0x4e1f) {
         log_print(2, s_vout_under_20v_3s);
         shipping_enter();
-        FUN_0800b476();
+        bms_state_noop();
         return;
     }
-    FUN_0800b476();
+    bms_state_noop();
     return;
 }
 
 /* State 4 (bms_state_4) — the main "discharging / load-attached" operating
  * state. Runs the BMS core, then splits on the SysTick flag byte:
- *   bit0 (1 ms) set  -> the discharge MOS retry/timeout path (FUN_0800f02c
- *                       precharge pulse, FUN_080089b0 service, and the
+ *   bit0 (1 ms) set  -> the discharge MOS retry/timeout path (status_frame_emit
+ *                       precharge pulse, bms_measure_update service, and the
  *                       50-sample "load gone" poll that exits to idle/charge);
  *   bit1 (slow)  set -> the load-detect / charger-attach state machine that
  *                       transitions to states 2/3/5 and toggles the PB-bank
@@ -813,7 +776,7 @@ slow_tick:
             goto tail;
         }
         *flags &= (uint8_t)~1u;
-        FUN_0800f02c();
+        status_frame_emit();
         if (*(volatile uint32_t *)0x2000072c > 4) {
             goto charge_off;
         }
@@ -826,7 +789,7 @@ slow_tick:
             *mode &= 0xffefu;                 /* clear bit4 */
         }
         if ((*flags & 1) != 0) {
-            FUN_080089b0();
+            bms_measure_update();
         }
 
         /* OEM (0x0800ed00..): the timeout/MOS-retry chain. The decompiler
@@ -874,31 +837,31 @@ slow_tick:
                     *mode &= 0xf7ffu;         /* clear bit11 */
                     gpio_bit_write(0x48000000, 0x80, 0);
                     if (*(volatile uint16_t *)0x200003ce <= 0x752f) {
-                        FUN_08009aa4(0);
+                        boot_enter_operating(0);
                         return;
                     }
                     if (*(volatile uint8_t *)0x200004b4 != 1) {
                         if (*(volatile uint8_t *)0x200004b4 == 3) {
-                            FUN_08009aa4(1);
+                            boot_enter_operating(1);
                             return;
                         }
-                        FUN_08009aa4(0);
+                        boot_enter_operating(0);
                         return;
                     }
                     if (*(volatile uint32_t *)0x20000724 & (1u << 24)) {
                         bms_state_idle();
                         return;
                     }
-                    FUN_0800b49c();
+                    bms_enter_idle3();
                     return;
                 }
-                FUN_0800f02c();
+                status_frame_emit();
                 *(volatile uint8_t *)0x20000489 = 0;
             }
         }
 charge_off:
         gpio_bit_write(0x48000000, 0x200, 0);
-        FUN_0801cf70(0x20000738);
+        timer_start_it((uint32_t *)0x20000738);
         *flags &= (uint8_t)~2u;
         *(volatile uint8_t *)0x20000488 = 1;
         *tmr = 4;
@@ -932,12 +895,12 @@ void bms_state_6(void)
         if ((*mode & 0x10) != 0) {                       /* bit4 */
             *mode &= 0xffefu;
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {                            /* slow tick (bit1) */
         *s_tick &= (uint8_t)~2u;
-        FUN_08013d98();
+        alarm_scan_b5();
         if (gpio_bit_read(0x48000400, 0x100) == 0) {     /* PB8 released */
             if (!(*mode & 0x100)) {                       /* bit8 clear */
                 uint8_t v = *(volatile uint8_t *)0x20000710;
@@ -1041,7 +1004,7 @@ void bms_state_6(void)
                             if ((uint8_t)(v + 1) > 0x13) {
                                 *(volatile uint8_t *)0x20000710 = 0;
                                 *mode |= 0x100u;
-                                FUN_08010f30();
+                                system_reset_request();
                             }
                         }
                     } else if (*mode & 0x100) {           /* PB8 held, bit8 set */
@@ -1069,7 +1032,7 @@ void bms_state_6(void)
             log_print(2, s_state6_progress, (c + 1) / 0x14);
         }
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1078,10 +1041,10 @@ void bms_state_6(void)
 /* State 7 (bms_state_7) — active charge/run state: run the BMS core, bail to
  * the AFE-latch fault path if the latched-fault byte 0x2000041d is set, then on
  * the fast tick (bit0) — only while mode bit4 is set — branch by fault state
- * (bit1 -> FUN_080106b4, bit0 clear -> boot_mode_enter(1), bit11 -> FUN_0800f258,
- * else FUN_080089b0); on the slow tick (bit1) run the periodic I/O refresh,
- * leaving to FUN_0800f258 on the protection-status flags (0x200006e4 bit5/6/7)
- * or to FUN_0800b49c on a hard discharge with the run-enable bit set. Tail tick:
+ * (bit1 -> bms_enter_ovp2, bit0 clear -> boot_mode_enter(1), bit11 -> bms_enter_ov2_record,
+ * else bms_measure_update); on the slow tick (bit1) run the periodic I/O refresh,
+ * leaving to bms_enter_ov2_record on the protection-status flags (0x200006e4 bit5/6/7)
+ * or to bms_enter_idle3 on a hard discharge with the run-enable bit set. Tail tick:
  * tick_uptime(). */
 void bms_state_7(void)
 {
@@ -1091,7 +1054,7 @@ void bms_state_7(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1100,7 +1063,7 @@ void bms_state_7(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 2) != 0) {
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) == 0) {
@@ -1108,30 +1071,30 @@ void bms_state_7(void)
                 return;
             }
             if ((*fault & 0x800) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*prot != 0 &&
             ((*prot & 0x20) != 0 || (*prot & 0x40) != 0 || (*prot & 0x80) != 0)) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         if (*(volatile uint32_t *)0x20000420 > 199 &&
             (*(volatile uint8_t *)0x20000412 & 1) == 1) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1144,8 +1107,8 @@ void bms_state_7(void)
  * IWDG-kick / uptime tail. The AFE flag at 0x2000041d forces the AFE-fault exit.
  *
  * Differs from state 7 only in the mode-bit4 fault dispatch: here OVP1 (FAULT
- * bit0) being CLEAR drives boot_mode_enter(1) while bit0 SET runs FUN_080104fc;
- * state 7 inverts that and uses FUN_080106b4. */
+ * bit0) being CLEAR drives boot_mode_enter(1) while bit0 SET runs bms_enter_ovp1;
+ * state 7 inverts that and uses bms_enter_ovp2. */
 void bms_state_8(void)
 {
     volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
@@ -1153,7 +1116,7 @@ void bms_state_8(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
     if ((*s_tick & 1) != 0) {
@@ -1162,50 +1125,50 @@ void bms_state_8(void)
             *mode &= 0xffefu;
             if (!(FAULT & 2)) {                    /* OVP2 (bit1) clear */
                 if ((FAULT & 1) != 0) {            /* OVP1 (bit0) set */
-                    FUN_080104fc();
+                    bms_enter_ovp1();
                     return;
                 }
                 boot_mode_enter(1);
                 return;
             }
             if ((FAULT & 0x800) != 0) {            /* cell imbalance (bit11) */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*boot != 0 &&
             (((*boot & 0x20) != 0) ||             /* bit5 */
              ((*boot & 0x40) != 0) ||             /* bit6 */
              ((*boot & 0x80) != 0))) {            /* bit7 */
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         if (*(volatile uint32_t *)0x20000420 > 199 &&
             (*(volatile uint8_t *)0x20000412 & 1) == 1) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
     tick_uptime();
 }
 
 /* State 9 (bms_state_9) — operating state: run the BMS core, then on the
- * AFE-latch fault (0x2000041d) bail to FUN_08010be4. On the 1 ms tick, if the
+ * AFE-latch fault (0x2000041d) bail to bms_enter_afe_latch. On the 1 ms tick, if the
  * mode bit4 (charger-present, 0x200006a0 & 0x10) is set, clear it and dispatch
- * on the fault register 0x20000410: UVP2 (bit3) → FUN_08015e1c, UVP1 clear
- * (bit2) → boot_mode_enter(2), imbalance (bit11) → FUN_0800f258; otherwise run
- * FUN_080089b0. On the slow tick (bit1): step the two display/IO updates, then
- * on a NTC/over-temp flag (0x200006e4 bits 5/6/7) bail to FUN_0800f258; else
- * count charger-absent slow ticks in 0x200006a8 and after 19 enter FUN_08009aa4(0),
+ * on the fault register 0x20000410: UVP2 (bit3) → bms_enter_uvp2, UVP1 clear
+ * (bit2) → boot_mode_enter(2), imbalance (bit11) → bms_enter_ov2_record; otherwise run
+ * bms_measure_update. On the slow tick (bit1): step the two display/IO updates, then
+ * on a NTC/over-temp flag (0x200006e4 bits 5/6/7) bail to bms_enter_ov2_record; else
+ * count charger-absent slow ticks in 0x200006a8 and after 19 enter boot_enter_operating(0),
  * resetting the counter when the charger (0x2000042c > 19999) is present. Tail:
  * charger_shipping_check, extend_io_update, AFE status poll, then tick_uptime. */
 void bms_state_9(void)
@@ -1214,7 +1177,7 @@ void bms_state_9(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1223,7 +1186,7 @@ void bms_state_9(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((FAULT & 0x8) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if (!(FAULT & 0x4)) {
@@ -1231,22 +1194,22 @@ void bms_state_9(void)
                 return;
             }
             if ((FAULT & 0x800) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         if (*(volatile uint16_t *)0x200006e4 != 0 &&
             (((*(volatile uint16_t *)0x200006e4 & 0x20) != 0) ||
              ((*(volatile uint16_t *)0x200006e4 & 0x40) != 0) ||
              ((*(volatile uint16_t *)0x200006e4 & 0x80) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
@@ -1255,7 +1218,7 @@ void bms_state_9(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         } else {
@@ -1263,7 +1226,7 @@ void bms_state_9(void)
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1280,7 +1243,7 @@ void bms_state_10(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1290,29 +1253,29 @@ void bms_state_10(void)
             *mode &= 0xffefu;
             if (!(*fault & 8)) {                          /* fault bit3 clear */
                 if ((*fault & 4) != 0) {                  /* fault bit2 set */
-                    FUN_08015c68();
+                    bms_enter_uvp1();
                     return;
                 }
                 boot_mode_enter(2);                          /* boot_mode_enter(2) */
                 return;
             }
             if ((*fault & 0x800) != 0) {                  /* fault bit11 */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {                             /* slow tick (bit1) */
         *s_tick &= (uint8_t)~2u;
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         if (*(volatile uint16_t *)0x200006e4 != 0 &&
             (((*(volatile uint16_t *)0x200006e4 & 0x20) != 0) ||   /* bit5 */
              ((*(volatile uint16_t *)0x200006e4 & 0x40) != 0) ||   /* bit6 */
              ((*(volatile uint16_t *)0x200006e4 & 0x80) != 0))) {  /* bit7 */
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
@@ -1320,7 +1283,7 @@ void bms_state_10(void)
             *(volatile uint16_t *)0x200006a8 = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *(volatile uint16_t *)0x200006a8 = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         } else {
@@ -1328,7 +1291,7 @@ void bms_state_10(void)
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1348,7 +1311,7 @@ void bms_state_11(void)
     bms_core_update();
 
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1357,55 +1320,55 @@ void bms_state_11(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 2) != 0) {
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & 8) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 4) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 0x10) == 0) {
                 if (*(volatile uint32_t *)0x20000420 > 199) {
-                    FUN_0800b49c();
+                    bms_enter_idle3();
                     return;
                 }
                 boot_mode_enter(3);
                 return;
             }
             if ((*fault & 0x800) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
         if (*(volatile uint32_t *)0x20000420 > 199) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*(volatile uint8_t *)0x200006e4 != 0 &&
             (((*(volatile uint8_t *)0x200006e4 & 0x20) != 0) ||
              ((*(volatile uint8_t *)0x200006e4 & 0x40) != 0) ||
              ((*(volatile uint8_t *)0x200006e4 & 0x80) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1425,7 +1388,7 @@ void bms_state_12(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
     if ((*s_tick & 1) != 0) {
@@ -1433,70 +1396,70 @@ void bms_state_12(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 0x2) != 0) {
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & 0x8) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 0x4) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if (!(*fault & 0x20)) {
                 if (*(volatile uint32_t *)0x20000420 > 199) {
-                    FUN_0800b49c();
+                    bms_enter_idle3();
                     return;
                 }
                 boot_mode_enter(3);
                 return;
             }
             if ((*fault & 0x800) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
         if (*(volatile uint32_t *)0x20000420 > 199) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*m6e4 != 0 &&
             (((*m6e4 & 0x20) != 0) || ((*m6e4 & 0x40) != 0) || ((*m6e4 & 0x80) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
     tick_uptime();
 }
 
 /* State 13 (bms_state_13) — pack-2 charge-trip hold. Runs the BMS core, then:
- * on the AFE-fault byte 0x2000041d transitions out via FUN_08010be4; on the
+ * on the AFE-fault byte 0x2000041d transitions out via bms_enter_afe_latch; on the
  * 1 ms tick (and when mode bit4 is set, which it then clears) dispatches the
- * latched fault by priority (fault bit3 -> FUN_08015e1c, bit2 -> FUN_08015c68,
- * bit6 CLEAR -> bms_state_idle, bit11 -> FUN_0800f258), else runs the 1 ms slow
+ * latched fault by priority (fault bit3 -> bms_enter_uvp2, bit2 -> bms_enter_uvp1,
+ * bit6 CLEAR -> bms_state_idle, bit11 -> bms_enter_ov2_record), else runs the 1 ms slow
  * refresh; on the slow tick counts down a charge-present timer (chg_i >= 200 and
- * charger volts > 19999) and after 0x13 ticks transitions via FUN_08009aa4(0),
+ * charger volts > 19999) and after 0x13 ticks transitions via boot_enter_operating(0),
  * then the slow-tick refresh, the fault-subclass check (0x200006e4 bits 5/6/7 ->
- * FUN_0800f258), and the charger/IO/AFE refresh; finally the uptime tail. */
+ * bms_enter_ov2_record), and the charger/IO/AFE refresh; finally the uptime tail. */
 void bms_state_13(void)
 {
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
     if ((*s_tick & 1) != 0) {
@@ -1506,11 +1469,11 @@ void bms_state_13(void)
         if (*mode & (1u << 4)) {
             *mode &= 0xffefu;
             if (*fault & (1u << 3)) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if (*fault & (1u << 2)) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if (!(*fault & (1u << 6))) {
@@ -1518,11 +1481,11 @@ void bms_state_13(void)
                 return;
             }
             if (*fault & (1u << 11)) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
@@ -1535,21 +1498,21 @@ void bms_state_13(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         volatile uint16_t * const sub = (volatile uint16_t *)0x200006e4;
         if (*sub != 0 &&
             ((*sub & (1u << 5)) || (*sub & (1u << 6)) || (*sub & (1u << 7)))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
     tick_uptime();
 }
@@ -1558,7 +1521,7 @@ void bms_state_13(void)
  * tick run the protection-fault dispatch (mode bit4 latched faults route to the
  * matching fault state, else fall to idle/imbalance), and on the slow tick run
  * the charger-present timeout (no charge current and charger absent for >19
- * ticks → enter state via FUN_08009aa4), the periodic IO refresh, the
+ * ticks → enter state via boot_enter_operating), the periodic IO refresh, the
  * thermal/over-current trip check (status 0x200006e4 bits 5/6/7), and the
  * LED/extend-IO/AFE refresh. Trailing uptime tick. (Near-identical to state 13;
  * the only difference is the idle test reads fault bit7 here vs bit6 there.) */
@@ -1571,7 +1534,7 @@ void bms_state_14(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1580,11 +1543,11 @@ void bms_state_14(void)
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 3)) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & (1u << 2)) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & (1u << 7)) == 0) {
@@ -1592,11 +1555,11 @@ void bms_state_14(void)
                 return;
             }
             if ((*fault & (1u << 11)) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -1609,22 +1572,22 @@ void bms_state_14(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         if (*trip != 0 &&
             (((*trip & (1u << 5)) != 0) ||
              ((*trip & (1u << 6)) != 0) ||
              ((*trip & (1u << 7)) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1639,7 +1602,7 @@ void bms_state_15(void)
 {
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1650,11 +1613,11 @@ void bms_state_15(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 4) != 0) {            /* UVP1 */
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 8) != 0) {            /* UVP2 */
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 0x100) == 0) {        /* AFE comms fault clear */
@@ -1662,11 +1625,11 @@ void bms_state_15(void)
                 return;
             }
             if ((*fault & 0x800) != 0) {        /* cell imbalance */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -1680,21 +1643,21 @@ void bms_state_15(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 || (*fault2 & 0x40) != 0 || (*fault2 & 0x80) != 0)) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1711,7 +1674,7 @@ void bms_state_16(void)
 {
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1733,19 +1696,19 @@ void bms_state_16(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 4) != 0) {            /* UVP1 */
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 8) != 0) {            /* UVP2 */
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 0x800) != 0) {        /* cell imbalance */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -1759,21 +1722,21 @@ void bms_state_16(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 || (*fault2 & 0x40) != 0 || (*fault2 & 0x80) != 0)) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1810,11 +1773,11 @@ void bms_state_17(void)
         if ((*mode & 0x10) != 0) {                          /* mode bit4 */
             *mode &= 0xffefu;
             if ((*fault & 8) != 0) {                        /* UVP2 (bit3) */
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 4) != 0) {                        /* UVP1 (bit2) */
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 0x400) == 0) {                    /* TS/temp (bit10) clear */
@@ -1826,11 +1789,11 @@ void bms_state_17(void)
                 return;
             }
             if ((*fault & 0x800) != 0) {                    /* cell imbalance (bit11) */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -1844,23 +1807,23 @@ void bms_state_17(void)
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                FUN_08009aa4(0);
+                boot_enter_operating(0);
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b7();
         volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 ||                        /* bit5 */
              (*fault2 & 0x40) != 0 ||                        /* bit6 */
              (*fault2 & 0x80) != 0)) {                       /* bit7 */
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1883,7 +1846,7 @@ void bms_state_18(void)
     bms_core_update();
 
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1892,33 +1855,33 @@ void bms_state_18(void)
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 2) != 0) {
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & 8) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 4) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 0x800) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
         if (*(volatile uint32_t *)0x20000420 > 199) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
         if (ts[1] < 0x53 && ts[2] < 0x53) {
@@ -1932,18 +1895,18 @@ void bms_state_18(void)
         } else {
             *(volatile uint16_t *)0x20000550 = 0;
         }
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*(volatile uint8_t *)0x200006e4 != 0 &&
             (((*(volatile uint8_t *)0x200006e4 & 0x20) != 0) ||
              ((*(volatile uint8_t *)0x200006e4 & 0x40) != 0) ||
              ((*(volatile uint8_t *)0x200006e4 & 0x80) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -1955,12 +1918,12 @@ void bms_state_18(void)
  * per-tick work keyed off the SysTick flag byte:
  *   bit0 (1 ms): if mode bit4 (0x200006a0) is set, clear it and dispatch the
  *     highest-priority latched protection in the fault word 0x20000410
- *     (bit1 -> FUN_080106b4, bit0 -> FUN_080104fc, bit3 -> FUN_08015e1c,
- *      bit2 -> FUN_08015c68, bit11 -> FUN_0800f258), else run FUN_080089b0.
- *   bit1 (slow): hard-discharge (>199) bails to FUN_0800b49c; else if both TS
+ *     (bit1 -> bms_enter_ovp2, bit0 -> bms_enter_ovp1, bit3 -> bms_enter_uvp2,
+ *      bit2 -> bms_enter_uvp1, bit11 -> bms_enter_ov2_record), else run bms_measure_update.
+ *   bit1 (slow): hard-discharge (>199) bails to bms_enter_idle3; else if both TS
  *     readings (0x20000218+1/+2) are warm (>=0x2b) count the ship timer
  *     0x20000580 and enter boot mode 3 after 29 ticks; then refresh IO and, if
- *     any of bits 5/6/7 of 0x200006e4 are set, bail to FUN_0800f258, else run
+ *     any of bits 5/6/7 of 0x200006e4 are set, bail to bms_enter_ov2_record, else run
  *     the charger/extend/AFE refresh.
  *   then tick_uptime() (IWDG kick + uptime).
  * Each FUN()/return below is a tail-branch transition; every early-return kept.
@@ -1975,7 +1938,7 @@ void bms_state_19(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -1984,33 +1947,33 @@ void bms_state_19(void)
         if ((*mode & 0x10) != 0) {                 /* mode bit4 */
             *mode &= 0xffefu;
             if ((*fault & 2) != 0) {               /* fault bit1 */
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {               /* fault bit0 */
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & 8) != 0) {               /* fault bit3 */
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & 4) != 0) {               /* fault bit2 */
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & 0x800) != 0) {           /* fault bit11 */
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {                      /* slow tick (bit1) */
         *s_tick &= (uint8_t)~2u;
         if (*(volatile uint32_t *)0x20000420 > 199) {
-            FUN_0800b49c();
+            bms_enter_idle3();
             return;
         }
         if (ts[1] < 0x2b || ts[2] < 0x2b) {
@@ -2023,18 +1986,18 @@ void bms_state_19(void)
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013df4();
+        alarm_scan_b5();
+        alarm_scan_b6();
         if (*flags != 0 &&
             ((*flags & 0x20) != 0 ||               /* bit5 */
              (*flags & 0x40) != 0 ||               /* bit6 */
              (*flags & 0x80) != 0)) {              /* bit7 */
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -2042,20 +2005,20 @@ void bms_state_19(void)
 
 /* State 20 (bms_state_20) — operating state with a thermal-recovery watch: run
  * the BMS core, then on the AFE-fault byte 0x2000041d transition out via
- * FUN_08010be4. On the 1 ms tick, when mode bit4 is latched (then cleared) the
- * protection-fault cascade routes by priority (fault bit3 -> FUN_08015e1c,
- * bit2 -> FUN_08015c68, bit11 -> FUN_0800f258), else runs the 1 ms refresh
- * FUN_080089b0. On the slow tick: while both AFE temperature samples
+ * bms_enter_afe_latch. On the 1 ms tick, when mode bit4 is latched (then cleared) the
+ * protection-fault cascade routes by priority (fault bit3 -> bms_enter_uvp2,
+ * bit2 -> bms_enter_uvp1, bit11 -> bms_enter_ov2_record), else runs the 1 ms refresh
+ * bms_measure_update. On the slow tick: while both AFE temperature samples
  * (0x20000218+1 charge TS, +2 discharge TS) are below 101 it counts ticks in
  * 0x20000584 and after 0x1d returns to idle via bms_state_idle, else the counter
  * resets; then the periodic IO refresh trio, the secondary fault-byte check
- * (0x200006e4 bits 5/6/7 -> FUN_0800f258), and the charger/extend-IO/AFE
+ * (0x200006e4 bits 5/6/7 -> bms_enter_ov2_record), and the charger/extend-IO/AFE
  * refresh. Trailing uptime tick. */
 void bms_state_20(void)
 {
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -2066,19 +2029,19 @@ void bms_state_20(void)
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 3)) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & (1u << 2)) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & (1u << 11)) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -2095,20 +2058,20 @@ void bms_state_20(void)
         } else {
             *cnt = 0;
         }
-        FUN_08013d98();
-        FUN_08013df4();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b6();
+        alarm_scan_b7();
         volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
         if (*fault2 != 0 &&
             ((*fault2 & (1u << 5)) != 0 ||
              (*fault2 & (1u << 6)) != 0 ||
              (*fault2 & (1u << 7)) != 0)) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -2116,15 +2079,15 @@ void bms_state_20(void)
 
 /* State 21 (bms_state_21) — temperature-recovery hold: run the BMS core, then on
  * the 1 ms tick run the cfg-gated latched-fault dispatch (mode bit4: fault bit3 ->
- * FUN_08015e1c, bit2 -> FUN_08015c68, bit11 -> FUN_0800f258), else the 1 ms slow
+ * bms_enter_uvp2, bit2 -> bms_enter_uvp1, bit11 -> bms_enter_ov2_record), else the 1 ms slow
  * refresh; on the slow tick run a "temperature back within range" recovery timer —
  * both AFE TS channels (charge TS 0x20000219, discharge TS 0x2000021a) above 0x16
  * for >0x1d ticks exits to idle via bms_state_idle (bms_state_idle) — then the IO
- * refresh, the secondary trip check (0x200006e4 bits 5/6/7 -> FUN_0800f258), and
+ * refresh, the secondary trip check (0x200006e4 bits 5/6/7 -> bms_enter_ov2_record), and
  * the charger/extend-IO/AFE refresh. Trailing uptime tick.
  * Note vs states 20/13/14: the recovery timer has NO else-branch reset (the OEM
  * never zeroes the 0x200004ca counter), the slow block runs an extra refresh call
- * FUN_08013df4, and the 1 ms fault cascade skips the idle/bit6 test. */
+ * alarm_scan_b6, and the 1 ms fault cascade skips the idle/bit6 test. */
 void bms_state_21(void)
 {
     volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
@@ -2135,7 +2098,7 @@ void bms_state_21(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -2144,19 +2107,19 @@ void bms_state_21(void)
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 3)) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & (1u << 2)) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & (1u << 11)) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -2169,19 +2132,19 @@ void bms_state_21(void)
                 return;
             }
         }
-        FUN_08013d98();
-        FUN_08013df4();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b6();
+        alarm_scan_b7();
         if (*trip != 0 &&
             (((*trip & (1u << 5)) != 0) ||
              ((*trip & (1u << 6)) != 0) ||
              ((*trip & (1u << 7)) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
@@ -2189,15 +2152,15 @@ void bms_state_21(void)
 
 /* State 22 (bms_state_22) — operating/hold state with a temperature-gated
  * timeout. Runs the BMS core, then: on the AFE-fault byte 0x2000041d transitions
- * out via FUN_08010be4; on the 1 ms tick, when mode bit4 is latched (and then
- * cleared) dispatches the fault by priority (fault bit1 -> FUN_080106b4,
- * bit0 -> FUN_080104fc, bit3 -> FUN_08015e1c, bit2 -> FUN_08015c68,
- * bit11 -> FUN_0800f258), else the 1 ms slow refresh FUN_080089b0; on the slow
+ * out via bms_enter_afe_latch; on the 1 ms tick, when mode bit4 is latched (and then
+ * cleared) dispatches the fault by priority (fault bit1 -> bms_enter_ovp2,
+ * bit0 -> bms_enter_ovp1, bit3 -> bms_enter_uvp2, bit2 -> bms_enter_uvp1,
+ * bit11 -> bms_enter_ov2_record), else the 1 ms slow refresh bms_measure_update; on the slow
  * tick (s_tick bit1) it counts up a timeout while the charge-TS temp byte
  * 0x20000218 stays below 0x74 (>=0x74 resets it) and after 0x1d ticks returns
- * to idle via bms_state_idle, then runs the periodic refresh (FUN_08013d98 /
- * FUN_08013df4 / FUN_08013e64), the sub-fault check (status 0x200006e4 bits
- * 5/6/7 -> FUN_0800f258), and the charger/IO/AFE refresh. Trailing uptime tick. */
+ * to idle via bms_state_idle, then runs the periodic refresh (alarm_scan_b5 /
+ * alarm_scan_b6 / alarm_scan_b7), the sub-fault check (status 0x200006e4 bits
+ * 5/6/7 -> bms_enter_ov2_record), and the charger/IO/AFE refresh. Trailing uptime tick. */
 void bms_state_22(void)
 {
     volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
@@ -2208,7 +2171,7 @@ void bms_state_22(void)
 
     bms_core_update();
     if (*(volatile uint8_t *)0x2000041d != 0) {
-        FUN_08010be4();
+        bms_enter_afe_latch();
         return;
     }
 
@@ -2217,27 +2180,27 @@ void bms_state_22(void)
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 1)) != 0) {
-                FUN_080106b4();
+                bms_enter_ovp2();
                 return;
             }
             if ((*fault & 1) != 0) {
-                FUN_080104fc();
+                bms_enter_ovp1();
                 return;
             }
             if ((*fault & (1u << 3)) != 0) {
-                FUN_08015e1c();
+                bms_enter_uvp2();
                 return;
             }
             if ((*fault & (1u << 2)) != 0) {
-                FUN_08015c68();
+                bms_enter_uvp1();
                 return;
             }
             if ((*fault & (1u << 11)) != 0) {
-                FUN_0800f258();
+                bms_enter_ov2_record();
                 return;
             }
         }
-        FUN_080089b0();
+        bms_measure_update();
     }
 
     if ((*s_tick & 2) != 0) {
@@ -2252,19 +2215,19 @@ void bms_state_22(void)
         } else {
             *cnt = 0;
         }
-        FUN_08013d98();
-        FUN_08013df4();
-        FUN_08013e64();
+        alarm_scan_b5();
+        alarm_scan_b6();
+        alarm_scan_b7();
         if (*trip != 0 &&
             (((*trip & (1u << 5)) != 0) ||
              ((*trip & (1u << 6)) != 0) ||
              ((*trip & (1u << 7)) != 0))) {
-            FUN_0800f258();
+            bms_enter_ov2_record();
             return;
         }
         charger_shipping_check();
         extend_io_update();
-        FUN_0800bad4();
+        charger_afe_refresh();
     }
 
     tick_uptime();
