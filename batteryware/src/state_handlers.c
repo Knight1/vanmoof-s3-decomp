@@ -275,54 +275,76 @@ void state_handler_03_init(void)
 }
 
 /*
- * State handler 17/18/19: power-on OVP/UVP protection dispatch.
+ * State handler 17/18/19: latched-protection dispatch + secondary-fuse trigger.
  *
- * **Secondary-protection fuse trigger.** When the protection is *not* the
- * bit-11 class (s_prot_status bit 11 clear) AND a hard over-current is latched
- * (g_fault_flags bit 6 FAULT_DISCHARGE_OC or bit 7 FAULT_CHARGE_OC) AND the
- * update-busy flag (s_bms_cfg bit 15) is clear, it drives **GPIOB PB7
- * (0x80) HIGH** — energizing the heater element of the on-board secondary
- * fuse. This is a one-shot, last-resort permanent pack disconnect: no code
- * path ever drives PB7 low again (it is only cleared once, in the boot GPIO
- * init), so once the AFE's FETs can't break the over-current ("MOS Failure"),
- * the heater melts the fuse and severs the pack for good. See docs/hardware.md.
+ * **This is the only code path that blows the pack's secondary fuse.** The
+ * fuse is a one-shot pyro/thermal element with a resistive heater leg driven
+ * by GPIOB PB7 (mask 0x80). PB7 is driven HIGH here and is NEVER driven low
+ * again: the sole low write is the boot GPIO init (the 0x0287 LOW group in
+ * gpio.c). Once fired, the heater melts the fuse and severs the pack for good.
  *
- * It then forces everything off (clear s_bms_cfg bit 4; PB1 high; charge MOSFET
- * off via charge_mosfet_off + PB9 low; clear bit 11) and calls bms_configure(0),
- * then dispatches the resulting protection state:
- *   - bit 11 clear AND bits 6+7 clear → state 0x18
- *   - bit 11 clear AND (bit 6 or bit 7 set) → state 0x17
- *   - bit 11 set → state 0x19
+ * THE FUSE BURNS IFF ALL THREE OF THESE ARE TRUE AT THE SAME MOMENT:
+ *
+ *   (1) s_prot_status bit 11 == 0  — the active protection is NOT the bit-11
+ *       class. Bit-11 protection is the recoverable OVP/UVP-style class that
+ *       exits to state 0x19 and never touches the fuse. Bit 11 clear means we
+ *       are in the hard / unrecoverable protection class.
+ *
+ *   (2) g_fault_flags bit 6 (FAULT_DISCHARGE_OC) OR bit 7 (FAULT_CHARGE_OC) is
+ *       set — a hard over-current is latched. We only reach this handler with
+ *       the over-current still flowing, i.e. the external charge/discharge
+ *       MOSFET failed to interrupt it ("MOS Failure Mode"). A working FET
+ *       would have already cleared the OC, so a latched OC here == a shorted
+ *       FET that software can no longer open.
+ *
+ *   (3) s_bms_cfg bit 15 == 0 — the "update-busy" flag is clear (no telemetry
+ *       / EEPROM write is in flight). Interlock so the fuse can't fire in the
+ *       middle of a config update.
+ *
+ * In short: the pack is over-current, the MOSFET that should break it is
+ * dead, and we're not mid-update -> the firmware physically destroys the pack
+ * connection because it can no longer protect it any other way.
+ *
+ * Regardless of whether the fuse fired, it then force-opens everything (MCU
+ * charge path + both AFE FETs) and dispatches the latched protection state:
+ *   - bit 11 clear, no OC latched      -> state 0x18 (protection, fuse NOT fired)
+ *   - bit 11 clear, OC latched         -> state 0x17 (fuse fired)
+ *   - bit 11 set                       -> state 0x19 (recoverable, fuse never fired)
+ * See docs/hardware.md (PB7 row) and docs/fedl5236.md (FET register).
  */
 void state_handler_17_19(void)
 {
-    volatile uint32_t * const s_status = (volatile uint32_t *)0x20002C00;
+    volatile uint32_t * const s_status = (volatile uint32_t *)0x20002C00; /* s_bms_cfg */
 
-    if (((*s_prot_status >> 11) & 1) == 0) {
-        if ((((*s_fault_flags >> 6) & 1) != 0) || (((*s_fault_flags >> 7) & 1) != 0)) {
-            if (((*s_status >> 15) & 1) == 0) {
-                /* PB7 HIGH — fire the secondary-protection fuse heater (one-shot,
-                 * never cleared at runtime). Permanent pack disconnect. */
+    /* ---- Secondary-fuse trigger: requires (1) && (2) && (3) -------------- */
+    if (((*s_prot_status >> 11) & 1) == 0) {                     /* (1) not the recoverable bit-11 class */
+        if ((((*s_fault_flags >> 6) & 1) != 0) ||                /* (2) discharge over-current latched ... */
+            (((*s_fault_flags >> 7) & 1) != 0)) {                /*     ...or charge over-current latched */
+            if (((*s_status >> 15) & 1) == 0) {                  /* (3) not mid telemetry/EEPROM update */
+                /* PB7 HIGH — energize the fuse heater. Irreversible:
+                 * permanent pack disconnect (MOS-failure last resort). */
                 gpio_bit_write(0x50000400, 0x80, 1);
             }
         }
     }
 
-    *s_status &= ~0x10U;
-    gpio_bit_write(0x50000400, 1, 1);
-    charge_mosfet_off();
-    gpio_bit_write(0x50000400, 0x200, 0);
-    *s_status &= 0xFFFFF7FF;
-    bms_configure(0);
+    /* ---- Force the pack fully off (runs on EVERY entry, fuse or not) ----- */
+    *s_status &= ~0x10U;                  /* clear s_bms_cfg bit 4 (charge-allowed) */
+    gpio_bit_write(0x50000400, 1, 1);     /* PB0 (mask 0x1) HIGH */
+    charge_mosfet_off();                  /* PB1 LOW — open MCU-side charge-path FET */
+    gpio_bit_write(0x50000400, 0x200, 0); /* PB9 LOW — drop charge-MOSFET enable */
+    *s_status &= 0xFFFFF7FF;              /* clear s_bms_cfg bit 11 */
+    bms_configure(0);                     /* FEDL5236 FET register = 0: open both AFE FETs */
 
+    /* ---- Dispatch the resulting latched protection state ----------------- */
     if (((*s_prot_status >> 11) & 1) == 0) {
         if ((((*s_fault_flags >> 6) & 1) == 0) && (((*s_fault_flags >> 7) & 1) == 0)) {
-            bms_set_state(0x18);
+            bms_set_state(0x18);   /* clear class, no OC  -> 0x18 (fuse NOT fired) */
         } else {
-            bms_set_state(0x17);
+            bms_set_state(0x17);   /* clear class, OC latched -> 0x17 (fuse fired) */
         }
     } else {
-        bms_set_state(0x19);
+        bms_set_state(0x19);       /* bit-11 class -> 0x19 (recoverable, no fuse) */
     }
 }
 
