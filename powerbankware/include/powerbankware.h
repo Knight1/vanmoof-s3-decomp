@@ -88,6 +88,21 @@ void mem_set(void *dst, uint8_t val, int len);
 
 /* ---- RTC (src/rtc.c) --------------------------------------------------- */
 void rtc_set(uint32_t lo, uint32_t hi);   /* program RTC from packed date words */
+void rtc_backup_write(void *hrtc, int idx, uint8_t val);  /* RTC BKPxR (src/flash.c) */
+
+/* ---- FLASH / OTA driver (src/flash.c) ---------------------------------- */
+void flash_erase_page(uint32_t addr);                          /* erase one 2 KB page */
+int  flash_program_words(uint32_t addr, uint16_t len, const void *src); /* program+verify */
+void system_reset_ota(void);                                   /* persist + SYSRESETREQ */
+
+/* ---- BMS super-loop state routines (src/state_handlers.c) -------------- */
+void tick_uptime(void);
+void charger_shipping_check(void);
+void bms_core_update(void);          /* BMS core per-tick update */
+void bms_state_idle(void);           /* state 0 / default */
+void bms_state_5(void);
+void bms_state_fault(void);          /* states 23..26 */
+void bms_state_shipping_wait(void);  /* state 27 */
 
 /* ---- BMS state/config (src/bms.c) -------------------------------------- */
 void errlog_erase(int idx);        /* clear EEPROM error-log record `idx` */

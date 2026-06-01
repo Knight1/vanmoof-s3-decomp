@@ -227,7 +227,7 @@ void modbus_telemetry(uint16_t base)
  * the TX ring.
  */
 void modbus_write_single(uint8_t channel); /* FUN_08018410 (fn 0x06) — below */
-extern void modbus_write_multi(uint8_t channel); /* FUN_080187e4 (fn 0x10) */
+void modbus_write_multi(uint8_t channel, uint8_t b); /* FUN_080187e4 (fn 0x10) — below */
 
 void modbus_process(uint8_t channel, uint8_t b)
 {
@@ -260,17 +260,16 @@ void modbus_process(uint8_t channel, uint8_t b)
     }
 
     uint8_t fn = frame[1];
-    if (fn != 6) {
-        if (fn == 0x10) {
-            modbus_write_multi(channel);
-        }
-        if (fn != 3) {
-            *state = 0;
-            return;
-        }
+    if (fn == 0x10) {                 /* write-multiple is its own per-byte handler */
+        modbus_write_multi(channel, b);
+        return;
+    }
+    if (fn != 3 && fn != 6) {         /* defensive: unknown function */
+        *state = 0;
+        return;
     }
 
-    /* accumulate the 8-byte header */
+    /* accumulate the 8-byte header (read 0x03 / write-single 0x06) */
     frame[*state] = b;
     (*state)++;
     if (*state < 8) {
@@ -325,8 +324,6 @@ void modbus_process(uint8_t channel, uint8_t b)
  * A successful write echoes the 8-byte request frame back as the ack.
  */
 extern void FUN_08013be4(void);                       /* GPIO pulse */
-extern void rtc_backup_write(void *hrtc, int idx, uint8_t val); /* FUN_0801c6a2 */
-extern void FUN_08013b94(void);                       /* system reset */
 extern void FUN_080161b4(void);                       /* TX flush (ch 1) */
 
 static void mb_echo_frame(volatile uint8_t *frame)
@@ -365,7 +362,7 @@ void modbus_write_single(uint8_t channel)
                 } else {
                     uart_flush();
                 }
-                FUN_08013b94();                                  /* reset */
+                system_reset_ota();                                  /* reset */
             } else {
                 (*ack)++;
             }
@@ -402,6 +399,116 @@ void modbus_write_single(uint8_t channel)
         }
     } else {
         mb_echo_frame(frame);
+    }
+
+    *state = 0;
+}
+
+/* ----------------------------------------------------------------------- *
+ * Write-multiple handler (Modbus function 0x10), OEM FUN_080187e4 — the OTA
+ * firmware-update + bulk-config write path, fed one RX byte at a time.
+ * Accumulates the request (sync, fn, start-reg[2..3], reg-count[4..5],
+ * byte-count[6], data..., CRC), validates length + CRC-16, then:
+ *   reg 0x0082 (byte-count >4, multiple of 4): an OTA chunk — the first 4 data
+ *     bytes are a flash offset; on a 0x800 page boundary the page is erased,
+ *     then the payload is staged at 0x20001e04 and programmed into the OTA
+ *     region at 0x08024000 (retry-erasing on a failed program).
+ *   reg 0x000c..0x0014 with byte-count 0x12: a 9-register block that loads the
+ *     14-byte ESN + 4-byte firmware string (committed when the design capacity
+ *     is still zero).
+ * A handled write echoes the header + a fresh CRC back as the ack.
+ */
+
+void modbus_write_multi(uint8_t channel, uint8_t b)
+{
+    const int c = channel - 1;
+    volatile uint8_t  * const frame = (volatile uint8_t  *)(0x20001b00 + c * 0x100);
+    volatile uint16_t * const state = (volatile uint16_t *)(0x2000260c + c * 2);
+
+    frame[*state] = b;
+    (*state)++;
+    if (*state < 10) {
+        return;
+    }
+
+    uint16_t reg_addr   = (uint16_t)((frame[2] << 8) | frame[3]);
+    uint16_t reg_count  = (uint16_t)((frame[4] << 8) | frame[5]);
+    uint8_t  byte_count = frame[6];
+
+    if (*state < (uint16_t)(byte_count + 9)) {
+        return;
+    }
+    if (reg_count != (uint16_t)(byte_count >> 1)) {
+        return;
+    }
+
+    uint16_t crc_rx = (uint16_t)(frame[*state - 2] | (frame[*state - 1] << 8));
+    if (modbus_crc16((const uint8_t *)frame, (int16_t)(byte_count + 7)) != crc_rx) {
+        *state = 0;                       /* CRC fail */
+        return;
+    }
+
+    volatile uint8_t * const cfg = (volatile uint8_t *)0x200004d0;
+    uint8_t  ack = 0;
+    uint16_t off = 7;
+
+    if (reg_addr < 0xc || reg_addr > 0x14 || byte_count != 0x12) {
+        if (reg_addr == 0x82 && byte_count > 4 && (byte_count & 3) == 0) {
+            volatile uint8_t  * const fa  = (volatile uint8_t  *)0x20002604;
+            volatile uint16_t * const idx = (volatile uint16_t *)0x20001e02;
+            volatile uint8_t  * const data = (volatile uint8_t  *)0x20001e04;
+
+            *(volatile uint16_t *)0x200006a0 |= 4;          /* upgrade mode */
+            fa[3] = frame[off++];
+            fa[2] = frame[off++];
+            fa[1] = frame[off++];
+            fa[0] = frame[off++];
+            byte_count = (uint8_t)(byte_count - 4);
+
+            uint32_t flash_off = *(volatile uint32_t *)0x20002604;
+            if ((flash_off & 0x7ff) == 0) {
+                flash_erase_page(flash_off + 0x08024000);       /* erase page */
+                *idx = 0;
+            }
+            while (byte_count != 0) {
+                data[*idx] = frame[off++];
+                (*idx)++;
+                byte_count--;
+            }
+            int r = flash_program_words((flash_off & 0xfffff800) + 0x08024000, *idx, (const void *)data);
+            while (r != 0) {
+                flash_erase_page((flash_off & 0xfffff800) + 0x08024000);
+                r = flash_program_words((flash_off & 0xfffff800) + 0x08024000, *idx, (const void *)data);
+            }
+            ack++;
+        }
+    } else {
+        /* 9-register ESN/FW block. buf[4..17] = ESN, buf[0..3] = FW. */
+        static const uint8_t pair_lo[9] = { 4, 6, 8, 10, 12, 14, 16, 0, 2 };
+        uint8_t buf[18];
+        for (int reg = 0xc; reg <= 0x14; reg++) {
+            if (reg_addr < (uint16_t)(reg + 1) && byte_count > 1) {
+                uint8_t lo = pair_lo[reg - 0xc];
+                buf[lo + 1] = frame[off++];
+                buf[lo]     = frame[off++];
+                byte_count = (uint8_t)(byte_count - 2);
+                ack++;
+                if (reg == 0x14 && *(volatile uint16_t *)(cfg + 0x54) == 0) {
+                    mem_copy((void *)0x2000052e, &buf[4], 0xe);  /* ESN */
+                    mem_copy((void *)0x2000053c, &buf[0], 4);    /* FW  */
+                    fedl5236_record_save();
+                }
+            }
+        }
+    }
+
+    if (ack != 0) {
+        uint16_t crc = modbus_crc16((const uint8_t *)frame, 6);
+        frame[6] = (uint8_t)crc;
+        frame[7] = (uint8_t)(crc >> 8);
+        for (int i = 0; i < 8; i++) {
+            uart_putchar(frame[i]);
+        }
     }
 
     *state = 0;

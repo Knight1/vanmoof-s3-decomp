@@ -43,16 +43,16 @@ void FUN_0800aa98(void);                      /* cal 0x14 path */
 void FUN_0800ac44(void);                      /* cal 0x15 path */
 void FUN_08009aa4(int arg);                   /* normal boot, low counter */
 /* boot_mode_enter (0x0800ede0) now in bms.c via the header */
-void FUN_0800bc18(void);                      /* alt path (mode bit 0/1/2 set) */
+/* bms_core_update (0x0800bc18) now in state_handlers.c via the header */
 /* uart_rx_handler (0x08016688) now in uart.c via the header */
 /* uart_tx_isr (0x080167f0) now in uart.c via the header */
-void FUN_08010360(void);                      /* state 0 / out-of-range default */
+
 
 /* Per-state routines, indexed by s_state (switch targets from the OEM jump
  * table @ 0x0801E6EC). Addresses retained in comments for later naming. */
 void FUN_0801010c(void); /* 1  */  void FUN_08009600(void); /* 2  */
 void FUN_0800acac(void); /* 3  */  void FUN_0800e9bc(void); /* 4  */
-void FUN_08011480(void); /* 5  */  void FUN_08010f50(void); /* 6  */
+  void FUN_08010f50(void); /* 6  */
 void FUN_080103c8(void); /* 7  */  void FUN_08010580(void); /* 8  */
 void FUN_08015b1c(void); /* 9  */  void FUN_08015cd0(void); /* 10 */
 void FUN_08008e88(void); /* 11 */  void FUN_08009058(void); /* 12 */
@@ -61,8 +61,8 @@ void FUN_08010738(void); /* 15 */  void FUN_080108a0(void); /* 16 */
 void FUN_08010a3c(void); /* 17 */  void FUN_08009228(void); /* 18 */
 void FUN_08009414(void); /* 19 */  void FUN_0800a94c(void); /* 20 */
 void FUN_0800ab00(void); /* 21 */  void FUN_0800f33c(void); /* 22 */
-void FUN_0800f204(void); /* 23,24,25 */
-void FUN_0800a558(void); /* 26 */  void FUN_08008dc8(void); /* 27 */
+
+  
 
 int main(void)
 {
@@ -123,7 +123,7 @@ loop:
             case 2:  FUN_08009600(); break;
             case 3:  FUN_0800acac(); break;
             case 4:  FUN_0800e9bc(); break;
-            case 5:  FUN_08011480(); break;
+            case 5:  bms_state_5(); break;
             case 6:  FUN_08010f50(); break;
             case 7:  FUN_080103c8(); break;
             case 8:  FUN_08010580(); break;
@@ -141,13 +141,13 @@ loop:
             case 20: FUN_0800a94c(); break;
             case 21: FUN_0800ab00(); break;
             case 22: FUN_0800f33c(); break;
-            case 23: case 24: case 25: FUN_0800f204(); break;
-            case 26: FUN_0800a558(); break;
-            case 27: FUN_08008dc8(); break;
-            default: FUN_08010360(); break;  /* state 0 or > 0x1b */
+            case 23: case 24: case 25: bms_state_fault(); break;
+            case 26: bms_state_fault(); break;
+            case 27: bms_state_shipping_wait(); break;
+            default: bms_state_idle(); break;  /* state 0 or > 0x1b */
             }
         } else {
-            FUN_0800bc18();
+            bms_core_update();
         }
         uart_rx_handler();
         uart_tx_isr();

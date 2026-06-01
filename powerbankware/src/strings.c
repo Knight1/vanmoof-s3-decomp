@@ -51,6 +51,16 @@ const char s_pdown_over5[]           = "\nFEDL5236_PowerDown() over 5 times\r"; 
 const char s_write_bms_record[] = "\nWrite BMS Record!!\r"; /* 0x0801E35C */
 const char s_check_bms_record[] = "\nCheck BMS Record!!\r"; /* 0x0801E374 */
 
+/* OTA image-copy banners (src/ota.c). */
+const char s_copy_shadow_to_ap[] = "\nCopy Shadow to AP";  /* 0x0801E120 */
+const char s_copy_ap_to_shadow[] = "\nCopy AP to Shadow";  /* 0x0801E134 */
+const char s_copy_shadow_to_bl[] = "\nCopy Shadow to BL";  /* 0x0801E148 */
+const char s_copy_done[]         = " --> Done\r";          /* 0x0801E15C */
+
+/* BMS coulomb-counter calibration events (src/state_handlers.c). */
+const char s_chg_cal_ok[] = "\nCHG CAL OK\r"; /* 0x0801DD0C */
+const char s_dsg_cal_ok[] = "\nDSG CAL OK\r"; /* 0x0801DD1C */
+
 /* BMS state/config (src/bms.c). */
 const char s_preset_bms[]       = "\nPreset_BMS_System_Value()\r"; /* 0x0801E330 */
 const char s_real_soc[]         = "\nReal SOC = %d\r";            /* 0x0801E34C */
