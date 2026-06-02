@@ -341,7 +341,71 @@ void spi_rx_isr_16bit(void *handle)
     }
 }
 
-extern int FUN_0801c700(void *hspi);   /* HAL_SPI_Init (own pass) */
+/* hal_spi_msp_init — OEM FUN_0801c834 (HAL_SPI_MspInit): empty weak callback
+ * (the SPI1 clock + GPIO are set up directly in spi1_init). */
+void hal_spi_msp_init(void *hspi)
+{
+    (void)hspi;
+}
+
+/*
+ * hal_spi_init — OEM FUN_0801c700 (HAL_SPI_Init).
+ * Validate, run the (empty) MSP init, clear SPE, compose CR1/CR2 from the staged
+ * Init fields, clear I2SMOD, leave State = READY. Handle byte offsets: Instance
+ * +0x00, Mode +0x04, Direction +0x08, DataSize +0x0c, CLKPolarity +0x10,
+ * CLKPhase +0x14, NSS +0x18, BaudRatePrescaler +0x1c, FirstBit +0x20, TIMode
+ * +0x24, CRCCalc +0x28, NSSPMode +0x30, CRCLength +0x34, Lock +0x5c, State
+ * +0x5d, ErrorCode +0x60. SPI regs: CR1 +0x00, CR2 +0x04, I2SCFGR +0x1c.
+ * Offsets/widths/constants disasm-confirmed.
+ */
+int hal_spi_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint8_t *h = (uint8_t *)handle;
+
+    *(uint32_t *)(h + 0x28) = 0;                    /* CRCCalculation = DISABLE */
+
+    if (*(volatile uint8_t *)(h + 0x5d) == 0) {     /* State == RESET */
+        *(volatile uint8_t *)(h + 0x5c) = 0;        /* Lock = UNLOCKED */
+        hal_spi_msp_init(h);                        /* HAL_SPI_MspInit */
+    }
+    *(volatile uint8_t *)(h + 0x5d) = 2;            /* State = BUSY */
+
+    volatile uint32_t *spi = *(volatile uint32_t **)(h + 0x00);   /* Instance */
+    spi[0] &= 0xffffffbfu;                          /* CR1: SPE off */
+
+    uint32_t frxth = (*(uint32_t *)(h + 0x0c) < 0x701) ? 0x1000u : 0u;   /* DataSize <= 8 */
+
+    if (*(uint32_t *)(h + 0x0c) != 0xf00 && *(uint32_t *)(h + 0x0c) != 0x700) {
+        *(uint32_t *)(h + 0x28) = 0;
+    }
+    if (*(uint32_t *)(h + 0x30) == 0) {             /* NSSPMode unset */
+        *(uint32_t *)(h + 0x30) = (*(uint32_t *)(h + 0x0c) < 0x701) ? 1u : 2u;
+    }
+
+    spi[0] = *(uint32_t *)(h + 0x28) |              /* CR1 */
+             *(uint32_t *)(h + 0x04) |              /* Mode */
+             *(uint32_t *)(h + 0x08) |              /* Direction */
+             *(uint32_t *)(h + 0x10) |              /* CLKPolarity */
+             *(uint32_t *)(h + 0x14) |              /* CLKPhase */
+             (*(uint32_t *)(h + 0x18) & 0x200u) |   /* NSS (SSM) */
+             *(uint32_t *)(h + 0x1c) |              /* BaudRatePrescaler */
+             *(uint32_t *)(h + 0x20);               /* FirstBit */
+
+    spi[1] = frxth |                                /* CR2 */
+             ((*(uint32_t *)(h + 0x18) >> 16) & 4u) | /* NSS -> SSOE */
+             *(uint32_t *)(h + 0x24) |              /* TIMode */
+             *(uint32_t *)(h + 0x34) |              /* NSSPMode word @0x34 */
+             *(uint32_t *)(h + 0x0c);               /* DataSize (DS) */
+
+    spi[7] &= 0xfffff7ffu;                          /* I2SCFGR (+0x1c): I2SMOD off */
+
+    *(uint32_t *)(h + 0x60) = 0;                    /* ErrorCode = NONE */
+    *(volatile uint8_t *)(h + 0x5d) = 1;            /* State = READY */
+    return 0;
+}
 
 /*
  * spi1_init — OEM FUN_08010d90. One of board_init's peripheral sub-inits.
@@ -386,7 +450,7 @@ void spi1_init(void)
     hspi[13] = 0;             /* Init.NSSPMode          */
     *(volatile uint32_t *)0x20002614u = 0;
 
-    if (FUN_0801c700(hspi) != 0) {
+    if (hal_spi_init(hspi) != 0) {
         spi_error_reset();
     }
 

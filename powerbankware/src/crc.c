@@ -156,7 +156,52 @@ uint32_t bms_record_crc(const void *buf, uint16_t len)
     return crc_accumulate(CRC_HANDLE, buf, len);
 }
 
-extern int FUN_08019cb0(void *hcrc);   /* HAL_CRC_Init (own pass) */
+/* hal_crc_msp_init — OEM FUN_08019d4e (HAL_CRC_MspInit): empty weak callback
+ * (the CRC clock is enabled directly in crc_init). */
+void hal_crc_msp_init(void *hcrc)
+{
+    (void)hcrc;
+}
+extern int  FUN_0801a038(void *hcrc);   /* CRC default-polynomial program (own pass) */
+
+/*
+ * hal_crc_init — OEM FUN_08019cb0 (HAL_CRC_Init).
+ * MSP init, program the polynomial engine, load the init value (0xFFFFFFFF when
+ * DefaultInitValueUse, byte +0x05, == 0; else the handle InitValue at +0x10)
+ * into CRC->INIT (+0x10), then fold InputDataInversionMode (+0x14 -> CR bits
+ * 6:5) and OutputDataInversionMode (+0x18 -> CR bit 7) into CRC->CR (+0x08).
+ * State +0x1d (2 = BUSY, 1 = READY). Widths/offsets disasm-confirmed.
+ */
+int hal_crc_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint8_t *h = (uint8_t *)handle;
+
+    if (h[0x1d] == 0) {                             /* State == RESET */
+        h[0x1c] = 0;                                /* Lock = UNLOCKED */
+        hal_crc_msp_init(handle);                   /* HAL_CRC_MspInit */
+    }
+    h[0x1d] = 2;                                    /* State = BUSY */
+
+    if (FUN_0801a038(handle) != 0) {
+        return 1;
+    }
+
+    volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
+    if (h[5] == 0) {                                /* DefaultInitValueUse (default) */
+        inst[4] = 0xffffffffu;                      /* INIT (+0x10) = default */
+    } else {
+        inst[4] = *(uint32_t *)(h + 0x10);          /* INIT = handle InitValue */
+    }
+
+    inst[2] = (inst[2] & 0xffffff9fu) | *(uint32_t *)(h + 0x14);   /* CR InputDataInv (6:5) */
+    inst[2] = (inst[2] & 0xffffff7fu) | *(uint32_t *)(h + 0x18);   /* CR OutputDataInv (7) */
+
+    h[0x1d] = 1;                                    /* State = READY */
+    return 0;
+}
 
 /*
  * crc_init — OEM FUN_08012188. One of board_init's peripheral sub-inits.
@@ -179,7 +224,7 @@ void crc_init(void)
 
     *rcc_ahbenr |= 0x40u;  (void)(*rcc_ahbenr & 0x40u);        /* CRCEN + read-back */
 
-    if (FUN_08019cb0(CRC_HANDLE) != 0) {
+    if (hal_crc_init(CRC_HANDLE) != 0) {
         spi_error_reset();
     }
 }

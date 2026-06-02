@@ -276,7 +276,11 @@ int rtc_wait_synchro(void *hrtc)
     return 0;
 }
 
-extern void FUN_0801c278(void *hrtc);   /* HAL_RTC_MspInit (own pass) */
+/* rtc_msp_init — OEM FUN_0801c278 (HAL_RTC_MspInit): empty weak stub. */
+void rtc_msp_init(void *hrtc)
+{
+    (void)hrtc;
+}
 
 /*
  * hal_rtc_init — OEM FUN_0801c150 (HAL_RTC_Init).
@@ -301,7 +305,7 @@ int hal_rtc_init(void *handle)
 
     if (h[0x1d] == 0) {                          /* State == RESET */
         h[0x1c] = 0;                             /* Lock = UNLOCKED */
-        FUN_0801c278(handle);                    /* HAL_RTC_MspInit */
+        rtc_msp_init(handle);                    /* HAL_RTC_MspInit */
     }
     h[0x1d] = 2;                                 /* State = BUSY */
 

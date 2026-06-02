@@ -228,6 +228,34 @@ int  hal_rtc_init(void *hrtc);                       /* HAL_RTC_Init (FUN_0801c1
 void iwdg_init(void);         /* IWDG config + initial refresh (FUN_08013820) */
 int  hal_iwdg_init(void *hiwdg);                     /* HAL_IWDG_Init (FUN_0801b488) */
 
+/* ---- Deeper HAL / CMSIS leaves (the HAL_*_Init layer) ------------------ */
+/* Cortex core + clock helpers (src/hal.c, src/system.c) */
+void nvic_set_priority_core(int irqn, uint32_t priority); /* NVIC_SetPriority (FUN_08019b28) */
+void nvic_enable_irq_core(int irqn);                      /* NVIC_EnableIRQ (FUN_08019afc) */
+int  hal_systick_config(uint32_t reload);                /* HAL_SYSTICK_Config (FUN_08019c96) */
+uint32_t hal_rcc_get_hclk_freq(void);                    /* HAL_RCC_GetHCLKFreq (FUN_0801bf0c) */
+int  hal_rcc_get_sysclock_freq(void);                    /* HAL_RCC_GetSysClockFreq (FUN_0801be0c) */
+void rtc_msp_init(void *hrtc);                           /* HAL_RTC_MspInit stub (FUN_0801c278) */
+/* Empty HAL_*_MspInit weak callbacks (clock/GPIO done in the board sub-inits) */
+void hal_adc_msp_init(void *hadc);                       /* HAL_ADC_MspInit (FUN_080195c0) */
+void hal_crc_msp_init(void *hcrc);                       /* HAL_CRC_MspInit (FUN_08019d4e) */
+void hal_i2c_msp_init(void *hi2c);                       /* HAL_I2C_MspInit (FUN_0801a9bc) */
+void hal_spi_msp_init(void *hspi);                       /* HAL_SPI_MspInit (FUN_0801c834) */
+void hal_tim_msp_init(void *htim);                       /* HAL_TIM_Base_MspInit (FUN_0801cf60) */
+void hal_uart_msp_init(void *huart);                     /* HAL_UART_MspInit (FUN_0801d234) */
+/* Peripheral HAL_*_Init (src/{adc,spi,i2c,uart,crc,timer}.c) */
+int  hal_adc_init(uint32_t *hadc);                       /* HAL_ADC_Init (FUN_08019344) */
+char adc_calibration_start(uint32_t *handle);            /* HAL_ADCEx_Calibration_Start (FUN_080199c8) */
+char adc_config_channel(uint32_t *handle, uint32_t *sconfig); /* HAL_ADC_ConfigChannel (FUN_080196b4) */
+int  hal_spi_init(void *handle);                         /* HAL_SPI_Init (FUN_0801c700) */
+int  hal_i2c_init(void *handle);                         /* HAL_I2C_Init (FUN_0801a890) */
+int  hal_i2cex_config_analog_filter(void *handle, uint32_t analog_filter);  /* FUN_0801b354 */
+int  hal_i2cex_config_digital_filter(void *handle, int digital_filter);     /* FUN_0801b3ec */
+int  hal_uart_init(void *handle);                        /* HAL_UART_Init (FUN_0801d184) */
+int  hal_crc_init(void *handle);                         /* HAL_CRC_Init (FUN_08019cb0) */
+int  hal_tim_base_init(void *handle);                    /* HAL_TIM_Base_Init (FUN_0801cf08) */
+int  hal_timex_master_config(void *handle, const uint32_t *cfg); /* HAL_TIMEx_MasterConfig (FUN_0801d0fc) */
+
 /* ---- Hardware CRC (src/crc.c) ------------------------------------------ */
 uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len);
 uint32_t crc_continue(void *handle, const void *buf, uint32_t len);

@@ -16,8 +16,63 @@ uint32_t timer_start_it(uint32_t *handle)
     return 0;
 }
 
-extern int FUN_0801cf08(void *htim);                 /* HAL_TIM_Base_Init */
-extern int FUN_0801d0fc(void *htim, void *master);   /* HAL_TIMEx_MasterConfigSynchronization */
+/* hal_tim_msp_init — OEM FUN_0801cf60 (HAL_TIM_Base_MspInit): empty weak callback
+ * (the TIM7 clock is enabled directly in tim7_init). */
+void hal_tim_msp_init(void *htim)
+{
+    (void)htim;
+}
+extern void FUN_0801cff8(volatile uint32_t *inst, const uint32_t *init); /* TIM_Base_SetConfig (own pass) */
+
+/*
+ * hal_tim_base_init — OEM FUN_0801cf08 (HAL_TIM_Base_Init).
+ * MSP init, then TIM_Base_SetConfig(Instance, &Init) (which programs CR1/ARR/
+ * PSC + an update event). Lock +0x3c, State +0x3d. Init begins at handle +0x04.
+ */
+int hal_tim_base_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint8_t *h = (uint8_t *)handle;
+
+    if (h[0x3d] == 0) {                             /* State == RESET */
+        h[0x3c] = 0;                                /* Lock = UNLOCKED */
+        hal_tim_msp_init(handle);                   /* HAL_TIM_Base_MspInit */
+    }
+    h[0x3d] = 2;                                    /* State = BUSY */
+
+    volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
+    FUN_0801cff8(inst, (const uint32_t *)(h + 4));        /* TIM_Base_SetConfig(&Init) */
+
+    h[0x3d] = 1;                                    /* State = READY */
+    return 0;
+}
+
+/*
+ * hal_timex_master_config — OEM FUN_0801d0fc
+ * (HAL_TIMEx_MasterConfigSynchronization). Program CR2.MMS (+0x04, bits 6:4)
+ * := MasterOutputTrigger and SMCR.MSM (+0x08, bit 7) := MasterSlaveMode, each as
+ * the OEM's separate mask-then-OR store pair. Lock +0x3c. cfg = {MMS, MSM}.
+ */
+int hal_timex_master_config(void *handle, const uint32_t *cfg)
+{
+    uint8_t *h = (uint8_t *)handle;
+
+    if (h[0x3c] == 1) {                             /* Lock held */
+        return 2;                                   /* HAL_BUSY */
+    }
+    h[0x3c] = 1;                                    /* Lock */
+    h[0x3d] = 2;                                    /* State = BUSY */
+
+    volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
+    inst[1] &= 0xffffff8fu;  inst[1] |= cfg[0];     /* CR2  MMS  := MasterOutputTrigger */
+    inst[2] &= 0xffffff7fu;  inst[2] |= cfg[1];     /* SMCR MSM  := MasterSlaveMode      */
+
+    h[0x3c] = 0;                                    /* Unlock */
+    h[0x3d] = 1;                                    /* State = READY */
+    return 0;
+}
 
 /*
  * tim7_init — OEM FUN_0800e910. One of board_init's peripheral sub-inits.
@@ -41,11 +96,11 @@ void tim7_init(void)
     htim[4] = 0;             /* Init.ClockDivision          */
     htim[6] = 0x80;          /* Init.AutoReloadPreload (+0x18) */
 
-    if (FUN_0801cf08(htim) != 0) { spi_error_reset(); }
+    if (hal_tim_base_init(htim) != 0) { spi_error_reset(); }
 
     master[0] = 0;           /* MasterOutputTrigger */
     master[1] = 0;           /* MasterSlaveMode     */
-    if (FUN_0801d0fc(htim, master) != 0) { spi_error_reset(); }
+    if (hal_timex_master_config(htim, master) != 0) { spi_error_reset(); }
 
     nvic_set_priority(18, 0, 0);   /* TIM7_IRQn */
     nvic_enable_irq(18);

@@ -15,11 +15,41 @@
  */
 
 /* --- deeper Cortex / HAL leaves (own passes) --- */
-extern uint32_t FUN_0801bf0c(void);                     /* HAL_RCC_GetHCLKFreq */
-extern uint32_t FUN_08008130(uint32_t a, uint32_t b);   /* unsigned divide a / b */
-extern int      FUN_08019c96(uint32_t reload);          /* HAL_SYSTICK_Config */
-extern void     FUN_08019b28(int irqn, uint32_t prio);  /* NVIC_SetPriority (core) */
-extern void     FUN_08019afc(int irqn);                 /* NVIC_EnableIRQ (core) */
+extern int FUN_08019c04(uint32_t reload);   /* SysTick_Config (CMSIS core) */
+
+/*
+ * nvic_set_priority_core — OEM FUN_08019b28 (CMSIS NVIC_SetPriority).
+ * Writes the 2-bit priority (CM0 has __NVIC_PRIO_BITS = 2, so the value lands in
+ * bits 7:6 of the byte) into the byte field of the NVIC IPR (IRQn >= 0, base
+ * 0xE000E400) or the SCB SHP (system handlers, IRQn < 0, base 0xE000ED00). The
+ * register/byte address arithmetic is disasm-confirmed against the OEM image.
+ */
+void nvic_set_priority_core(int irqn, uint32_t priority)
+{
+    uint32_t shift = ((uint32_t)irqn & 3u) << 3;
+    uint32_t val   = ((priority & 3u) << 6) << shift;
+    uint32_t keep  = ~(0xffu << shift);
+    volatile uint32_t *reg;
+
+    if ((uint8_t)irqn < 0x80u) {                            /* peripheral IRQ (>= 0) */
+        reg = (volatile uint32_t *)(0xe000e100u + (((uint32_t)(((int8_t)irqn) >> 2) + 0xc0u) << 2));
+    } else {                                                /* system handler (< 0) */
+        reg = (volatile uint32_t *)(0xe000ed00u + ((((((uint32_t)irqn & 0xfu) - 8u) >> 2) + 6u) << 2) + 4u);
+    }
+    *reg = val | (keep & *reg);
+}
+
+/* nvic_enable_irq_core — OEM FUN_08019afc (CMSIS NVIC_EnableIRQ): NVIC ISER0. */
+void nvic_enable_irq_core(int irqn)
+{
+    *(volatile uint32_t *)0xe000e100u = 1u << ((uint32_t)irqn & 0x1fu);
+}
+
+/* hal_systick_config — OEM FUN_08019c96 (HAL_SYSTICK_Config): forwards to SysTick_Config. */
+int hal_systick_config(uint32_t reload)
+{
+    return FUN_08019c04(reload);
+}
 
 /*
  * nvic_set_priority — OEM FUN_08019c4c (HAL_NVIC_SetPriority).
@@ -30,13 +60,13 @@ extern void     FUN_08019afc(int irqn);                 /* NVIC_EnableIRQ (core)
 void nvic_set_priority(int irqn, uint32_t preempt_priority, uint32_t sub_priority)
 {
     (void)sub_priority;
-    FUN_08019b28((int8_t)irqn, preempt_priority);
+    nvic_set_priority_core((int8_t)irqn, preempt_priority);
 }
 
 /* nvic_enable_irq — OEM FUN_08019c76 (HAL_NVIC_EnableIRQ). */
 void nvic_enable_irq(int irqn)
 {
-    FUN_08019afc((int8_t)irqn);
+    nvic_enable_irq_core((int8_t)irqn);
 }
 
 /* hal_msp_init — OEM FUN_080192ec (HAL_MspInit): empty weak stub, not overridden. */
@@ -51,8 +81,8 @@ void hal_msp_init(void)
  */
 int hal_init_tick(uint32_t tick_priority)
 {
-    uint32_t reload = FUN_08008130(FUN_0801bf0c(), 1000);   /* HCLK / 1000 */
-    FUN_08019c96(reload);                                   /* HAL_SYSTICK_Config */
+    uint32_t reload = hal_rcc_get_hclk_freq() / 1000u;      /* HCLK / 1000 */
+    hal_systick_config(reload);                             /* HAL_SYSTICK_Config */
     nvic_set_priority(-1, tick_priority, 0);                /* SysTick_IRQn */
     return 0;
 }

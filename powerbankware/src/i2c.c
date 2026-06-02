@@ -328,9 +328,110 @@ int eeprom_mem_read(void *handle, uint8_t dev, uint16_t addr, uint16_t addrsz,
     return 0;
 }
 
-extern int FUN_0801a890(void *hi2c);             /* HAL_I2C_Init                  */
-extern int FUN_0801b354(void *hi2c, uint32_t f); /* HAL_I2CEx_ConfigAnalogFilter  */
-extern int FUN_0801b3ec(void *hi2c, int f);      /* HAL_I2CEx_ConfigDigitalFilter */
+/* hal_i2c_msp_init — OEM FUN_0801a9bc (HAL_I2C_MspInit): empty weak callback
+ * (the I2C2 clock + GPIO are set up directly in i2c2_init). */
+void hal_i2c_msp_init(void *hi2c)
+{
+    (void)hi2c;
+}
+
+/*
+ * hal_i2c_init — OEM FUN_0801a890 (HAL_I2C_Init).
+ * Validate, run the (empty) MSP init, disable PE, program TIMINGR/OAR1/CR2/OAR2/
+ * CR1 from the staged Init fields, re-enable PE. 7-bit addressing here. Handle
+ * words: [1]Timing [2]OwnAddress1 [3]AddressingMode [4]DualAddressMode
+ * [5]OwnAddress2 [6]OwnAddress2Masks [7]GeneralCallMode [8]NoStretchMode; bytes
+ * Lock +0x40, State +0x41, Mode +0x42, ErrorCode +0x44. I2C regs: CR1 +0x00,
+ * CR2 +0x04, OAR1 +0x08, OAR2 +0x0c, TIMINGR +0x10. Disasm-confirmed.
+ */
+int hal_i2c_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint32_t *hi2c = (uint32_t *)handle;
+    uint8_t  *h    = (uint8_t  *)handle;
+
+    if (h[0x41] == 0) {                             /* State == RESET */
+        h[0x40] = 0;                                /* Lock = UNLOCKED */
+        hal_i2c_msp_init(hi2c);                     /* HAL_I2C_MspInit */
+    }
+    h[0x41] = 0x24;                                 /* State = BUSY */
+
+    volatile uint32_t *i2c = *(volatile uint32_t **)hi2c;   /* Instance */
+    i2c[0] &= 0xfffffffeu;                          /* CR1: PE off */
+    i2c[4] = hi2c[1] & 0xf0ffffffu;                 /* TIMINGR = Timing & mask */
+
+    i2c[2] &= 0xffff7fffu;                          /* OAR1 &= ~OA1EN */
+    if (hi2c[3] == 1) {
+        i2c[2] = hi2c[2] | 0x8000u;                 /* OAR1 = OA1EN | OwnAddress1 (7-bit) */
+    } else {
+        i2c[2] = hi2c[2] | 0x8400u;                 /* OAR1 = OA1EN | OA1MODE | OwnAddress1 */
+    }
+
+    if (hi2c[3] == 2) {
+        i2c[1] = 0x800u;                            /* CR2 ADD10 (10-bit) */
+    }
+    i2c[1] |= 0x02008000u;                          /* CR2 |= AUTOEND | NACK */
+
+    i2c[3] &= 0xffff7fffu;                          /* OAR2 &= ~OA2EN */
+    i2c[3] = (hi2c[6] << 8) | hi2c[4] | hi2c[5];    /* OAR2 = (Masks<<8)|DualAddr|OwnAddress2 */
+
+    i2c[0] = hi2c[8] | hi2c[7];                     /* CR1 = NoStretch | GeneralCall */
+    i2c[0] |= 1u;                                   /* CR1 PE on */
+
+    *(uint32_t *)(h + 0x44) = 0;                    /* ErrorCode = NONE */
+    h[0x41] = 0x20;                                 /* State = READY */
+    hi2c[0xc] = 0;                                  /* PreviousState (+0x30) = NONE */
+    h[0x42] = 0;                                    /* Mode = NONE */
+    return 0;
+}
+
+/*
+ * hal_i2cex_config_analog_filter — OEM FUN_0801b354 (HAL_I2CEx_ConfigAnalogFilter).
+ * State/Lock-guarded CR1 edit: PE off, clear ANFOFF (bit12), set the filter
+ * selection, PE on. Returns 0 = OK, 2 = BUSY. State +0x41, Lock +0x40.
+ */
+int hal_i2cex_config_analog_filter(void *handle, uint32_t analog_filter)
+{
+    uint8_t *h = (uint8_t *)handle;
+    if (h[0x41] != 0x20) { return 2; }
+    if (h[0x40] == 1) { return 2; }
+    h[0x40] = 1;
+    h[0x41] = 0x24;
+
+    volatile uint32_t *cr1 = (volatile uint32_t *)(*(uint32_t *)h);
+    *cr1 &= 0xfffffffeu;                            /* PE off */
+    *cr1 &= 0xffffefffu;                            /* clear ANFOFF (bit12) */
+    *cr1 |= analog_filter;
+    *cr1 |= 1u;                                     /* PE on */
+
+    h[0x41] = 0x20;
+    h[0x40] = 0;
+    return 0;
+}
+
+/*
+ * hal_i2cex_config_digital_filter — OEM FUN_0801b3ec (HAL_I2CEx_ConfigDigitalFilter).
+ * As above but sets the DNF field (CR1 bits 11:8) from `digital_filter`.
+ */
+int hal_i2cex_config_digital_filter(void *handle, int digital_filter)
+{
+    uint8_t *h = (uint8_t *)handle;
+    if (h[0x41] != 0x20) { return 2; }
+    if (h[0x40] == 1) { return 2; }
+    h[0x40] = 1;
+    h[0x41] = 0x24;
+
+    volatile uint32_t *cr1 = (volatile uint32_t *)(*(uint32_t *)h);
+    *cr1 &= 0xfffffffeu;                            /* PE off */
+    *cr1 = ((uint32_t)digital_filter << 8) | (*cr1 & 0xfffff0ffu);   /* DNF (bits 11:8) */
+    *cr1 |= 1u;                                     /* PE on */
+
+    h[0x41] = 0x20;
+    h[0x40] = 0;
+    return 0;
+}
 
 /*
  * i2c2_init — OEM FUN_0800e32c. board_init's final peripheral sub-init.
@@ -369,7 +470,7 @@ void i2c2_init(void)
     hi2c[8] = 0;             /* Init.NoStretchMode    */
     *(volatile uint32_t *)0x20002614u = 0;
 
-    if (FUN_0801a890(hi2c) != 0)    { spi_error_reset(); }
-    if (FUN_0801b354(hi2c, 0) != 0) { spi_error_reset(); }   /* analog filter on   */
-    if (FUN_0801b3ec(hi2c, 0) != 0) { spi_error_reset(); }   /* digital filter = 0 */
+    if (hal_i2c_init(hi2c) != 0)                       { spi_error_reset(); }
+    if (hal_i2cex_config_analog_filter(hi2c, 0) != 0)  { spi_error_reset(); }
+    if (hal_i2cex_config_digital_filter(hi2c, 0) != 0) { spi_error_reset(); }
 }

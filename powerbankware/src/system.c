@@ -35,8 +35,47 @@ static const uint8_t ahb_presc_table[16] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9
 };
 
-extern uint32_t FUN_0801be0c(void);                 /* HAL_RCC_GetSysClockFreq */
-extern uint32_t FUN_08008130(uint32_t a, uint32_t b); /* unsigned divide a / b */
+/*
+ * hal_rcc_get_hclk_freq — OEM FUN_0801bf0c (HAL_RCC_GetHCLKFreq).
+ * Returns the cached SystemCoreClock (HCLK) value.
+ */
+uint32_t hal_rcc_get_hclk_freq(void)
+{
+    return SYSTEM_CORE_CLOCK;
+}
+
+/*
+ * hal_rcc_get_sysclock_freq — OEM FUN_0801be0c (HAL_RCC_GetSysClockFreq).
+ * Compute the current SYSCLK in Hz from RCC_CFGR.SWS and (for PLL) the PLLMUL /
+ * PREDIV factor tables. HSI 8 / HSE 16 / HSI48 48 MHz. The two byte tables are
+ * `static const` (.rodata), reproducing the OEM flash tables at 0x0801e578 /
+ * 0x0801e588; their values and the byte-index reads are disasm-confirmed.
+ */
+int hal_rcc_get_sysclock_freq(void)
+{
+    static const uint8_t pllmul_table[16] = {2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,16};
+    static const uint8_t prediv_table[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+
+    uint32_t cfgr = RCC_CFGR;
+    uint32_t sws  = cfgr & 0xcu;
+
+    if (sws == 0x8u) {                              /* PLL */
+        uint32_t pllmul = pllmul_table[(cfgr >> 0x12) & 0xfu];
+        uint32_t prediv = prediv_table[RCC_CFGR2 & 0xfu];
+        uint32_t base;
+        if ((cfgr & 0x18000u) == 0x10000u) {
+            base = 0x00f42400u;                     /* HSE */
+        } else if ((cfgr & 0x18000u) == 0x18000u) {
+            base = 0x02dc6c00u;                     /* HSI48 */
+        } else {
+            base = 0x007a1200u;                     /* HSI */
+        }
+        return (int)((base / prediv) * pllmul);
+    }
+    if (sws == 0xcu) { return 0x02dc6c00; }          /* HSI48 */
+    if (sws == 0x4u) { return 0x00f42400; }          /* HSE */
+    return 0x007a1200;                               /* HSI */
+}
 
 /* pwr_enable_bkup_access — OEM FUN_0801b51c (HAL_PWR_EnableBkUpAccess). */
 void pwr_enable_bkup_access(void)
@@ -314,7 +353,7 @@ int hal_rcc_clock_config(const uint32_t *clk, uint32_t flatency)
         RCC_CFGR = (RCC_CFGR & 0xfffff8ffu) | clk[3];
     }
 
-    SYSTEM_CORE_CLOCK = FUN_0801be0c() >> ahb_presc_table[(RCC_CFGR >> 4) & 0xfu];
+    SYSTEM_CORE_CLOCK = hal_rcc_get_sysclock_freq() >> ahb_presc_table[(RCC_CFGR >> 4) & 0xfu];
     hal_init_tick(0);                                       /* reprogram SysTick */
     return 0;
 }
@@ -406,7 +445,7 @@ void system_core_clock_update(void)
         } else {
             base = 0x007a1200u;                 /* HSI = 8 MHz */
         }
-        SYSTEM_CORE_CLOCK = pllmul * FUN_08008130(base, prediv);
+        SYSTEM_CORE_CLOCK = pllmul * (base / prediv);
     } else {
         SYSTEM_CORE_CLOCK = 0x007a1200u;        /* HSI = 8 MHz */
     }

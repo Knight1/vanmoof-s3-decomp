@@ -18,7 +18,8 @@ the smaller F0 parts; F091xC is the fit.
 | IWDG | `0x40003000` | `iwdg_init` KR `+0x00` ← `0xAAAA` (reload key); PR `+0x04` / RLR `+0x08` / SR `+0x0c` / WINR `+0x10` |
 | PWR | `0x40007000` | CR `+0x00` bit8 = DBP (`pwr_enable_bkup_access`); APB1ENR bit28 |
 | CRC | `0x40023000` | `crc_init`: AHBENR bit6 (CRCEN); InputDataFormat = words |
-| ADC1 | `0x40012400` | `adc_msp_init`: APB2ENR bit9; PA0/PA1/PA4 analog; IRQ 12 (ADC1_COMP) |
+| ADC1 | `0x40012400` | `adc_msp_init`: APB2ENR bit9; PA0/PA1/PA4 analog; IRQ 12 (ADC1_COMP). HAL regs: ISR `+0x00` / CR `+0x08` (ADSTART b2, ADCAL b31) / CFGR1 `+0x0c` / SMPR `+0x14` / CHSELR `+0x28`; ADC1_COMMON CCR `0x40012708` (TSEN/VREFEN/VBATEN) |
+| Cortex-M0 core | `0xE000E000` | NVIC ISER0 `0xE000E100`, IPR `0xE000E400` (priority bits 7:6 = 2 prio bits); SCB `0xE000ED00` (AIRCR `+0x0C`, SHP via `0xE000ED1C/20`) |
 | USART1 | `0x40013800` | (F0 APB2) — ch1 link, HAL handle `0x200007ac` |
 | USART2 | `0x40004400` | `uart_msp_init`: APB1ENR bit17; PA2/PA3 AF1; 115200 8N1; IRQ 28; handle `0x20001a60` |
 | SPI1 | `0x40013000` | `spi1_init`: APB2ENR bit12; PB3/PB4/PB5 AF0 (SCK/MISO/MOSI); master 8-bit /32; IRQ 25; handle `0x20000634` |

@@ -277,7 +277,53 @@ void uart_flush_ch1(void)
     }
 }
 
-extern int FUN_0801d184(void *huart);   /* HAL_UART_Init (own pass) */
+/* hal_uart_msp_init — OEM FUN_0801d234 (HAL_UART_MspInit): empty weak callback
+ * (the USART2 clock + GPIO are set up directly in uart_msp_init). */
+void hal_uart_msp_init(void *huart)
+{
+    (void)huart;
+}
+extern void FUN_0801d678(void *huart);   /* UART_AdvFeatureConfig (own pass) */
+extern int  FUN_0801d244(void *huart);   /* UART_SetConfig: BRR + CR1/2/3 (own pass) */
+extern int  FUN_0801d7e0(void *huart);   /* UART_CheckIdleState (own pass) */
+
+/*
+ * hal_uart_init — OEM FUN_0801d184 (HAL_UART_Init).
+ * Sequences the UART bring-up: (first use) MSP init; UE off; UART_SetConfig
+ * (which computes BRR + writes CR1/CR2/CR3); optional AdvancedInit; clear the
+ * unused CR2.CLKEN and CR3.{SCEN,HDSEL,IREN}; UE on; UART_CheckIdleState. The
+ * baud math lives in UART_SetConfig (kept extern). gState +0x69 (0x24 = BUSY),
+ * scratch +0x68, AdvancedInit gate at +0x24. Masks disasm-confirmed.
+ */
+int hal_uart_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint8_t *h = (uint8_t *)handle;
+
+    if (h[0x69] == 0) {                             /* gState == RESET */
+        h[0x68] = 0;
+        hal_uart_msp_init(h);                       /* HAL_UART_MspInit */
+    }
+    h[0x69] = 0x24;                                 /* gState = BUSY */
+
+    volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
+    inst[0] &= 0xfffffffeu;                         /* CR1.UE = 0 */
+
+    if (FUN_0801d244(h) == 1) {                     /* UART_SetConfig */
+        return 1;
+    }
+    if (*(uint32_t *)(h + 0x24) != 0) {             /* AdvancedInit */
+        FUN_0801d678(h);
+    }
+
+    inst[1] &= 0xffffb7ffu;                         /* CR2: clear CLKEN (bit11) */
+    inst[2] &= 0xffffffd5u;                         /* CR3: clear SCEN/HDSEL/IREN */
+    inst[0] |= 1u;                                  /* CR1.UE = 1 */
+
+    return FUN_0801d7e0(h);                         /* UART_CheckIdleState */
+}
 
 /*
  * uart_msp_init — OEM FUN_0801647c. One of board_init's peripheral sub-inits.
@@ -324,7 +370,7 @@ void uart_msp_init(void)
     }
     *(volatile uint32_t *)0x20002614u = 0;   /* free-running ms tick */
 
-    if (FUN_0801d184(hu) != 0) { spi_error_reset(); }
+    if (hal_uart_init(hu) != 0) { spi_error_reset(); }
 
     hu[0x1b] = 0;                                            /* +0x6c */
     *(volatile uint8_t *)((uint8_t *)hu + 0x69) = 0x20;     /* TX state = idle */
