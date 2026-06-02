@@ -102,3 +102,29 @@ firmware version (`0x200006e8+2`) + SN tail (`0x200006e8+1..3`), SOC (record
 the standard Modbus CRC-16 (init `0xFFFF`, reflected poly `0xA001`, no final XOR)
 computed over the block and stored little-endian at its tail — the same algorithm
 as `modbus_crc16` (`FUN_08019094`), but a distinct compute-and-append routine.
+
+## OTA image header (`image_verify_ap` @ `0x0800fe48`)
+
+A firmware image staged over the OTA channel (into staging `0x08024000`, then
+copied to AP `0x08008000` / BL `0x08000000` by `image_copy`) carries a 40-byte
+(`0x28`) VanMoof header ahead of its payload. `image_verify_ap` validates the
+AP/staging form via the hardware CRC unit (handle `0x200006c0`):
+
+| Off | Word | Field | Notes |
+| --- | --- | --- | --- |
+| `0x00` | `[0]` | magic | must be `0xAA55AA55`, else result 2 (bad header) |
+| `0x04` | `[1]` | — | not checked; included in the CRC as-is |
+| `0x08` | `[2]` | stored CRC | the value the computed CRC is compared to |
+| `0x0c` | `[3]` | length (bytes) | must be `≤ 0x1c000` (the AP region size `0x08024000 − 0x08008000`), else result 2 |
+| `0x10` | `[4..9]` | header tail | included in the CRC as-is |
+| `0x28` | `[10..]` | payload | vector table + code (HAL bring-up remaps vectors from image+`0x28`) |
+
+The CRC covers the **whole image with two header fields neutralised**: the
+header (10 words) is copied out and its stored-CRC (word 2) and length (word 3)
+are blanked to `0xFFFFFFFF` before being fed (`crc_accumulate` — reset + feed),
+then the body — `(length − 0x28) / 4` words from `+0x28` — is folded on without a
+reset (`crc_continue`). The result is compared to the stored CRC (word 2):
+**0 = valid, 1 = CRC mismatch, 2 = bad header**.
+
+The BL region instead uses the simpler raw check `image_verify` (`FUN_0800fed8`):
+a CRC over the first `0x1fff` words compared to a value stored at `+0x7ffc`.

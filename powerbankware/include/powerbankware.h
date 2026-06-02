@@ -17,6 +17,21 @@
  * -> main. main() runs the mode-gated state-machine super-loop.
  */
 
+/* ---- Cortex-M0 core intrinsics ----------------------------------------- *
+ * Self-contained CMSIS-style barriers (no vendor headers pulled in). The OEM
+ * emits a full-system `dsb sy` around its SCB->AIRCR system-reset writes;
+ * these reproduce it inline. always_inline so -Os keeps the barrier at the
+ * call site instead of emitting a callable stub. */
+__attribute__((always_inline)) static inline void __DSB(void)
+{
+    __asm volatile ("dsb 0xf" ::: "memory");
+}
+
+__attribute__((always_inline)) static inline void __ISB(void)
+{
+    __asm volatile ("isb 0xf" ::: "memory");
+}
+
 void Reset_Handler(void);
 void SystemInit(void);
 void __libc_init_array_lite(void);
@@ -184,8 +199,18 @@ int bms_errlog_load(short index);  /* read+CRC one errlog record from EEPROM (FU
 void boot_mode_enter(uint8_t mode);/* bootloader/upgrade entry */
 void shipping_enter(void);         /* ship-mode power-down */
 
+/* ---- HAL / board bring-up (src/hal.c) ---------------------------------- */
+int  hal_init(void);          /* HAL_Init: prefetch + SysTick + MspInit (FUN_080192c4) */
+void tick_state_reset(void);  /* clear software ms-tick flag/counter (FUN_08014ac8) */
+void board_init(void);        /* GPIO board config + sub-inits + EXTI NVIC (FUN_08011f2c) */
+/* ---- System clock / RTC bring-up (src/system.c) ------------------------ */
+void clock_rtc_init(void);    /* RCC osc/clock tree + RTC init (FUN_080136c0) */
+/* ---- Watchdog (src/watchdog.c) ----------------------------------------- */
+void iwdg_init(void);         /* IWDG config + initial refresh (FUN_08013820) */
+
 /* ---- Hardware CRC (src/crc.c) ------------------------------------------ */
 uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len);
+uint32_t crc_continue(void *handle, const void *buf, uint32_t len);
 uint32_t bms_record_crc(const void *buf, uint16_t len);
 
 /* ---- BMS-record persistence (src/fedl5236.c) --------------------------- */

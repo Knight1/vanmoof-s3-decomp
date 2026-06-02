@@ -15,7 +15,6 @@
  * OTA staging 0x08024000.
  */
 
-extern int  image_verify_ap(int *image);           /* FUN_0800fe48: AP-header CRC verify */
 void image_copy(uint32_t dst, uint32_t src, uint32_t len);  /* FUN_0800ff18 — below */
 
 extern const char s_copy_shadow_to_ap[], s_copy_ap_to_shadow[],
@@ -36,6 +35,31 @@ static bool image_verify(uint32_t addr)
 {
     uint32_t crc = crc_accumulate((void *)0x200006c0, (const void *)addr, 0x1fff);
     return (int32_t)crc != *(volatile int32_t *)(addr + 0x7ffc);
+}
+
+/*
+ * image_verify_ap — OEM FUN_0800fe48. VanMoof-header CRC check for an AP /
+ * staging image. Validates the 0xaa55aa55 magic (word 0) and that the length
+ * (word 3) fits the 0x1c000-byte AP region, then CRCs the image: the 0x28-byte
+ * header — with its stored-CRC (word 2) and length (word 3) fields blanked to
+ * 0xffffffff — followed by the body, and compares the result to the stored CRC.
+ * Returns 0 = valid, 1 = CRC mismatch, 2 = bad header. Constants and access
+ * widths are disasm-confirmed against the OEM image.
+ */
+int image_verify_ap(const uint32_t *image)
+{
+    if (image[0] == 0xaa55aa55u && image[3] <= 0x1c000u) {
+        uint32_t header[10];                  /* the 0x28-byte header, copied   */
+        mem_copy(header, image, 0x28);        /* out so two fields can be        */
+        header[2] = 0xffffffffu;              /* blanked before CRC: stored CRC  */
+        header[3] = 0xffffffffu;              /* and length                      */
+
+        crc_accumulate((void *)0x200006c0, header, 10);
+        uint32_t crc = crc_continue((void *)0x200006c0, image + 10,
+                                    (image[3] - 0x28u) >> 2);
+        return crc == image[2] ? 0 : 1;
+    }
+    return 2;
 }
 
 /* Send a response byte (ACK 0x79 / NAK 0x1f) and reset the protocol state. */
@@ -238,7 +262,7 @@ void image_copy(uint32_t dst, uint32_t src, uint32_t len)
         if (dst == 0x08000000) {
             bad = image_verify(dst) ? 1 : 0;
         } else {
-            bad = image_verify_ap((int *)dst);
+            bad = image_verify_ap((const uint32_t *)dst);
         }
     } while (bad != 0);
 

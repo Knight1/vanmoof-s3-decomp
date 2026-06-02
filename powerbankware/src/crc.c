@@ -4,7 +4,8 @@
  * Hardware CRC peripheral — HAL_CRC_Accumulate and the BMS-record wrapper.
  *
  *   bms_record_crc   = OEM FUN_080142e4  (wrapper over the fixed handle)
- *   crc_accumulate   = OEM FUN_08019e04  (HAL_CRC_Accumulate)
+ *   crc_accumulate   = OEM FUN_08019e04  (HAL_CRC_Calculate: reset then feed)
+ *   crc_continue     = OEM FUN_08019d5e  (HAL_CRC_Accumulate: feed, no reset)
  *   crc_feed_*       = OEM FUN_08019fc8 / FUN_08019eba (halfword / byte feed)
  *
  * The CRC unit's data register is fed per the handle's InputDataFormat
@@ -83,6 +84,47 @@ uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len)
     CRC_LOCK(h)  = 1;
     CRC_STATE(h) = 2;
     CRC_CR(h) |= 1u;                 /* reset the CRC computation */
+
+    switch (CRC_FORMAT(h)) {
+    case 2:
+        result = crc_feed_halfword(h, (const uint16_t *)buf, len);
+        break;
+    case 3: {
+        const uint32_t *w = (const uint32_t *)buf;
+        for (uint32_t i = 0; i < len; i++) {
+            CRC_DR(h) = w[i];
+        }
+        result = CRC_DR(h);
+        break;
+    }
+    case 1:
+        result = crc_feed_byte(h, (const uint8_t *)buf, len);
+        break;
+    default:
+        break;
+    }
+
+    CRC_STATE(h) = 1;
+    CRC_LOCK(h)  = 0;
+    return result;
+}
+
+/*
+ * HAL_CRC_Accumulate (FUN_08019d5e): identical to crc_accumulate but does NOT
+ * reset the unit first — it feeds `len` more data items into the running CRC,
+ * continuing from the current data-register value. Used to CRC an image body on
+ * top of its already-accumulated header.
+ */
+uint32_t crc_continue(void *handle, const void *buf, uint32_t len)
+{
+    uint8_t *h = handle;
+    uint32_t result = 0;
+
+    if (CRC_LOCK(h) == 1) {
+        return 2;
+    }
+    CRC_LOCK(h)  = 1;
+    CRC_STATE(h) = 2;
 
     switch (CRC_FORMAT(h)) {
     case 2:

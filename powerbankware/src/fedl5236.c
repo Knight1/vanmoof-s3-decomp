@@ -249,6 +249,9 @@ static void fedl5236_service_status(uint8_t status)
     }
 }
 
+void fedl5236_wakeup(void);   /* FUN_0800e160 — AFE power-on wake, defined below
+                                 (kept after initialize to preserve OEM order) */
+
 void fedl5236_initialize(void)
 {
     uint8_t fail = 0;

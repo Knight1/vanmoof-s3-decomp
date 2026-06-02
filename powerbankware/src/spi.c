@@ -69,7 +69,7 @@ int spi_transmit_receive(void *handle, volatile uint8_t *tx,
     uint32_t  mode = *(uint32_t *)(h + 0x04);
     uint32_t  dir  = *(uint32_t *)(h + 0x08);
     uint32_t  data_size = *(uint32_t *)(h + 0x0C);
-    uint8_t  *state = (volatile uint8_t *)(h + 0x5d);
+    volatile uint8_t *state = (volatile uint8_t *)(h + 0x5d);
 
     if (*(volatile uint8_t *)(h + 0x5c) == 1) {         /* Lock held */
         return 2;                                       /* HAL_BUSY */
