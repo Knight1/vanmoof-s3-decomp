@@ -255,6 +255,17 @@ int  hal_uart_init(void *handle);                        /* HAL_UART_Init (FUN_0
 int  hal_crc_init(void *handle);                         /* HAL_CRC_Init (FUN_08019cb0) */
 int  hal_tim_base_init(void *handle);                    /* HAL_TIM_Base_Init (FUN_0801cf08) */
 int  hal_timex_master_config(void *handle, const uint32_t *cfg); /* HAL_TIMEx_MasterConfig (FUN_0801d0fc) */
+/* HAL config helpers (the register math) */
+int  systick_config(uint32_t ticks);                     /* CMSIS SysTick_Config (FUN_08019c04) */
+int  crc_set_polynomial(void *handle);                   /* HAL_CRC_Init poly step (FUN_0801a038) */
+void tim_base_set_config(volatile uint32_t *inst, const uint32_t *init); /* TIM_Base_SetConfig (FUN_0801cff8) */
+void uart_advfeature_config(void *handle);               /* UART_AdvFeatureConfig (FUN_0801d678) */
+int  uart_set_config(void *handle);                      /* UART_SetConfig: BRR + CR1/2/3 (FUN_0801d244) */
+int  uart_check_idle_state(void *handle);                /* UART_CheckIdleState (FUN_0801d7e0) */
+int  crc_polynomial_set(void *handle, uint32_t pol, uint32_t poly_length); /* HAL_CRCEx_Polynomial_Set (FUN_0801a088) */
+uint32_t hal_rcc_get_pclk1_freq(void);                   /* HAL_RCC_GetPCLK1Freq (FUN_0801bf20) */
+int  uart_wait_on_flag(void *handle, uint32_t flag, uint8_t status,
+                       uint32_t tickstart, uint32_t timeout);                /* UART_WaitOnFlagUntilTimeout (FUN_0801d8a0) */
 
 /* ---- Hardware CRC (src/crc.c) ------------------------------------------ */
 uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len);

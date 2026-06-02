@@ -162,7 +162,66 @@ void hal_crc_msp_init(void *hcrc)
 {
     (void)hcrc;
 }
-extern int  FUN_0801a038(void *hcrc);   /* CRC default-polynomial program (own pass) */
+/*
+ * crc_polynomial_set — OEM FUN_0801a088 (HAL_CRCEx_Polynomial_Set).
+ * Find the polynomial's degree (MSB position) and reject it if it exceeds the
+ * requested POLYSIZE encoding (8 = 16-bit -> deg<=15; 0x10 = 8-bit -> deg<=7;
+ * 0x18 = 7-bit -> deg<=6; 0 = 32-bit -> no limit). On success write CRC->POL
+ * (+0x14) and set CR.POLYSIZE (+0x08, bits 4:3). Returns 0 = OK, 1 = ERROR.
+ * Thresholds/widths disasm-confirmed against the OEM image.
+ */
+int crc_polynomial_set(void *handle, uint32_t pol, uint32_t poly_length)
+{
+    uint32_t msb = 0x1f;
+    do {
+        if (((1u << (msb & 0xffu)) & pol) != 0) {
+            break;
+        }
+        uint32_t was = msb;
+        msb = msb - 1;
+        if (was == 0) {
+            break;
+        }
+    } while (1);
+
+    if (poly_length == 8) {
+        if (msb > 0xf) { return 1; }
+    } else if (poly_length > 8) {
+        if (poly_length == 0x10) {
+            if (msb > 7) { return 1; }
+        } else if (poly_length == 0x18 && msb > 6) {
+            return 1;
+        }
+    }
+
+    volatile uint32_t *inst = *(volatile uint32_t **)handle;
+    inst[5] = pol;                                   /* POL (+0x14) */
+    inst[2] = poly_length | (inst[2] & 0xffffffe7u); /* CR (+0x08): POLYSIZE */
+    return 0;
+}
+
+/*
+ * crc_set_polynomial — OEM FUN_0801a038 (the polynomial step of HAL_CRC_Init).
+ * When DefaultPolynomialUse (byte +0x04) selects the default, program the
+ * CRC-32 polynomial 0x04C11DB7 into CRC->POL (+0x14) and clear CR.POLYSIZE
+ * (bits 4:3 -> 32-bit). Otherwise install the handle's custom polynomial via
+ * HAL_CRCEx_Polynomial_Set. Returns 0 = OK, 1 = ERROR. Widths disasm-confirmed.
+ */
+int crc_set_polynomial(void *handle)
+{
+    uint8_t *h = (uint8_t *)handle;
+
+    if (h[4] == 0) {                                /* DefaultPolynomialUse = default */
+        volatile uint32_t *inst = *(volatile uint32_t **)handle;
+        inst[5] = 0x04c11db7u;                      /* POL (+0x14) = CRC-32 default */
+        inst[2] &= 0xffffffe7u;                     /* CR (+0x08): clear POLYSIZE */
+        return 0;
+    }
+    if (crc_polynomial_set(handle, *(uint32_t *)(h + 8), *(uint32_t *)(h + 0xc)) != 0) {
+        return 1;
+    }
+    return 0;
+}
 
 /*
  * hal_crc_init — OEM FUN_08019cb0 (HAL_CRC_Init).
@@ -185,7 +244,7 @@ int hal_crc_init(void *handle)
     }
     h[0x1d] = 2;                                    /* State = BUSY */
 
-    if (FUN_0801a038(handle) != 0) {
+    if (crc_set_polynomial(handle) != 0) {
         return 1;
     }
 

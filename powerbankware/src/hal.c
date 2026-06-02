@@ -14,8 +14,6 @@
  * disasm-confirmed against the OEM image.
  */
 
-/* --- deeper Cortex / HAL leaves (own passes) --- */
-extern int FUN_08019c04(uint32_t reload);   /* SysTick_Config (CMSIS core) */
 
 /*
  * nvic_set_priority_core — OEM FUN_08019b28 (CMSIS NVIC_SetPriority).
@@ -45,10 +43,28 @@ void nvic_enable_irq_core(int irqn)
     *(volatile uint32_t *)0xe000e100u = 1u << ((uint32_t)irqn & 0x1fu);
 }
 
+/*
+ * systick_config — OEM FUN_08019c04 (CMSIS SysTick_Config).
+ * Program SysTick (LOAD = ticks-1, VAL = 0, CTRL = CLKSOURCE|TICKINT|ENABLE) for
+ * a `ticks`-cycle period and set its exception priority to the lowest (3 on CM0's
+ * 2 priority bits). Returns 1 if ticks-1 exceeds the 24-bit reload, else 0.
+ * SysTick base 0xE000E010, reload max 0xFFFFFF — disasm-confirmed.
+ */
+int systick_config(uint32_t ticks)
+{
+    if (ticks - 1u <= 0xffffffu) {
+        *(volatile uint32_t *)(0xe000e010u + 0x04) = ticks - 1u;   /* SysTick->LOAD */
+        nvic_set_priority_core(-1, 3);                             /* SysTick_IRQn = lowest */
+        *(volatile uint32_t *)(0xe000e010u + 0x08) = 0;            /* SysTick->VAL  */
+        *(volatile uint32_t *)(0xe000e010u + 0x00) = 7;            /* SysTick->CTRL */
+    }
+    return 0xffffffu < ticks - 1u;
+}
+
 /* hal_systick_config — OEM FUN_08019c96 (HAL_SYSTICK_Config): forwards to SysTick_Config. */
 int hal_systick_config(uint32_t reload)
 {
-    return FUN_08019c04(reload);
+    return systick_config(reload);
 }
 
 /*

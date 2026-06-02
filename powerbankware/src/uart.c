@@ -283,9 +283,165 @@ void hal_uart_msp_init(void *huart)
 {
     (void)huart;
 }
-extern void FUN_0801d678(void *huart);   /* UART_AdvFeatureConfig (own pass) */
-extern int  FUN_0801d244(void *huart);   /* UART_SetConfig: BRR + CR1/2/3 (own pass) */
-extern int  FUN_0801d7e0(void *huart);   /* UART_CheckIdleState (own pass) */
+/*
+ * uart_wait_on_flag — OEM FUN_0801d8a0 (UART_WaitOnFlagUntilTimeout).
+ * Poll USART ISR (+0x1c) until `flag` differs from `status`, or the timeout
+ * elapses (0xffffffff = wait forever). On timeout, disable the transfer (CR1
+ * mask 0xfffffe5f, CR3 &= ~EIE), mark gState/RxState READY and return 3; on the
+ * flag reaching its target, return 0. Masks/widths disasm-confirmed.
+ */
+int uart_wait_on_flag(void *handle, uint32_t flag, uint8_t status,
+                      uint32_t tickstart, uint32_t timeout)
+{
+    uint32_t *huart = (uint32_t *)handle;
+    uint8_t  *b     = (uint8_t  *)handle;
+    volatile uint32_t *inst = (volatile uint32_t *)huart[0];
+
+    for (;;) {
+        uint8_t flag_set = (flag == (inst[7] & flag)) ? 1u : 0u;   /* ISR (+0x1c) */
+        if (flag_set != status) {
+            return 0;
+        }
+        if (!(timeout == 0xffffffffu ||
+              (timeout != 0 && (uint32_t)(tick_get() - tickstart) <= timeout))) {
+            break;
+        }
+    }
+    inst[0] &= 0xfffffe5fu;                         /* CR1: disable TE/RE etc. */
+    inst[2] &= 0xfffffffeu;                         /* CR3: clear EIE */
+    b[0x69] = 0x20;                                 /* gState  = READY */
+    b[0x6a] = 0x20;                                 /* RxState = READY */
+    b[0x68] = 0;
+    return 3;
+}
+
+/*
+ * uart_advfeature_config — OEM FUN_0801d678 (UART_AdvFeatureConfig).
+ * Apply each enabled advanced feature (per the AdvFeatureInit bitmask at +0x24)
+ * to USART CR2 (+0x04) / CR3 (+0x08): Tx/Rx-invert, data-invert, swap, overrun-
+ * disable, DMA-disable-on-RxError, auto-baud (+ its mode), MSB-first. Each is a
+ * masked field write; the clear masks are disasm-confirmed.
+ */
+void uart_advfeature_config(void *handle)
+{
+    uint32_t *h = (uint32_t *)handle;
+    volatile uint32_t *inst = (volatile uint32_t *)h[0];
+    uint32_t adv = h[9];                            /* AdvFeatureInit selector */
+
+    if (adv & 1u)    { inst[1] = h[10]   | (inst[1] & 0xfffdffffu); }   /* CR2 TXINV  */
+    if (adv & 2u)    { inst[1] = h[0xb]  | (inst[1] & 0xfffeffffu); }   /* CR2 RXINV  */
+    if (adv & 4u)    { inst[1] = h[0xc]  | (inst[1] & 0xfffbffffu); }   /* CR2 DATAINV*/
+    if (adv & 8u)    { inst[1] = h[0xd]  | (inst[1] & 0xffff7fffu); }   /* CR2 SWAP   */
+    if (adv & 0x10u) { inst[2] = h[0xe]  | (inst[2] & 0xffffefffu); }   /* CR3 OVRDIS */
+    if (adv & 0x20u) { inst[2] = h[0xf]  | (inst[2] & 0xffffdfffu); }   /* CR3 DDRE   */
+    if (adv & 0x40u) {
+        inst[1] = h[0x10] | (inst[1] & 0xffefffffu);                    /* CR2 ABREN  */
+        if (h[0x10] == 0x100000u) {
+            inst[1] = h[0x11] | (inst[1] & 0xff9fffffu);               /* CR2 ABRMOD */
+        }
+    }
+    if (adv & 0x80u) { inst[1] = h[0x12] | (inst[1] & 0xfff7ffffu); }   /* CR2 MSBFIRST */
+}
+
+/*
+ * uart_set_config — OEM FUN_0801d244 (UART_SetConfig).
+ * Program CR1 (WordLength|Parity|Mode|OverSampling), CR2 (StopBits) and CR3
+ * (HwFlowCtl|OneBitSampling) from the Init fields, resolve the per-instance
+ * USARTxSW clock source (RCC_CFGR3 +0x30), read the matching clock frequency,
+ * and compute USART_BRR (over-8 or over-16). Handle words: [1]BaudRate
+ * [2]WordLength [3]StopBits [4]Parity [5]Mode [6]HwFlowCtl [7]OverSampling
+ * [8]OneBitSampling. Masks/clock-source fields/BRR formulas disasm-confirmed.
+ * Returns 0 = OK, 1 = ERROR. (The UART_DIV divide is the OEM's libgcc udiv —
+ * reproduced as plain `/`, which lowers to __aeabi_uidiv.)
+ */
+int uart_set_config(void *handle)
+{
+    uint32_t *h = (uint32_t *)handle;
+    volatile uint32_t *uart = (volatile uint32_t *)h[0];
+    volatile uint32_t *cfgr3 = (volatile uint32_t *)(0x40021000u + 0x30);
+    uint32_t baud = h[1];
+    int      ret  = 0;
+    uint32_t clk_src = 0x10;                        /* invalid sentinel */
+
+    uart[0] = (uart[0] & 0xefff69f3u) | (h[2] | h[4] | h[5] | h[7]);  /* CR1 */
+    uart[1] = h[3] | (uart[1] & 0xffffcfffu);                          /* CR2: StopBits */
+    uart[2] = (h[6] | h[8]) | (uart[2] & 0xfffff4ffu);                 /* CR3 */
+
+    /* clk_src encoding: 0=PCLK1, 4=SYSCLK, 8=LSE, 2=HSI, 0x10=invalid. */
+    if (h[0] == 0x40013800u) {                      /* USART1: CFGR3[1:0] */
+        switch (*cfgr3 & 0x3u) {
+        case 0: clk_src = 0; break;  case 1: clk_src = 4; break;
+        case 2: clk_src = 8; break;  default: clk_src = 2; break;
+        }
+    } else if (h[0] == 0x40004400u) {               /* USART2: CFGR3[17:16] */
+        switch (*cfgr3 & 0x30000u) {
+        case 0x00000: clk_src = 0; break;  case 0x10000: clk_src = 4; break;
+        case 0x20000: clk_src = 8; break;  default: clk_src = 2; break;
+        }
+    } else if (h[0] == 0x40004800u) {               /* USART3: CFGR3[19:18] */
+        switch (*cfgr3 & 0xc0000u) {
+        case 0x00000: clk_src = 0; break;  case 0x40000: clk_src = 4; break;
+        case 0x80000: clk_src = 8; break;  default: clk_src = 2; break;
+        }
+    } else if (h[0] == 0x40004c00u || h[0] == 0x40005000u || h[0] == 0x40011400u ||
+               h[0] == 0x40011800u || h[0] == 0x40011c00u) {   /* UART4..8: PCLK1 */
+        clk_src = 0;
+    }
+
+    if (h[7] == 0x8000u) {                          /* OverSampling == OVER8 */
+        uint32_t div = 0;
+        switch (clk_src) {
+        case 0: div = ((hal_rcc_get_pclk1_freq() << 1) + (baud >> 1)) / baud; break;
+        case 2: div = ((baud >> 1) + 0x00f42400u) / baud; break;            /* 2*HSI */
+        case 4: div = (((uint32_t)hal_rcc_get_sysclock_freq() << 1) + (baud >> 1)) / baud; break;
+        case 8: div = ((baud >> 1) + 0x10000u) / baud; break;               /* 2*LSE */
+        default: ret = 1; break;
+        }
+        uart[3] = (div & 0xfff0u) | ((div >> 1) & 7u);   /* BRR (over-8 nibble) */
+    } else {                                        /* OVER16 */
+        switch (clk_src) {
+        case 0: uart[3] = hal_rcc_get_pclk1_freq() / baud; break;
+        case 2: uart[3] = 0x007a1200u / baud; break;                        /* HSI */
+        case 4: uart[3] = (uint32_t)hal_rcc_get_sysclock_freq() / baud; break;
+        case 8: uart[3] = 0x8000u / baud; break;                            /* LSE */
+        default: ret = 1; break;
+        }
+    }
+
+    return ret;
+}
+
+/*
+ * uart_check_idle_state — OEM FUN_0801d7e0 (UART_CheckIdleState).
+ * For a real USART instance, wait (≤0x01ffffff ticks) for TEACK (if TE set) and
+ * REACK (if RE set) in ISR, then mark gState/RxState READY (0x20). gState +0x69,
+ * RxState +0x6a, +0x68 (cleared), +0x6c (cleared) — widths disasm-confirmed.
+ * Returns 0 = OK, 3 = TIMEOUT.
+ */
+int uart_check_idle_state(void *handle)
+{
+    uint32_t *h = (uint32_t *)handle;
+    uint8_t  *b = (uint8_t  *)handle;
+
+    h[0x1b] = 0;                                    /* +0x6c */
+    uint32_t tickstart = tick_get();
+    uint32_t inst = h[0];
+
+    if (inst == 0x40013800u || inst == 0x40004400u || inst == 0x40004800u) {   /* USART1/2/3 */
+        if ((*(volatile uint32_t *)inst & 8) == 8 &&
+            uart_wait_on_flag(handle, 0x200000, 0, tickstart, 0x01ffffff) != 0) {   /* TE -> TEACK */
+            return 3;
+        }
+        if ((*(volatile uint32_t *)inst & 4) == 4 &&
+            uart_wait_on_flag(handle, 0x400000, 0, tickstart, 0x01ffffff) != 0) {   /* RE -> REACK */
+            return 3;
+        }
+    }
+    b[0x69] = 0x20;                                 /* gState  = READY */
+    b[0x6a] = 0x20;                                 /* RxState = READY */
+    b[0x68] = 0;
+    return 0;
+}
 
 /*
  * hal_uart_init — OEM FUN_0801d184 (HAL_UART_Init).
@@ -311,18 +467,18 @@ int hal_uart_init(void *handle)
     volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
     inst[0] &= 0xfffffffeu;                         /* CR1.UE = 0 */
 
-    if (FUN_0801d244(h) == 1) {                     /* UART_SetConfig */
+    if (uart_set_config(h) == 1) {                  /* UART_SetConfig */
         return 1;
     }
     if (*(uint32_t *)(h + 0x24) != 0) {             /* AdvancedInit */
-        FUN_0801d678(h);
+        uart_advfeature_config(h);
     }
 
     inst[1] &= 0xffffb7ffu;                         /* CR2: clear CLKEN (bit11) */
     inst[2] &= 0xffffffd5u;                         /* CR3: clear SCEN/HDSEL/IREN */
     inst[0] |= 1u;                                  /* CR1.UE = 1 */
 
-    return FUN_0801d7e0(h);                         /* UART_CheckIdleState */
+    return uart_check_idle_state(h);                /* UART_CheckIdleState */
 }
 
 /*

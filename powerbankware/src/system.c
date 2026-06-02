@@ -45,6 +45,17 @@ uint32_t hal_rcc_get_hclk_freq(void)
 }
 
 /*
+ * hal_rcc_get_pclk1_freq — OEM FUN_0801bf20 (HAL_RCC_GetPCLK1Freq).
+ * PCLK1 = HCLK >> APBPrescTable[RCC_CFGR.PPRE1 (bits 10:8)]. The 8-entry APB
+ * table (OEM flash table at 0x0801f188) is reproduced as `static const` .rodata.
+ */
+uint32_t hal_rcc_get_pclk1_freq(void)
+{
+    static const uint8_t apb_presc_table[8] = { 0, 0, 0, 0, 1, 2, 3, 4 };
+    return hal_rcc_get_hclk_freq() >> apb_presc_table[(RCC_CFGR >> 8) & 7u];
+}
+
+/*
  * hal_rcc_get_sysclock_freq — OEM FUN_0801be0c (HAL_RCC_GetSysClockFreq).
  * Compute the current SYSCLK in Hz from RCC_CFGR.SWS and (for PLL) the PLLMUL /
  * PREDIV factor tables. HSI 8 / HSE 16 / HSI48 48 MHz. The two byte tables are
@@ -544,4 +555,30 @@ void SystemInit(void)
     RCC_CFGR3 &= 0xfffcfe2cu;  /* CFGR3: reset USART/I2C/CEC/ADC clock selects */
     RCC_CR2  &= 0xfffffffeu;   /* CR2:   reset HSI14ON */
     RCC_CIR   = 0x00000000u;   /* CIR:   disable all RCC interrupts */
+}
+
+/*
+ * __libc_init_array_lite — OEM FUN_0801dac4 (the standard __libc_init_array),
+ * run by Reset_Handler before main(). Execute the .preinit_array constructors,
+ * then the .init_array constructors; the OEM's empty _init() (FUN_0801db30)
+ * between them is omitted (no effect). Array bounds are the linker-script
+ * PROVIDE_HIDDEN symbols. In this rebuild both arrays are empty — the OEM's lone
+ * init_array entry is GCC's register_tm_clones, a no-op when the TM clone table
+ * is null — so no constructor runs.
+ */
+extern void (* const __preinit_array_start[])(void);
+extern void (* const __preinit_array_end[])(void);
+extern void (* const __init_array_start[])(void);
+extern void (* const __init_array_end[])(void);
+
+void __libc_init_array_lite(void)
+{
+    void (* const *fn)(void);
+
+    for (fn = __preinit_array_start; fn != __preinit_array_end; fn++) {
+        (*fn)();
+    }
+    for (fn = __init_array_start; fn != __init_array_end; fn++) {
+        (*fn)();
+    }
 }

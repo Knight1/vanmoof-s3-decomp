@@ -22,7 +22,39 @@ void hal_tim_msp_init(void *htim)
 {
     (void)htim;
 }
-extern void FUN_0801cff8(volatile uint32_t *inst, const uint32_t *init); /* TIM_Base_SetConfig (own pass) */
+/*
+ * tim_base_set_config — OEM FUN_0801cff8 (TIM_Base_SetConfig).
+ * Program CR1 (CounterMode CMS|DIR only on TIM1/2/3; ClockDivision CKD on the
+ * timers that have it; AutoReloadPreload ARPE always), ARR/PSC, the repetition
+ * counter (advanced timers only), then force an update event (EGR.UG). The
+ * per-instance gating mirrors the OEM's base-address comparisons; for a basic
+ * timer (TIM7) only ARPE/ARR/PSC/EGR apply. init = {Prescaler, CounterMode,
+ * Period, ClockDivision, RepetitionCounter, AutoReloadPreload}. CR1 inst[0],
+ * EGR inst[5] (+0x14), PSC inst[10] (+0x28), ARR inst[0xb] (+0x2c), RCR inst[0xc]
+ * (+0x30). Offsets, masks and instance addresses disasm-confirmed.
+ */
+void tim_base_set_config(volatile uint32_t *inst, const uint32_t *init)
+{
+    uint32_t base = (uint32_t)(uintptr_t)inst;
+    uint32_t cr1 = inst[0];
+
+    if (base == 0x40012c00u || base == 0x40000000u || base == 0x40000400u) {   /* TIM1/2/3 */
+        cr1 = init[1] | (cr1 & 0xffffff8fu);            /* CounterMode (CMS|DIR) */
+    }
+    if (base == 0x40012c00u || base == 0x40000000u || base == 0x40000400u ||
+        base == 0x40002000u || base == 0x40014000u || base == 0x40014400u ||
+        base == 0x40014800u) {                          /* TIM1/2/3/14/15/16/17 */
+        cr1 = init[3] | (cr1 & 0xfffffcffu);            /* ClockDivision (CKD) */
+    }
+    inst[0]   = init[5] | (cr1 & 0xffffff7fu);          /* CR1: AutoReloadPreload (ARPE) */
+    inst[0xb] = init[2];                                 /* ARR = Period    */
+    inst[10]  = init[0];                                 /* PSC = Prescaler */
+    if (base == 0x40012c00u || base == 0x40014000u ||
+        base == 0x40014400u || base == 0x40014800u) {   /* TIM1/15/16/17 */
+        inst[0xc] = init[4];                            /* RCR = RepetitionCounter */
+    }
+    inst[5] = 1;                                         /* EGR = UG (generate update) */
+}
 
 /*
  * hal_tim_base_init — OEM FUN_0801cf08 (HAL_TIM_Base_Init).
@@ -43,7 +75,7 @@ int hal_tim_base_init(void *handle)
     h[0x3d] = 2;                                    /* State = BUSY */
 
     volatile uint32_t *inst = *(volatile uint32_t **)h;   /* Instance */
-    FUN_0801cff8(inst, (const uint32_t *)(h + 4));        /* TIM_Base_SetConfig(&Init) */
+    tim_base_set_config(inst, (const uint32_t *)(h + 4));  /* TIM_Base_SetConfig(&Init) */
 
     h[0x3d] = 1;                                    /* State = READY */
     return 0;
