@@ -101,3 +101,62 @@ char adc_enable(uint32_t *handle)
     }
     return 0;
 }
+
+extern int FUN_08019344(void *hadc);                /* HAL_ADC_Init           */
+extern int FUN_080199c8(void *hadc);                /* HAL ADC common config  */
+extern int FUN_080196b4(void *hadc, void *sConfig); /* HAL_ADC_ConfigChannel  */
+
+/*
+ * adc_msp_init — OEM FUN_08008804. One of board_init's peripheral sub-inits.
+ * Bring up ADC1 (PA0/PA1/PA4 analog), 12-bit single-ended 3-rank scan, and the
+ * ADC IRQ (12 = ADC1_COMP_IRQn). HAL handle @ 0x200001b4. Handle field values
+ * and the channel-config struct (sampling 0x1000, rank 7) disasm-confirmed.
+ */
+void adc_msp_init(void)
+{
+    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000u;
+    uint32_t * const hadc = (uint32_t *)0x200001b4u;
+
+    gpio_pin_cfg_t gcfg;
+    uint32_t       sconf[3];
+    mem_set(sconf, 0, sizeof sconf);
+    mem_set(&gcfg, 0, sizeof gcfg);
+
+    RCC[6] |= 0x200u;     (void)(RCC[6] & 0x200u);     /* APB2ENR (+0x18) ADCEN  */
+    RCC[5] |= 0x20000u;   (void)(RCC[5] & 0x20000u);   /* AHBENR  (+0x14) IOPAEN */
+
+    gcfg.pin_mask = 0x13;            /* PA0, PA1, PA4 */
+    gcfg.mode     = GPIO_MODE_ANALOG;
+    gcfg.pupd     = 0;
+    gpio_pin_config((uint32_t *)0x48000000u, &gcfg);
+
+    hadc[0]  = 0x40012400u;   /* Instance = ADC1     */
+    hadc[1]  = 0x80000000u;   /* Init.ClockPrescaler */
+    hadc[2]  = 0;             /* Resolution 12-bit   */
+    hadc[3]  = 0;             /* DataAlign           */
+    hadc[4]  = 1;             /* ScanConvMode        */
+    hadc[5]  = 4;             /* EOCSelection        */
+    hadc[6]  = 0;
+    hadc[7]  = 0;
+    hadc[8]  = 0;
+    hadc[9]  = 0;
+    hadc[10] = 0x1c1;
+    hadc[11] = 0;
+    hadc[12] = 0;
+    hadc[13] = 1;
+
+    if (FUN_08019344(hadc) != 0) { spi_error_reset(); }
+    if (FUN_080199c8(hadc) != 0) { spi_error_reset(); }
+
+    sconf[0] = 0;            /* Channel 0 */
+    sconf[1] = 0x1000;      /* SamplingTime */
+    sconf[2] = 7;           /* Rank */
+    if (FUN_080196b4(hadc, sconf) != 0) { spi_error_reset(); }
+    sconf[0] = 1;           /* Channel 1 */
+    if (FUN_080196b4(hadc, sconf) != 0) { spi_error_reset(); }
+    sconf[0] = 4;           /* Channel 4 */
+    if (FUN_080196b4(hadc, sconf) != 0) { spi_error_reset(); }
+
+    nvic_set_priority(12, 2, 0);   /* ADC1_COMP_IRQn */
+    nvic_enable_irq(12);
+}

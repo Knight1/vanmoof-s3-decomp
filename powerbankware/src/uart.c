@@ -276,3 +276,67 @@ void uart_flush_ch1(void)
         }
     }
 }
+
+extern int FUN_0801d184(void *huart);   /* HAL_UART_Init (own pass) */
+
+/*
+ * uart_msp_init — OEM FUN_0801647c. One of board_init's peripheral sub-inits.
+ * Bring up USART2 (PA2/PA3 = AF1 TX/RX, 115200 8N1, RXNEIE) and its IRQ
+ * (28 = USART2_IRQn), then arm the TX/RX ring state this module drives. The HAL
+ * handle is s_handle (0x20001a60). Field values, ring-index widths (strh) and
+ * the CR1.RXNEIE set are disasm-confirmed against the OEM image.
+ */
+void uart_msp_init(void)
+{
+    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000u;
+    uint32_t * const hu = (uint32_t *)s_handle;   /* 0x20001a60 */
+
+    gpio_pin_cfg_t gcfg;
+    mem_set(&gcfg, 0, sizeof gcfg);
+
+    RCC[7] |= 0x20000u;   (void)(RCC[7] & 0x20000u);   /* APB1ENR (+0x1c) USART2EN */
+    RCC[5] |= 0x20000u;   (void)(RCC[5] & 0x20000u);   /* AHBENR  (+0x14) IOPAEN   */
+
+    gcfg.pin_mask = 0xc;             /* PA2, PA3 */
+    gcfg.mode     = GPIO_MODE_AF;
+    gcfg.pupd     = 0;
+    gcfg.speed    = 3;
+    gcfg.af       = 1;               /* AF1 = USART2 */
+    gpio_pin_config((uint32_t *)0x48000000u, &gcfg);
+
+    hu[0]  = 0x40004400u;   /* Instance = USART2 */
+    hu[1]  = 0x1c200u;      /* Init.BaudRate (115200) */
+    hu[2]  = 0;             /* WordLength 8-bit  */
+    hu[3]  = 0;             /* StopBits 1        */
+    hu[4]  = 0;             /* Parity none       */
+    hu[5]  = 0xc;           /* Mode = TX | RX    */
+    hu[6]  = 0;             /* HwFlowCtl none    */
+    hu[7]  = 0;             /* OverSampling 16   */
+    hu[8]  = 0;             /* OneBitSampling    */
+    hu[9]  = 0x20;          /* AdvancedInit      */
+    hu[15] = 0x2000;        /* +0x3c */
+
+    {
+        volatile uint32_t *inst = (volatile uint32_t *)hu[0];
+        inst[0] = 0;   /* CR1 */
+        inst[1] = 0;   /* CR2 */
+        inst[2] = 0;   /* CR3 */
+    }
+    *(volatile uint32_t *)0x20002614u = 0;   /* free-running ms tick */
+
+    if (FUN_0801d184(hu) != 0) { spi_error_reset(); }
+
+    hu[0x1b] = 0;                                            /* +0x6c */
+    *(volatile uint8_t *)((uint8_t *)hu + 0x69) = 0x20;     /* TX state = idle */
+    *(volatile uint8_t *)((uint8_t *)hu + 0x6a) = 0x20;     /* RX state = idle */
+
+    *(volatile uint16_t *)0x20000a5c = 0;   /* TX ring write index */
+    *(volatile uint16_t *)0x20000854 = 0;   /* TX ring read index  */
+    *(volatile uint16_t *)0x20000a58 = 0;   /* RX ring write index */
+    *(volatile uint16_t *)0x20000a5a = 0;   /* RX ring read index  */
+
+    *(volatile uint32_t *)hu[0] |= 0x20u;   /* USART2 CR1: RXNEIE */
+
+    nvic_set_priority(28, 0, 0);   /* USART2_IRQn */
+    nvic_enable_irq(28);
+}

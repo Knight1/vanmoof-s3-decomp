@@ -340,3 +340,61 @@ void spi_rx_isr_16bit(void *handle)
         }
     }
 }
+
+extern int FUN_0801c700(void *hspi);   /* HAL_SPI_Init (own pass) */
+
+/*
+ * spi1_init — OEM FUN_08010d90. One of board_init's peripheral sub-inits.
+ * Bring up the SPI1 master that drives the FEDL5236 AFE / Extend_IO: enable the
+ * SPI1 (APB2) + GPIOB (AHB) clocks, put PB3/PB4/PB5 in AF0 (SCK/MISO/MOSI),
+ * populate the master handle (8-bit, software NSS, /32) at 0x20000634, run
+ * HAL_SPI_Init, enable the SPI1 IRQ (25), and prime the two 32-byte scratch
+ * buffers to 0xFF. Handle field values disasm-confirmed against the OEM image.
+ */
+void spi1_init(void)
+{
+    volatile uint32_t * const RCC_AHBENR  = (volatile uint32_t *)(0x40021000u + 0x14);
+    volatile uint32_t * const RCC_APB2ENR = (volatile uint32_t *)(0x40021000u + 0x18);
+    uint32_t * const hspi = (uint32_t *)0x20000634u;
+
+    gpio_pin_cfg_t cfg;
+    mem_set(&cfg, 0, sizeof cfg);
+
+    *RCC_APB2ENR |= 0x1000u;    (void)(*RCC_APB2ENR & 0x1000u);    /* SPI1EN */
+    *RCC_AHBENR  |= 0x40000u;   (void)(*RCC_AHBENR  & 0x40000u);   /* IOPBEN */
+
+    cfg.pin_mask = 0x38;   /* PB3, PB4, PB5 */
+    cfg.mode     = GPIO_MODE_AF;
+    cfg.pupd     = 0;
+    cfg.speed    = 3;
+    cfg.af       = 0;      /* AF0 = SPI1 */
+    gpio_pin_config((uint32_t *)0x48000400u, &cfg);
+
+    hspi[0]  = 0x40013000u;   /* Instance (SPI1)        */
+    hspi[1]  = 0x104u;        /* Init.Mode (master)     */
+    hspi[2]  = 0;             /* Init.Direction (2line) */
+    hspi[3]  = 0x700u;        /* Init.DataSize (8-bit)  */
+    hspi[4]  = 0;             /* Init.CLKPolarity       */
+    hspi[5]  = 0;             /* Init.CLKPhase          */
+    hspi[6]  = 0x200u;        /* Init.NSS (software)    */
+    hspi[7]  = 0x20u;         /* Init.BaudRatePrescaler */
+    hspi[8]  = 0;             /* Init.FirstBit (MSB)    */
+    hspi[9]  = 0;             /* Init.TIMode            */
+    hspi[10] = 0;             /* Init.CRCCalculation    */
+    hspi[11] = 7;             /* Init.CRCPolynomial     */
+    hspi[12] = 0;             /* Init.CRCLength         */
+    hspi[13] = 0;             /* Init.NSSPMode          */
+    *(volatile uint32_t *)0x20002614u = 0;
+
+    if (FUN_0801c700(hspi) != 0) {
+        spi_error_reset();
+    }
+
+    nvic_set_priority(0x19, 3, 0);   /* SPI1_IRQn */
+    nvic_enable_irq(0x19);
+
+    for (uint8_t i = 0; i < 0x20; i++) {
+        *(volatile uint8_t *)(0x200005f4u + i) = 0xff;
+        *(volatile uint8_t *)(0x20000614u + i) = 0xff;
+    }
+}

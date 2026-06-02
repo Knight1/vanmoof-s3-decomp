@@ -275,3 +275,61 @@ int rtc_wait_synchro(void *hrtc)
     }
     return 0;
 }
+
+extern void FUN_0801c278(void *hrtc);   /* HAL_RTC_MspInit (own pass) */
+
+/*
+ * hal_rtc_init — OEM FUN_0801c150 (HAL_RTC_Init).
+ *
+ * On first use run the MSP init, then unlock the write protection (WPR 0xCA/
+ * 0x53), enter init mode, program CR (HourFormat|OutPut|OutPutPolarity) and PRER
+ * (Sync | Async<<16), exit init mode (clear ISR.INIT) and — unless CR.BYPSHAD is
+ * set — wait for the shadow registers to resync; finally set the output type
+ * (TAFCR), re-lock and mark the handle READY. Handle byte offsets: Lock +0x1c,
+ * State +0x1d, Init.HourFormat +0x04, AsynchPrediv +0x08, SynchPrediv +0x0c,
+ * OutPut +0x10, OutPutPolarity +0x14, OutPutType +0x18. RTC registers: CR +0x08,
+ * ISR +0x0c, PRER +0x10, WPR +0x24, TAFCR +0x40. Returns 0 = OK, 1 = ERROR.
+ * Offsets/widths/masks disasm-confirmed against the OEM image.
+ */
+int hal_rtc_init(void *handle)
+{
+    if (handle == NULL) {
+        return 1;
+    }
+    uint32_t *hrtc = (uint32_t *)handle;
+    uint8_t  *h    = (uint8_t  *)handle;
+
+    if (h[0x1d] == 0) {                          /* State == RESET */
+        h[0x1c] = 0;                             /* Lock = UNLOCKED */
+        FUN_0801c278(handle);                    /* HAL_RTC_MspInit */
+    }
+    h[0x1d] = 2;                                 /* State = BUSY */
+
+    volatile uint32_t *inst = (volatile uint32_t *)hrtc[0];   /* RTC Instance */
+    inst[9] = 0xca;                              /* WPR (+0x24): unlock sequence */
+    inst[9] = 0x53;
+
+    if (rtc_enter_init(handle) != 0) {
+        inst[9] = 0xff;
+        h[0x1d] = 4;                             /* State = ERROR */
+        return 1;
+    }
+
+    inst[2] &= 0xff8fffbfu;                      /* CR (+0x08): clear FMT|OSEL|POL */
+    inst[2] |= hrtc[1] | hrtc[4] | hrtc[5];      /* CR |= HourFormat|OutPut|OutPutPolarity */
+    inst[4]  = hrtc[3];                          /* PRER (+0x10) = SynchPrediv */
+    inst[4] |= hrtc[2] << 16;                    /* PRER |= AsynchPrediv << 16 */
+    inst[3] &= 0xffffff7fu;                      /* ISR (+0x0c): clear INIT (exit init mode) */
+
+    if ((inst[2] & 0x20u) == 0 && rtc_wait_synchro(handle) != 0) {   /* !BYPSHAD */
+        inst[9] = 0xff;
+        h[0x1d] = 4;
+        return 1;
+    }
+
+    inst[16] &= 0xfffbffffu;                     /* TAFCR (+0x40): clear output-type bit */
+    inst[16] |= hrtc[6];                         /* TAFCR |= OutPutType */
+    inst[9]   = 0xff;                            /* WPR: re-lock */
+    h[0x1d]   = 1;                               /* State = READY */
+    return 0;
+}

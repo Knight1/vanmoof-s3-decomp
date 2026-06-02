@@ -327,3 +327,49 @@ int eeprom_mem_read(void *handle, uint8_t dev, uint16_t addr, uint16_t addrsz,
     i2c_reset_state(h);
     return 0;
 }
+
+extern int FUN_0801a890(void *hi2c);             /* HAL_I2C_Init                  */
+extern int FUN_0801b354(void *hi2c, uint32_t f); /* HAL_I2CEx_ConfigAnalogFilter  */
+extern int FUN_0801b3ec(void *hi2c, int f);      /* HAL_I2CEx_ConfigDigitalFilter */
+
+/*
+ * i2c2_init — OEM FUN_0800e32c. board_init's final peripheral sub-init.
+ * Bring up the EEPROM I2C2 bus: enable GPIOB (AHB) + I2C2 (APB1) clocks, put
+ * PB13/PB14 in AF5 open-drain with pull-ups (SCL/SDA), populate the I2C2 handle
+ * (7-bit addressing, Timing 0x00300f38) at 0x20000434, run HAL_I2C_Init, then
+ * enable the analog filter and a zero-stage digital filter. Disasm-confirmed.
+ */
+void i2c2_init(void)
+{
+    volatile uint32_t * const RCC_AHBENR  = (volatile uint32_t *)(0x40021000u + 0x14);
+    volatile uint32_t * const RCC_APB1ENR = (volatile uint32_t *)(0x40021000u + 0x1c);
+    uint32_t * const hi2c = (uint32_t *)0x20000434u;
+
+    gpio_pin_cfg_t cfg;
+    mem_set(&cfg, 0, sizeof cfg);
+
+    *RCC_AHBENR  |= 0x40000u;    (void)(*RCC_AHBENR  & 0x40000u);    /* IOPBEN */
+    *RCC_APB1ENR |= 0x400000u;   (void)(*RCC_APB1ENR & 0x400000u);   /* I2C2EN */
+
+    cfg.pin_mask = 0x6000;   /* PB13, PB14                   */
+    cfg.mode     = GPIO_MODE_AF | GPIO_OTYPE_OD;
+    cfg.pupd     = GPIO_PUPD_UP;
+    cfg.speed    = 3;
+    cfg.af       = 5;        /* AF5 = I2C2 */
+    gpio_pin_config((uint32_t *)0x48000400u, &cfg);
+
+    hi2c[0] = 0x40005800u;   /* Instance (I2C2)       */
+    hi2c[1] = 0x00300f38u;   /* Init.Timing (TIMINGR) */
+    hi2c[2] = 0;             /* Init.OwnAddress1      */
+    hi2c[3] = 1;             /* Init.AddressingMode   */
+    hi2c[4] = 0;             /* Init.DualAddressMode  */
+    hi2c[5] = 0;             /* Init.OwnAddress2      */
+    hi2c[6] = 0;             /* Init.OwnAddress2Masks */
+    hi2c[7] = 0;             /* Init.GeneralCallMode  */
+    hi2c[8] = 0;             /* Init.NoStretchMode    */
+    *(volatile uint32_t *)0x20002614u = 0;
+
+    if (FUN_0801a890(hi2c) != 0)    { spi_error_reset(); }
+    if (FUN_0801b354(hi2c, 0) != 0) { spi_error_reset(); }   /* analog filter on   */
+    if (FUN_0801b3ec(hi2c, 0) != 0) { spi_error_reset(); }   /* digital filter = 0 */
+}

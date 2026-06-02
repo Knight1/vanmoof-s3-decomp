@@ -201,12 +201,32 @@ void shipping_enter(void);         /* ship-mode power-down */
 
 /* ---- HAL / board bring-up (src/hal.c) ---------------------------------- */
 int  hal_init(void);          /* HAL_Init: prefetch + SysTick + MspInit (FUN_080192c4) */
+void hal_msp_init(void);      /* empty MSP stub (FUN_080192ec) */
+int  hal_init_tick(uint32_t tick_priority);          /* HAL_InitTick (FUN_080192f6) */
+void nvic_set_priority(int irqn, uint32_t preempt_priority, uint32_t sub_priority); /* FUN_08019c4c */
+void nvic_enable_irq(int irqn);                      /* HAL_NVIC_EnableIRQ (FUN_08019c76) */
 void tick_state_reset(void);  /* clear software ms-tick flag/counter (FUN_08014ac8) */
 void board_init(void);        /* GPIO board config + sub-inits + EXTI NVIC (FUN_08011f2c) */
+/* board_init's peripheral sub-inits (MSP-style clock+GPIO+HAL_*_Init) */
+void crc_init(void);          /* CRC unit              (FUN_08012188, src/crc.c)   */
+void adc_msp_init(void);      /* ADC1 + PA0/1/4        (FUN_08008804, src/adc.c)   */
+void uart_msp_init(void);     /* USART2 + PA2/3 AF1    (FUN_0801647c, src/uart.c)  */
+void spi1_init(void);         /* SPI1 + PB3/4/5 AF0    (FUN_08010d90, src/spi.c)   */
+void tim7_init(void);         /* TIM7 periodic IRQ     (FUN_0800e910, src/timer.c) */
+void dac_init(void);          /* DAC ch2 + PA5         (FUN_0800a310, src/vout.c)  */
+void i2c2_init(void);         /* I2C2 + PB13/14 AF5    (FUN_0800e32c, src/i2c.c)   */
 /* ---- System clock / RTC bring-up (src/system.c) ------------------------ */
 void clock_rtc_init(void);    /* RCC osc/clock tree + RTC init (FUN_080136c0) */
+void pwr_enable_bkup_access(void);                   /* PWR_CR DBP (FUN_0801b51c) */
+void system_core_clock_update(void);                 /* SystemCoreClockUpdate (FUN_0801d9c0) */
+int  hal_rcc_osc_config(const uint32_t *osc);        /* HAL_RCC_OscConfig (FUN_0801b538) */
+int  hal_rcc_clock_config(const uint32_t *clk, uint32_t flatency); /* HAL_RCC_ClockConfig (FUN_0801bbf8) */
+int  hal_rccex_periph_clk_config(const uint32_t *pclk);           /* HAL_RCCEx_PeriphCLKConfig (FUN_0801bf4c) */
+/* ---- RTC HAL (src/rtc.c) ----------------------------------------------- */
+int  hal_rtc_init(void *hrtc);                       /* HAL_RTC_Init (FUN_0801c150) */
 /* ---- Watchdog (src/watchdog.c) ----------------------------------------- */
 void iwdg_init(void);         /* IWDG config + initial refresh (FUN_08013820) */
+int  hal_iwdg_init(void *hiwdg);                     /* HAL_IWDG_Init (FUN_0801b488) */
 
 /* ---- Hardware CRC (src/crc.c) ------------------------------------------ */
 uint32_t crc_accumulate(void *handle, const void *buf, uint32_t len);

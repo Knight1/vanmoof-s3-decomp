@@ -116,7 +116,10 @@ void bms_state_shipping_wait(void)
 static void bms_afe_cell_step(uint8_t step);     /* cell-read sub-states (jt 0x801e598) */
 static void bms_afe_charger_step(uint8_t step);  /* AFE channel-select steps (jt 0x801e5c8) */
 void cell_voltage_scan(uint8_t status);          /* FUN_0800c6ec — current/coulomb integrator */
-extern void afe_reset_return(void);              /* FUN_0800d526 (empty epilogue) */
+/* FUN_0800d526 is a compiler tail-merged shared function epilogue (mov sp,r7;
+ * add sp,#0x4c; pop {r4-r7,pc}) — not a callable routine. Every OEM tail-branch
+ * to it (the decompiler renders them as calls) is simply a `return` from the
+ * enclosing handler, and is inlined as such below. */
 /* The protection cascade + current/coulomb counter + temperature + charger
  * step (OEM 0x0800bd0e..end). Safety-critical: it sets the MOSFET-cutoff fault
  * bits in 0x20000410 from the exact OEM thresholds/debounce limits, with
@@ -141,11 +144,11 @@ void bms_core_update(void)
     /* --- FEDL5236 status read --- */
     if ((*(volatile uint8_t *)0x2000069c & 1) == 0 &&
         gpio_bit_read(0x48000800, 0x2000)) {
-        afe_reset_return();
+        return;
     }
     *(volatile uint8_t *)0x2000069c &= (uint8_t)~1u;
     if (fedl5236_read_data(3, 2) == 0) {
-        afe_reset_return();
+        return;
     }
     uint8_t status = rx[2];
     *(volatile uint8_t *)0x2000041d = (uint8_t)(rx[3] & 2);
@@ -153,7 +156,7 @@ void bms_core_update(void)
         FAULT |= 0x400;
         fedl5236_command_write(4, 0);
         fedl5236_command_write(3, 0);
-        afe_reset_return();
+        return;
     }
     if ((status & 0xf) != 0) {
         fedl5236_command_write(3, 0);
@@ -289,11 +292,9 @@ static void bms_temp_step(uint8_t status)
     }
 
     if ((status & 8) == 0) {
-        afe_reset_return();
         return;
     }
     if (fedl5236_read_data(0x34, 2) == 0) {
-        afe_reset_return();
         return;
     }
 

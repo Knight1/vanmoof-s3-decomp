@@ -13,11 +13,18 @@ the smaller F0 parts; F091xC is the fit.
 | FLASH | `0x40022000` | HAL init sets `+0x00 |= 0x10` (ACR) |
 | SYSCFG | `0x40010000` | `+0x00 |= 3` → MEM_MODE=3 (SRAM remap); EXTICR1 @ `+0x08` |
 | EXTI | `0x40010400` | IMR `+0x00` / EMR `+0x04` / RTSR `+0x08` / FTSR `+0x0C` (gpio_pin_config) |
-| RCC | `0x40021000` | AHBENR `+0x14` (GPIO port clocks), APB2ENR `+0x18` (SYSCFG en, bit0), APB1ENR `+0x1c` (PWR en, bit28), BDCR `+0x20` (LSE/RTC) |
-| RTC | `0x40002800` | HAL RTC handle instance |
-| IWDG | `0x40003000` | `iwdg_init` KR `+0x00` ← `0xAAAA` (reload key) |
-| USART1 | `0x40013800` | (F0 APB2) — Modbus link, TBC |
-| DAC | `0x40007400` | (F0 APB1) — Vout regulation, TBC |
+| RCC | `0x40021000` | CR `+0x00` / CFGR `+0x04` / CIR `+0x08` / CFGR2 `+0x2c` / CFGR3 `+0x30` / CR2 `+0x34` (`SystemInit` reset), AHBENR `+0x14` (GPIO port clocks), APB2ENR `+0x18` (SYSCFG en, bit0), APB1ENR `+0x1c` (PWR en, bit28), BDCR `+0x20` (LSE/RTC) |
+| RTC | `0x40002800` | HAL RTC handle instance; `hal_rtc_init` CR `+0x08` / ISR `+0x0c` / PRER `+0x10` / WPR `+0x24` / TAFCR `+0x40` |
+| IWDG | `0x40003000` | `iwdg_init` KR `+0x00` ← `0xAAAA` (reload key); PR `+0x04` / RLR `+0x08` / SR `+0x0c` / WINR `+0x10` |
+| PWR | `0x40007000` | CR `+0x00` bit8 = DBP (`pwr_enable_bkup_access`); APB1ENR bit28 |
+| CRC | `0x40023000` | `crc_init`: AHBENR bit6 (CRCEN); InputDataFormat = words |
+| ADC1 | `0x40012400` | `adc_msp_init`: APB2ENR bit9; PA0/PA1/PA4 analog; IRQ 12 (ADC1_COMP) |
+| USART1 | `0x40013800` | (F0 APB2) — ch1 link, HAL handle `0x200007ac` |
+| USART2 | `0x40004400` | `uart_msp_init`: APB1ENR bit17; PA2/PA3 AF1; 115200 8N1; IRQ 28; handle `0x20001a60` |
+| SPI1 | `0x40013000` | `spi1_init`: APB2ENR bit12; PB3/PB4/PB5 AF0 (SCK/MISO/MOSI); master 8-bit /32; IRQ 25; handle `0x20000634` |
+| I2C2 | `0x40005800` | `i2c2_init`: APB1ENR bit22; PB13/PB14 AF5 open-drain (SCL/SDA); Timing `0x00300f38`; handle `0x20000434` |
+| TIM7 | `0x40001400` | `tim7_init`: APB1ENR bit5; periodic IRQ 18; ARR `0x6820`; handle `0x20000738` |
+| DAC | `0x40007400` | `dac_init`: APB1ENR bit29 (DACEN); PA5 analog (DAC_OUT2); Vout; handle `0x20000258` |
 | GPIO | `0x48000000` | **confirmed** A=`…000` B=`…400` C=`…800` D=`…c00` E=`…1000`, 0x400 stride (gpio_pin_config port→EXTICR map) |
 
 > **F0 vs L0 register-offset trap.** powerbankware (F091) and batteryware
@@ -26,6 +33,14 @@ the smaller F0 parts; F091xC is the fit.
 > pool from *this* image; do not copy register offsets from batteryware.
 
 ## Boot bring-up (clock / IWDG / board GPIO)
+
+**`SystemInit` (`0x0801d938`) — RCC reset, before `main`.** Run by `Reset_Handler`
+ahead of `__libc_init_array`/`main`: sets `CR.HSION`, then masks the clock tree
+back to its reset state — `CFGR &= 0x08ffb80c`, `CR &= 0xfef6ffff` then
+`0xfffbffff`, `CFGR &= 0xffc0ffff`, `CFGR2 &= ~0xf`, `CFGR3 &= 0xfffcfe2c`,
+`CR2 &= ~1` — and clears `CIR` (all RCC interrupts off). The `CFGR3` mask is
+part-specific: `0xfffcfe2c` for this F091, **not** the `0xfffffeac` of the
+smaller F0 parts — resolved from this image's literal pool, not assumed.
 
 `hal_bringup` (`0x080114dc`) runs flash prefetch + vector→SRAM relocation, then
 calls, in order: `hal_init` → `clock_rtc_init` → `tick_state_reset` →

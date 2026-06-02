@@ -7,9 +7,13 @@
 ## Expected: Modbus RTU (same family as batteryware)
 
 powerbankware shares batteryware's BMS core, so the inter-module link is
-expected to be **Modbus RTU** (9600 8N1, CRC-16 poly 0xA001) with the same
-register model — see `../batteryware/docs/protocol.md` and the authoritative
-host map in [Knight1/vanmoof-bms]. The telemetry string
+expected to be **Modbus RTU** (CRC-16 poly 0xA001) with the same register model
+— see `../batteryware/docs/protocol.md` and the authoritative host map in
+[Knight1/vanmoof-bms]. The physical link is now confirmed from `uart_msp_init`
+(FUN_0801647c): **USART2 @ 115200 8N1** (BRR built from `0xe1<<9`), TX/RX on
+PA2/PA3 (AF1), with RXNEIE-driven receive — this is the `s_handle` (`0x20001a60`)
+that `log_print`/`uart_flush` and the command processor use. (A second link sits
+on USART1, handle `0x200007ac`.) The telemetry string
 
 ```
 \nSend SN = %x %x %x %x %x, Version = %w, SOC = %d, SOH = %d, CycleCount = %i, State = %x\r

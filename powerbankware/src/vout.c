@@ -88,3 +88,38 @@ void vout_enable(void)
     *MODE |= 0x40u;                            /* set bit 6 */
     *MODE &= 0xFF7Fu;                          /* clear bit 7 */
 }
+
+/*
+ * dac_init — OEM FUN_0800a310. One of board_init's peripheral sub-inits.
+ * DAC channel-2 (Vout) bring-up: clock-enable DAC (APB1 bit29) + GPIOA, set PA5
+ * analog, store the DAC base into the handle pointer at 0x20000258, clear the
+ * channel-2 CR field, and apply an all-zero ChannelConfig (so the config-merge
+ * just re-clears the field). Mode-word (0x200006A0) bit 6 left low. The DAC_CR
+ * mask 0xf001ffff and the strh on the mode word are disasm-confirmed.
+ */
+void dac_init(void)
+{
+    volatile uint32_t * const rcc_apb1enr = (volatile uint32_t *)(0x40021000 + 0x1c);
+    volatile uint32_t * const rcc_ahbenr  = (volatile uint32_t *)(0x40021000 + 0x14);
+
+    gpio_pin_cfg_t cfg;
+    uint32_t cfgch[2];               /* DAC_ChannelConfTypeDef, zeroed */
+    mem_set(cfgch, 0, sizeof cfgch);
+    mem_set(&cfg, 0, sizeof cfg);
+
+    *rcc_apb1enr |= 0x20000000u;  (void)(*rcc_apb1enr & 0x20000000u);  /* DACEN  */
+    *rcc_ahbenr  |= 0x00020000u;  (void)(*rcc_ahbenr  & 0x00020000u);  /* GPIOAEN */
+
+    cfg.pin_mask = 0x20;             /* PA5 */
+    cfg.mode     = GPIO_MODE_ANALOG;
+    cfg.pupd     = 0;
+    gpio_pin_config((uint32_t *)0x48000000u, &cfg);
+
+    *(volatile uint32_t **)0x20000258u = (volatile uint32_t *)0x40007400u; /* Instance = DAC */
+
+    volatile uint32_t *dac = *(volatile uint32_t **)0x20000258u;
+    dac[0] &= 0xf001ffffu;                                       /* clear CH2 field */
+    dac[0] = ((cfgch[0] | cfgch[1]) << 16) | (dac[0] & 0xf001ffffu);
+
+    *MODE &= 0xffbfu;                /* mode bit 6 low */
+}

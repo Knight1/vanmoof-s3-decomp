@@ -155,3 +155,31 @@ uint32_t bms_record_crc(const void *buf, uint16_t len)
 {
     return crc_accumulate(CRC_HANDLE, buf, len);
 }
+
+extern int FUN_08019cb0(void *hcrc);   /* HAL_CRC_Init (own pass) */
+
+/*
+ * crc_init — OEM FUN_08012188. One of board_init's peripheral sub-inits.
+ * Fill the CRC HAL handle (Instance = CRC 0x40023000, polynomial/init defaults
+ * disabled, no in/out data inversion, InputDataFormat = 3 = words), enable the
+ * CRC clock (AHBENR bit6), then run HAL_CRC_Init. Field widths (byte at +0x04/
+ * +0x05, word at +0x14/+0x18/+0x20) disasm-confirmed against the OEM image.
+ */
+void crc_init(void)
+{
+    uint8_t * const h = (uint8_t *)CRC_HANDLE;                 /* 0x200006c0 */
+    volatile uint32_t * const rcc_ahbenr = (volatile uint32_t *)(0x40021000 + 0x14);
+
+    *(volatile uint32_t **)(h + 0x00) = (volatile uint32_t *)0x40023000u; /* Instance */
+    *(volatile uint8_t  *)(h + 0x04) = 0;   /* DefaultPolynomialUse    */
+    *(volatile uint8_t  *)(h + 0x05) = 0;   /* DefaultInitValueUse     */
+    *(volatile uint32_t *)(h + 0x14) = 0;   /* InputDataInversionMode  */
+    *(volatile uint32_t *)(h + 0x18) = 0;   /* OutputDataInversionMode */
+    *(volatile uint32_t *)(h + 0x20) = 3;   /* InputDataFormat = WORDS */
+
+    *rcc_ahbenr |= 0x40u;  (void)(*rcc_ahbenr & 0x40u);        /* CRCEN + read-back */
+
+    if (FUN_08019cb0(CRC_HANDLE) != 0) {
+        spi_error_reset();
+    }
+}

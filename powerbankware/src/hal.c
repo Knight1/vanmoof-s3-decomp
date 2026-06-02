@@ -14,20 +14,48 @@
  * disasm-confirmed against the OEM image.
  */
 
-/* --- hal_init deeper HAL leaves (own passes) --- */
-extern int  FUN_080192f6(int tick_prio); /* HAL_InitTick */
-extern void FUN_080192ec(void);          /* HAL_MspInit (empty weak stub) */
+/* --- deeper Cortex / HAL leaves (own passes) --- */
+extern uint32_t FUN_0801bf0c(void);                     /* HAL_RCC_GetHCLKFreq */
+extern uint32_t FUN_08008130(uint32_t a, uint32_t b);   /* unsigned divide a / b */
+extern int      FUN_08019c96(uint32_t reload);          /* HAL_SYSTICK_Config */
+extern void     FUN_08019b28(int irqn, uint32_t prio);  /* NVIC_SetPriority (core) */
+extern void     FUN_08019afc(int irqn);                 /* NVIC_EnableIRQ (core) */
 
-/* --- board_init deeper leaves (own passes) --- */
-extern void FUN_08012188(void);          /* peripheral sub-init */
-extern void FUN_0801647c(void);          /* peripheral sub-init */
-extern void FUN_08008804(void);          /* peripheral sub-init */
-extern void FUN_08010d90(void);          /* peripheral sub-init */
-extern void FUN_0800e910(void);          /* peripheral sub-init */
-extern void FUN_0800a310(void);          /* peripheral sub-init */
-extern void FUN_0800e32c(void);          /* peripheral sub-init */
-extern void FUN_08019c4c(int irqn, int prio, int subprio); /* HAL_NVIC_SetPriority */
-extern void FUN_08019c76(int irqn);                        /* HAL_NVIC_EnableIRQ */
+/*
+ * nvic_set_priority — OEM FUN_08019c4c (HAL_NVIC_SetPriority).
+ * Cortex-M0 has no sub-priority grouping, so the third argument is stored by
+ * the OEM but never used; only the preempt priority reaches NVIC_SetPriority.
+ * The IRQn is narrowed to a signed byte (so e.g. SysTick_IRQn = -1 round-trips).
+ */
+void nvic_set_priority(int irqn, uint32_t preempt_priority, uint32_t sub_priority)
+{
+    (void)sub_priority;
+    FUN_08019b28((int8_t)irqn, preempt_priority);
+}
+
+/* nvic_enable_irq — OEM FUN_08019c76 (HAL_NVIC_EnableIRQ). */
+void nvic_enable_irq(int irqn)
+{
+    FUN_08019afc((int8_t)irqn);
+}
+
+/* hal_msp_init — OEM FUN_080192ec (HAL_MspInit): empty weak stub, not overridden. */
+void hal_msp_init(void)
+{
+}
+
+/*
+ * hal_init_tick — OEM FUN_080192f6 (HAL_InitTick).
+ * Program SysTick for a 1 ms tick (reload = HCLK / 1000) and set the SysTick
+ * exception priority. Returns HAL_OK (0).
+ */
+int hal_init_tick(uint32_t tick_priority)
+{
+    uint32_t reload = FUN_08008130(FUN_0801bf0c(), 1000);   /* HCLK / 1000 */
+    FUN_08019c96(reload);                                   /* HAL_SYSTICK_Config */
+    nvic_set_priority(-1, tick_priority, 0);                /* SysTick_IRQn */
+    return 0;
+}
 
 /*
  * hal_init — OEM FUN_080192c4 (HAL_Init).
@@ -37,8 +65,8 @@ extern void FUN_08019c76(int irqn);                        /* HAL_NVIC_EnableIRQ
 int hal_init(void)
 {
     *(volatile uint32_t *)0x40022000 |= 0x10u;   /* FLASH_ACR: PRFTBE (prefetch) */
-    FUN_080192f6(0);                             /* HAL_InitTick(TICK_INT_PRIORITY=0) */
-    FUN_080192ec();                              /* HAL_MspInit */
+    hal_init_tick(0);                            /* HAL_InitTick(TICK_INT_PRIORITY=0) */
+    hal_msp_init();                              /* HAL_MspInit */
     return 0;
 }
 
@@ -99,12 +127,12 @@ void board_init(void)
     cfg.pin_mask = 0xbe87; cfg.mode = 1; cfg.pupd = 0; cfg.speed = 3;
     gpio_pin_config((uint32_t *)0x48000400u, &cfg);   /* GPIOB output, vhigh */
 
-    FUN_08012188();
-    FUN_0801647c();
-    FUN_08008804();
-    FUN_08010d90();
-    FUN_0800e910();
-    FUN_0800a310();
+    crc_init();
+    uart_msp_init();
+    adc_msp_init();
+    spi1_init();
+    tim7_init();
+    dac_init();
 
     /* I2C bus recovery: while SDA (PB14) is held low, pulse SCL (PB13) ten
      * times at ~1 ms/edge (gated on the software tick flag), re-checking SDA. */
@@ -121,9 +149,9 @@ void board_init(void)
         } while (!gpio_bit_read(0x48000400u, 0x4000));
     }
 
-    FUN_0800e32c();
-    FUN_08019c4c(7, 3, 0);   /* HAL_NVIC_SetPriority(EXTI4_15_IRQn, 3, 0) */
-    FUN_08019c76(7);         /* HAL_NVIC_EnableIRQ(EXTI4_15_IRQn) */
+    i2c2_init();
+    nvic_set_priority(7, 3, 0);   /* HAL_NVIC_SetPriority(EXTI4_15_IRQn, 3, 0) */
+    nvic_enable_irq(7);           /* HAL_NVIC_EnableIRQ(EXTI4_15_IRQn) */
 }
 
 /*
