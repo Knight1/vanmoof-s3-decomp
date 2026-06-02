@@ -13,8 +13,9 @@ the smaller F0 parts; F091xC is the fit.
 | FLASH | `0x40022000` | HAL init sets `+0x00 |= 0x10` (ACR) |
 | SYSCFG | `0x40010000` | `+0x00 |= 3` → MEM_MODE=3 (SRAM remap); EXTICR1 @ `+0x08` |
 | EXTI | `0x40010400` | IMR `+0x00` / EMR `+0x04` / RTSR `+0x08` / FTSR `+0x0C` (gpio_pin_config) |
-| RCC | `0x40021000` | APB2ENR `+0x18` (SYSCFG en, bit0), AHBENR for GPIO clocks |
+| RCC | `0x40021000` | AHBENR `+0x14` (GPIO port clocks), APB2ENR `+0x18` (SYSCFG en, bit0), APB1ENR `+0x1c` (PWR en, bit28), BDCR `+0x20` (LSE/RTC) |
 | RTC | `0x40002800` | HAL RTC handle instance |
+| IWDG | `0x40003000` | `iwdg_init` KR `+0x00` ← `0xAAAA` (reload key) |
 | USART1 | `0x40013800` | (F0 APB2) — Modbus link, TBC |
 | DAC | `0x40007400` | (F0 APB1) — Vout regulation, TBC |
 | GPIO | `0x48000000` | **confirmed** A=`…000` B=`…400` C=`…800` D=`…c00` E=`…1000`, 0x400 stride (gpio_pin_config port→EXTICR map) |
@@ -23,6 +24,53 @@ the smaller F0 parts; F091xC is the fit.
 > (L072) share the GPIO/EXTI *layout* but differ on RCC offsets: F0 puts
 > `APB2ENR` at RCC+`0x18` where L0 uses `0x34`. Always resolve the literal
 > pool from *this* image; do not copy register offsets from batteryware.
+
+## Boot bring-up (clock / IWDG / board GPIO)
+
+`hal_bringup` (`0x080114dc`) runs flash prefetch + vector→SRAM relocation, then
+calls, in order: `hal_init` → `clock_rtc_init` → `tick_state_reset` →
+`iwdg_init` → `flash_lock` → `board_init`.
+
+**`clock_rtc_init` (`0x080136c0`) — clock tree + RTC.** Enables backup-domain
+write access (`FUN_0801b51c` sets `PWR_CR.DBP`), sets `RCC_BDCR` (`+0x20`)
+`|= 0x18` (LSEDRV = 0b11, max drive), runs `HAL_RCC_OscConfig` (LSE/LSI/HSE),
+`HAL_RCCEx_PeriphCLKConfig` (RTC clock = LSE), `HAL_RCC_ClockConfig`, then
+`RCC_BDCR |= 0x8000` (RTCEN) and `HAL_RTC_Init` on the handle at `0x200006f0`
+(Instance = RTC `0x40002800`, `HourFormat`/cal fields {0, 0x7f, 0xff, 0,0,0}),
+finally `SystemCoreClockUpdate`. The three HAL config structs are stack-local
+and zeroed with `mem_set` (a `={0}` would pull in a libc `memset` this
+`-nostdlib` build can't link).
+
+**`iwdg_init` (`0x08013820`) — independent watchdog.** HAL handle at
+**`0x200006ac`**: Instance = IWDG `0x40003000`, Prescaler = 4 (÷64), Reload =
+`0x4e2`, Window = `0xfff` (disabled). After `HAL_IWDG_Init` it writes the reload
+key `IWDG_KR ← 0xAAAA` through the handle's Instance pointer — the same cell
+`delay_ms`/`ota.c` later dereference (`**0x200006ac`) to kick the dog.
+
+**`tick_state_reset` (`0x08014ac8`).** Zeroes the software ms-tick flag **byte**
+at `0x2000077c` (`strb`) and a 16-bit companion counter at **`0x20000778`**
+(`strh`); the millisecond tick word remains `0x20002614`.
+
+**`board_init` (`0x08011f2c`) — board GPIO + sub-inits.** Enables the GPIOA/B/C/F
+port clocks (`RCC_AHBENR` bits 17/18/19/22), drives initial output levels
+(GPIOA `0x8180` high / `0x1200` low, GPIOB `0x3001` high / `0x8e86` low), then
+configures the board pins with a single reused `gpio_pin_cfg_t` (the OEM does
+not re-zero it, so unset fields carry over between calls):
+
+| Call | Port | Pins | Mode | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | GPIOC | `0x2000` (PC13) | input | AFE INT line |
+| 2 | GPIOA | `0x0c00` (PA10,11) | input | |
+| 3 | GPIOA | `0x9380` (PA7,8,9,12,15) | output, speed 3 | |
+| 4 | GPIOB | `0x4140` (PB6,8,14) | input | **inherits speed 3** from call 3 |
+| 5 | GPIOB | `0xbe87` | output, speed 3 | |
+
+Runs six peripheral sub-inits (`FUN_08012188`, `FUN_0801647c`, `FUN_08008804`,
+`FUN_08010d90`, `FUN_0800e910`, `FUN_0800a310`), then an **I2C bus-recovery
+loop**: while SDA (PB14, `0x4000`) reads low, pulse SCL (PB13, `0x2000`) ten
+times at ~1 ms/edge (gated on the `0x2000077c` tick-flag bit0), re-checking SDA
+after each burst. Finishes with `FUN_0800e32c` and `HAL_NVIC_SetPriority`/
+`EnableIRQ` for **EXTI4_15 (IRQ 7)** at priority 3.
 
 ## SRAM globals (from main @ `0x0800f52c`)
 
