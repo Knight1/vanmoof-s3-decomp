@@ -20,10 +20,9 @@ extern int  hal_rtc_init(void *hrtc);
 extern int  hal_uart_init(void *huart);
 extern void hal_iwdg_init(void *hiwdg);
 extern void hal_gpio_init(uint32_t port, void *gpio);
-extern void hal_systick_init(void);          /* FUN_08002B88 (HAL timebase)     */
-extern void comms_uart_hw_init(void);         /* FUN_080033F4 (USART2 + NVIC)    */
-extern void reset_cause_log(void);            /* FUN_080024E4                    */
-extern void stl_region_init(uint32_t base, uint32_t len, int mode); /* FUN_08003978 */
+extern void hal_init(void);                   /* FUN_08002B88 = HAL_Init         */
+/* flash_lock (FUN_080033F4 = HAL_FLASH_Lock) and comms_uart_init / gpio_write_pins
+ * are declared in powerbankboot.h. */
 
 /* RTC / IWDG handles (OEM SRAM 0x20000B94 / 0x20000B54). The backup helpers
  * address the RTC registers directly, so the handle is carried only to match
@@ -90,8 +89,8 @@ void boot_read_persistent_flags(void)
         store_boot_flag(0);
     }
 
-    reset_cause_log();
-    stl_region_init(GPIOA_BASE, 0x1000, 0);
+    comms_uart_init();                            /* bring up the USART2 comms bus */
+    gpio_write_pins(GPIOA_BASE, 0x1000, 0);       /* drive PA12 low (BRR)          */
 }
 
 /* ===================================================================== */
@@ -135,15 +134,29 @@ void clock_periph_init(void)
     if (hal_rtc_init(g_hrtc) != 0)               stl_failsafe();
 
     extern uint8_t g_huart1[0x6C];               /* debug-console UART (USART1)     */
+    *(uint32_t *)g_huart1 = USART1_BASE;          /* handle->Instance = USART1       */
     if (hal_uart_init(g_huart1) != 0)            stl_failsafe();
     g_huart1[0x69] = 0x20u;                       /* gState = HAL_UART_STATE_READY   */
 }
 
+/* gpio_write_pins() (0x08003978) — atomically set (level != 0 -> BSRR) or clear
+ * (level == 0 -> BRR) the masked pins on a GPIO port. */
+void gpio_write_pins(uint32_t port, uint16_t mask, uint8_t level)
+{
+    if (level == 0)
+        REG32(port + 0x28) = mask;                /* GPIO_BRR  — reset */
+    else
+        REG32(port + 0x18) = mask;                /* GPIO_BSRR — set   */
+}
+
 void gpio_init(void)
 {
-    /* enable GPIO port clocks (IOPA/B/C/F) then configure pins */
+    /* enable GPIO port clocks (AHBENR: IOPA/B/C/F) */
     REG32(RCC_BASE + 0x14) |= 0x20000u | 0x40000u | 0x80000u | 0x400000u;
-    comms_uart_hw_init();                         /* deferred USART2 hw bring-up   */
+
+    /* The OEM then drives initial output levels via gpio_write_pins() and sets
+     * pin modes via hal_gpio_init(); the board pin masks / AF selections live in
+     * the .data init image (DAT_08001BEC..08001C04) and are not yet decoded. */
 }
 
 /* ===================================================================== */
@@ -152,12 +165,13 @@ void gpio_init(void)
 void boot_hw_init(void)
 {
     REG32(FLASH_R_BASE + 0x00) |= 0x10u;          /* FLASH_ACR.PRFTBE (prefetch)   */
-    hal_systick_init();
+    hal_init();                                   /* HAL_Init: prefetch + tick + Msp*/
     REG32(RCC_BASE + 0x18) |= 0x1u;               /* APB2ENR.SYSCFGEN              */
     REG32(RCC_BASE + 0x1C) |= 0x10000000u;        /* APB1ENR.PWREN                */
     REG32(RCC_BASE + 0x24) |= 0x1000000u;         /* CSR.RMVF (clear reset flags) */
     clock_periph_init();
     comms_rx_state_init();
     iwdg_init();
+    flash_lock();                                 /* HAL_FLASH_Lock (re-lock flash)*/
     gpio_init();
 }

@@ -9,8 +9,10 @@
  */
 #include "powerbankboot.h"
 
-/* STM32 HAL CRC peripheral (vendor-stock). crc32_calc resets the unit and
- * folds in the first run of words; crc32_accumulate continues without reset. */
+/* STM32 HAL CRC peripheral (vendor-stock) — MPEG-2 CRC32: poly 0x04C11DB7,
+ * init 0xFFFFFFFF, no in/out reflection, over little-endian 32-bit words.
+ * crc32_calc resets the unit and folds in the first run; crc32_accumulate
+ * continues without reset. */
 extern uint32_t crc32_calc(void *hcrc, const void *data, uint32_t nwords);
 extern uint32_t crc32_accumulate(void *hcrc, const void *data, uint32_t nwords);
 extern void    *g_hcrc;            /* CRC_HandleTypeDef (0x20000B64)           */
@@ -31,14 +33,18 @@ int image_verify(const uint32_t *slot)
         return IMG_MAGIC_BAD;
     }
 
-    /* CRC the header with the variable words blanked, then the body. */
+    /* MPEG-2 CRC32 over the whole image, but with the crc32 and imageSize header
+     * words — bytes [0x08:0x10) — blanked to 0xFFFFFFFF first. Byte-identical to
+     * the build-time patcher (../../tools/patch_image_header.py, patch_ware:
+     * `body[8:16] = 0xFF`). imageSize bounds the CRC length but is itself excluded
+     * from the CRC content. */
     uint32_t hdr[IMG_HDR_SIZE / 4];
     mem_copy((uint8_t *)hdr, (const uint8_t *)slot, IMG_HDR_SIZE);
-    hdr[2] = 0xFFFFFFFFu;                   /* crc32 field excluded from itself */
-    hdr[3] = 0xFFFFFFFFu;                   /* size field blanked, like the OEM */
+    hdr[2] = 0xFFFFFFFFu;                   /* +0x08 crc32 (excluded from itself) */
+    hdr[3] = 0xFFFFFFFFu;                   /* +0x0C imageSize                    */
 
-    uint32_t crc = crc32_calc(g_hcrc, hdr, IMG_HDR_SIZE / 4);
-    crc = crc32_accumulate(g_hcrc, slot + (IMG_HDR_SIZE / 4),
+    uint32_t crc = crc32_calc(g_hcrc, hdr, IMG_HDR_SIZE / 4);   /* 10 header words */
+    crc = crc32_accumulate(g_hcrc, slot + (IMG_HDR_SIZE / 4),   /* + body words    */
                            (h->size - IMG_HDR_SIZE) / 4);
 
     if (crc == h->crc32) {

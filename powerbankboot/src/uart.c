@@ -50,6 +50,43 @@ static volatile uint16_t s_tx_head, s_tx_tail;
 static volatile uint8_t  s_tx_state = UART_READY;   /* handle +0x69 (gState)   */
 static volatile uint8_t  s_rx_state = UART_READY;   /* handle +0x6A (RxState)  */
 
+/* ---- comms USART2 bring-up (comms_uart_init, OEM 0x080024E4) ---- */
+extern void hal_gpio_init(uint32_t port, void *gpio);   /* HAL_GPIO_Init          */
+extern void hal_uart_init(void *huart);                  /* HAL_UART_Init          */
+extern void nvic_set_priority(int irqn, uint32_t pre, uint32_t sub);
+extern void nvic_enable_irq(int irqn);
+extern uint8_t g_huart2[0x6C];                           /* USART2 handle           */
+
+#define USART2_IRQn  28
+
+/* comms_uart_init() — USART2 @ 115200 8N1 on PA2/PA3 (AF1), RX-interrupt + NVIC.
+ * Called out of boot_read_persistent_flags(). */
+void comms_uart_init(void)
+{
+    /* clocks: USART2 (APB1ENR bit17) + GPIOA (AHBENR bit17) */
+    REG32(RCC_BASE + 0x1C) |= 0x20000u;          /* APB1ENR.USART2EN */
+    REG32(RCC_BASE + 0x14) |= 0x20000u;          /* AHBENR.IOPAEN    */
+
+    /* PA2/PA3 -> USART2_TX/RX, alternate function AF1 (HAL GPIO_InitTypeDef) */
+    struct { uint32_t pin, mode, pull, speed, alt; } gpio = {
+        0x000Cu, 2u, 0u, 3u, 1u                  /* pins PA2|PA3, AF mode, AF1 */
+    };
+    hal_gpio_init(GPIOA_BASE, &gpio);
+
+    /* USART2 @ 115200 8N1 (handle->Init.BaudRate = 0x1C200; HAL fills BRR) */
+    *(uint32_t *)g_huart2 = USART2_BASE;          /* handle->Instance */
+    hal_uart_init(g_huart2);
+
+    s_rx_head = s_rx_tail = 0;
+    s_tx_head = s_tx_tail = 0;
+    s_tx_state = UART_READY;                       /* handle +0x69 */
+    s_rx_state = UART_READY;                       /* handle +0x6A */
+
+    REG32(USART2_BASE) |= CR1_RXNEIE;              /* enable RXNE interrupt */
+    nvic_set_priority(USART2_IRQn, 0, 0);
+    nvic_enable_irq(USART2_IRQn);
+}
+
 /* uart_tx_string() — enqueue a NUL-terminated string into the TX ring. */
 void uart_tx_string(const char *s)
 {

@@ -29,8 +29,7 @@ extern void stl_test_step_e84(void);   /* FUN_08000E84 */
 extern int  stl_crc_test(int sel);     /* FUN_08000940 (0x26 startup, 0x7C full) */
 extern void stl_ram_test_post(void);   /* FUN_08000BCC */
 extern void stl_ram_test_run(int mode);/* FUN_08000C98 */
-extern void hal_systick_init(void);    /* FUN_08002B88 */
-extern void stl_misc_init(void);       /* FUN_08002B88 sibling */
+extern void hal_init(void);            /* FUN_08002B88 = HAL_Init (prefetch+tick+msp) */
 
 /* trace strings printed by the STL phases (rodata in the OEM). */
 extern const char STL_INIT[], CPU_OK[], CPU_NG[], CLK_OK[], CLK_NG[],
@@ -52,7 +51,7 @@ int main(void)
     boot_main();
 
     /* ================= X-CUBE-STL template (dormant) ================= */
-    hal_systick_init();
+    hal_init();
     stl_startup();
     stl_cpu_test_pre();
 

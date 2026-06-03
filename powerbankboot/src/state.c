@@ -22,6 +22,7 @@ uint8_t  g_meas_ready;
 /* HAL handle objects — opaque to this decomp, sized to the STM32F0 HAL structs:
  * RTC_HandleTypeDef (~0x20 B), UART_HandleTypeDef (~0x6C B). The CRC handle is
  * referenced only by pointer. */
-uint8_t  g_hrtc_obj[0x20];
-uint8_t  g_huart1[0x6C];
+_Alignas(4) uint8_t g_hrtc_obj[0x20];
+_Alignas(4) uint8_t g_huart1[0x6C];   /* debug-console UART (USART1) handle       */
+_Alignas(4) uint8_t g_huart2[0x6C];   /* comms UART (USART2) handle — 0x20001FCC  */
 void    *g_hcrc;

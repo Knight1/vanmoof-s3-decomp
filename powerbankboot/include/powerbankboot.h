@@ -108,6 +108,7 @@ extern volatile uint8_t g_boot_events;       /* SysTick → server loop (0x20000
 extern uint8_t          g_loop_mode;         /* download/finalize mode (0x20000B50)*/
 
 /* uart.c */
+void comms_uart_init(void);           /* USART2 @ 115200, PA2/PA3 AF1, IRQ28   */
 void uart_tx_string(const char *s);
 void uart_tx_byte(uint8_t b);
 void uart_rx_drain(void);
@@ -121,6 +122,8 @@ void clock_periph_init(void);
 void iwdg_init(void);
 void iwdg_refresh(void);
 void gpio_init(void);
+void gpio_write_pins(uint32_t port, uint16_t mask, uint8_t level);
+void flash_lock(void);
 void comms_rx_state_init(void);
 void boot_read_persistent_flags(void);
 void store_boot_flag(uint8_t v);
