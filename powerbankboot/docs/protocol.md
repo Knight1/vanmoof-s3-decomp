@@ -21,9 +21,15 @@ table follows at `+0x28`.
 
 `image_verify()` returns **0 = OK**, **1 = CRC mismatch**, **2 = bad magic/size**
 (and traces `"-->CRC Verify 0x%4x%4x = "` followed by the code as `"0\n\r"` /
-`"1\n\r"` / `"2\n\r"`). The CRC (STM32 hardware CRC unit) covers the header — with
-the `crc32` and `size` words blanked to `0xFFFFFFFF` — followed by the body words
-from `+0x28` to `+size`, i.e. `(size - 0x28)/4` words.
+`"1\n\r"` / `"2\n\r"`). The CRC is **MPEG-2 CRC32** (poly `0x04C11DB7`, init
+`0xFFFFFFFF`, no reflection — the STM32 hardware CRC unit) over the whole image,
+with the header words at **`+0x08` (crc32)** and **`+0x0C` (imageSize)** — i.e.
+bytes `[0x08:0x10)` — blanked to `0xFFFFFFFF` first. The loader CRCs the 10 header
+words then `(size - 0x28)/4` body words and compares to the stored `crc32`. This
+is byte-identical to the build-time patcher `tools/patch_image_header.py`
+(`patch_ware`: `body[8:16] = 0xFF`), which is verified against the OEM ware
+images — so the `imageSize` field bounds the CRC length but is itself excluded
+from the CRC content.
 
 ## Boot decision (`boot_main` @ `0x080014A0`)
 

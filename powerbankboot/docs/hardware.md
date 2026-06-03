@@ -22,9 +22,10 @@ HAL bring-up: `HAL_RCC_OscConfig` â†’ `HAL_RCC_ClockConfig` (flash latency 1) â†
 `HAL_RCCEx_PeriphCLKConfig` (RTC + USART). Before configuring, it sets
 `RCC_APB1ENR.PWREN` and the `RCC_BDCR` LSE-drive bits, and afterwards
 `RCC_BDCR.RTCEN`. The RTC runs from LSE (32.768 kHz; async/sync prediv
-`0x7F`/`0xFF`). USART1 is initialised here as the debug console; the comms USART2
-is brought up separately (`comms_uart_hw_init`, `FUN_080033F4`, in the
-`boot_hw_init` chain) and is the one wired to the NVIC (IRQ28).
+`0x7F`/`0xFF`). USART1 is initialised here as the debug console. The comms USART2
+is brought up separately by `comms_uart_init` (`0x080024E4`, from
+`boot_read_persistent_flags`): **115200 8N1 on PA2/PA3 (AF1)**, RXNE interrupt,
+NVIC IRQ28 (handle `0x20001FCC`, Instance `0x40004400`, BaudRate `0x1C200`).
 
 ### Watchdog (`iwdg_init` @ `0x08001E4C`)
 
