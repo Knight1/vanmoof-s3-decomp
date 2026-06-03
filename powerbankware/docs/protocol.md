@@ -24,6 +24,22 @@ same fields batteryware exposes. Slave address, function codes (3/6/0x10) and
 the register layout are **TBC** (decompile the command processor; cross-check
 against the batteryware register map but verify each against this image).
 
+### Temperature-offset write registers (NTC calibration)
+
+`modbus_write_single` (function-code 6 path) handles three registers that write
+the BMS **temperature-offset / NTC-calibration** bytes (config-record offsets
+`+8`/`+9`/`+10`). A valid offset is a small signed value: byte in `0x00..0x14`
+(0..+20) or `0xEB..0xFF` (−21..−1); the middle range is invalid; defaults
+`(0, 3, 3)`. **This changed between firmware versions** — see
+`changelog-1.11.01-to-1.11.05.md`:
+
+- **1.11.01**: a write was accepted whenever the value was non-zero.
+- **1.11.05**: a write is accepted only when the value is `< 0x14` or `> 0xEB`
+  (a valid small offset), the accepted value is also mirrored into RAM shadow
+  globals (`0x…87d4/d8/dc`), and the same range clamp is now enforced at boot
+  (`bms_system_init`) and on `bms_config_reset` (which also persists via
+  `fedl5236_record_save`).
+
 ## FEDL5236 AFE link — hardware SPI (confirmed from this image)
 
 The battery-AFE side channel is **hardware SPI**, not the bit-banged SMBus
