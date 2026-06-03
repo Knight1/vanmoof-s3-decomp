@@ -352,4 +352,19 @@ void extend_io_update(void);
  * index via the rational curve + descending LUT. */
 uint8_t ntc_temp_read(void);
 
+/* ---- Interrupt handlers (vector table) --------------------------------- *
+ * Strong CMSIS-named ISRs that override the weak Default_Handler aliases in
+ * startup_stm32f091.S. The OEM enables these vectors at runtime; without the
+ * strong definitions the first interrupt would trap in the default spin loop. */
+void SysTick_Handler(void);        /* 1 ms time base + tick flags  (src/system.c) */
+void USART2_IRQHandler(void);      /* ch-2 host link RX/TX         (src/uart.c)   */
+void USART1_IRQHandler(void);      /* ch-1 link RX/TX             (src/uart.c)   */
+void SPI1_IRQHandler(void);        /* FEDL5236 AFE full-duplex IT  (src/spi.c)    */
+void TIM7_IRQHandler(void);        /* PA9 indicator sequencer      (src/timer.c)  */
+void ADC1_COMP_IRQHandler(void);   /* ADC1 EOC/EOS/OVR sample latch (src/adc.c)   */
+void I2C2_IRQHandler(void);        /* EEPROM I2C (polling; empty)  (src/i2c.c)    */
+void EXTI4_15_IRQHandler(void);    /* EXTI line 13 wake/event flag (src/hal.c)    */
+void HardFault_Handler(void);      /* fault -> system reset        (src/reset.c)  */
+int  tim_base_stop_it(void *handle); /* HAL_TIM_Base_Stop_IT (FUN_0801cfa4, src/timer.c) */
+
 #endif /* POWERBANKWARE_H */

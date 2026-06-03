@@ -32,3 +32,18 @@ void system_reset_request(void)
     for (;;) {
     }
 }
+
+/*
+ * HardFault_Handler — OEM FUN_0800fe2c (14 bytes).
+ *
+ * The OEM HardFault vector does no fault-status capture: it is a bare tail
+ * call into spi_error_reset() (FUN_0800fe3a), which requests a system reset
+ * via SCB->AIRCR and spins. A fault in a BMS is unrecoverable, so the safe
+ * action is an immediate reset rather than continuing on a corrupt context.
+ * Names HardFault_Handler so it strong-overrides the weak Default_Handler
+ * alias in startup_stm32f091.S.
+ */
+void HardFault_Handler(void)
+{
+    spi_error_reset();
+}

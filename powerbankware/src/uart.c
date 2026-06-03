@@ -542,3 +542,225 @@ void uart_msp_init(void)
     nvic_set_priority(28, 0, 0);   /* USART2_IRQn */
     nvic_enable_irq(28);
 }
+
+/*
+ * USART2_IRQHandler — OEM FUN_080161e0 (HAL_UART_IRQHandler, USART2 instance).
+ *
+ * Pure leaf ISR: no callees, all accesses are direct loads/stores. It is the
+ * producer/continuation counterpart to the polled helpers already in this file:
+ *   - RXNE feeds the RX ring (0x20000858, wr idx 0x20000a58) that uart_rx_handler
+ *     drains; wrap at 0x1ff (DAT_08016464).
+ *   - TXE pops the TX ring (base 0x20000a60, rd idx 0x20000854, wr idx 0x20000a5c)
+ *     that uart_putchar/uart_tx_isr fill; wrap at 0xfff (DAT_08016478), same ring
+ *     this module already owns.
+ * The error branch follows HAL's UART_EndRxTransfer cleanup: on a real frame/parity/
+ * noise/overrun error with the matching IE bit set, it clears the flag via ICR
+ * (+0x20), records the bit in ErrorCode (handle +0x6c), and — for overrun, or once an
+ * error has latched — masks RXNEIE|PEIE (CR1 &= 0xfffffedf), clears CR3.EIE and parks
+ * RxState READY (+0x6a = 0x20). gState READY (+0x69 = 0x20) is set on a TC with TCIE.
+ *
+ * Register/field resolutions (literal pool at 0x8016458):
+ *   DAT_08016458 -> 0x20001a60  s_handle (HAL UART handle; Instance = USART2 @ +0x00)
+ *   DAT_0801645c -> 0x20000a58  RX ring write index   (uart_rx_handler rx_wr)
+ *   DAT_08016460 -> 0x20000858  RX ring base          (uart_rx_handler rx_ring)
+ *   DAT_08016464 -> 0x000001ff  RX ring wrap mask compare
+ *   DAT_08016468 -> 0xfffffedf  CR1 clear mask (RXNEIE bit5 | PEIE bit8)
+ *   DAT_0801646c -> 0x20000854  TX ring read index    (s_rd_idx)
+ *   DAT_08016470 -> 0x20000a5c  TX ring write index   (s_wr_idx)
+ *   DAT_08016474 -> 0x20000a60  TX ring base          (UART_RING)
+ *   DAT_08016478 -> 0x00000fff  TX ring wrap compare
+ * USART (F0): ISR +0x1c, CR1 +0x00, CR3 +0x08, ICR +0x20, RDR +0x24, TDR +0x28.
+ */
+void USART2_IRQHandler(void)
+{
+    volatile uint8_t  *h    = s_handle;                          /* 0x20001a60 */
+    volatile uint32_t *inst = *(volatile uint32_t * volatile *)s_handle;  /* USART2 */
+    volatile uint32_t *errcode = (volatile uint32_t *)(s_handle + 0x6c);
+
+    volatile uint16_t * const rx_wr   = (volatile uint16_t *)0x20000a58;
+    uint8_t           * const rx_ring = (uint8_t *)0x20000858;
+
+    uint32_t isr_reg = inst[7];   /* ISR (+0x1c) */
+    uint32_t cr1     = inst[0];   /* CR1 (+0x00) */
+    uint32_t cr3     = inst[2];   /* CR3 (+0x08) */
+
+    if ((isr_reg & 0xf) == 0) {
+        /* RXNE with RXNEIE: stash the received byte into the RX ring. */
+        if ((isr_reg & 0x20) != 0 && (cr1 & 0x20) != 0) {
+            rx_ring[*rx_wr] = (uint8_t)*(volatile uint16_t *)((uint8_t *)inst + 0x24);  /* RDR */
+            uint16_t next = (uint16_t)(*rx_wr + 1);
+            *rx_wr = next;
+            if (next > 0x1ff) {
+                *rx_wr = 0;
+            }
+        }
+    } else if ((cr3 & 1) != 0 || (cr1 & 0x120) != 0) {
+        /* An error flag is set and either EIE or RXNEIE/PEIE is enabled. */
+        if ((isr_reg & 1) != 0 && (cr1 & 0x100) != 0) {            /* PE  & PEIE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 1;    /* ICR: PECF */
+            *errcode |= 1;
+        }
+        if ((isr_reg & 2) != 0 && (cr3 & 1) != 0) {               /* FE  & EIE  */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 2;    /* ICR: FECF */
+            *errcode |= 4;
+        }
+        if ((isr_reg & 4) != 0 && (cr3 & 1) != 0) {               /* NE  & EIE  */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 4;    /* ICR: NCF  */
+            *errcode |= 2;
+        }
+        if ((isr_reg & 8) != 0 && ((cr1 & 0x20) != 0 || (cr3 & 1) != 0)) {  /* ORE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 8;    /* ICR: ORECF */
+            *errcode |= 8;
+        }
+
+        if (*errcode != 0) {
+            /* If the error is recoverable, the byte is still in RDR: ingest it. */
+            if ((isr_reg & 0x20) != 0 && (cr1 & 0x20) != 0) {     /* RXNE & RXNEIE */
+                rx_ring[*rx_wr] = (uint8_t)*(volatile uint16_t *)((uint8_t *)inst + 0x24);
+                uint16_t next = (uint16_t)(*rx_wr + 1);
+                *rx_wr = next;
+                if (next > 0x1ff) {
+                    *rx_wr = 0;
+                }
+            }
+
+            if ((*errcode & 8) == 0 && (inst[2] & 0x40) == 0) {   /* not ORE and not DMAR */
+                *errcode = 0;
+            } else {
+                /* Hard error: end the RX transfer (HAL UART_EndRxTransfer). */
+                inst[0] &= 0xfffffedfu;                            /* CR1: clear RXNEIE|PEIE */
+                inst[2] &= 0xfffffffeu;                            /* CR3: clear EIE */
+                inst[0] |= 0x20u;                                  /* CR1: re-enable RXNEIE */
+                h[0x6a] = 0x20;                                    /* RxState = READY */
+            }
+        }
+    }
+
+    if ((isr_reg & 0x80) != 0 && (cr1 & 0x80) != 0) {
+        /* TXE with TXEIE: drain the TX ring or, when empty, switch to TC. */
+        volatile uint16_t * const tx_rd   = (volatile uint16_t *)0x20000854;
+        volatile uint16_t * const tx_wr   = (volatile uint16_t *)0x20000a5c;
+        uint8_t           * const tx_ring = (uint8_t *)0x20000a60;
+
+        if (*tx_rd == *tx_wr) {
+            inst[0] &= 0xffffff7fu;                                /* CR1: clear TXEIE */
+            inst[0] |= 0x40u;                                      /* CR1: set TCIE   */
+        } else {
+            uint8_t b = tx_ring[*tx_rd];
+            uint16_t next = (uint16_t)(*tx_rd + 1);
+            *tx_rd = next;
+            if (next > 0xfff) {
+                *tx_rd = 0;
+            }
+            *(volatile uint16_t *)((uint8_t *)inst + 0x28) = b;    /* TDR */
+        }
+    } else if ((isr_reg & 0x40) != 0 && (cr1 & 0x40) != 0) {
+        /* TC with TCIE: transfer complete, return the line to idle. */
+        inst[0] &= 0xffffffbfu;                                   /* CR1: clear TCIE */
+        h[0x69] = 0x20;                                           /* gState = READY  */
+    }
+}
+
+/*
+ * USART1_IRQHandler — OEM FUN_08015e84 (HAL_UART_IRQHandler for the ch-1 link).
+ *
+ * Strong override of the weak Default_Handler alias for vector slot 27. Drives
+ * the same channel-1 HAL UART handle (0x200007ac) and the same TX ring that
+ * uart_ch1_tx_pump()/uart_flush_ch1() poll, plus a 20-byte RX ring at
+ * 0x20000798 (wr index 0x2000084c). The handler inlines its own ring access
+ * (it is not factored through uart_ch1_tx_pump), so this faithfully reproduces
+ * that inline path against the identical SRAM addresses.
+ *
+ * USART1 regs @ Instance (huart[0]): CR1 +0x00, CR3 +0x08, ISR +0x1c, RDR +0x24,
+ * TDR +0x28, ICR +0x20. Handle fields: gState +0x69, RxState +0x6a,
+ * ErrorCode +0x6c. Masks/widths/wrap-at-0x13 disasm-confirmed.
+ */
+void USART1_IRQHandler(void)
+{
+    volatile uint32_t *huart = (volatile uint32_t *)0x200007ac;
+    volatile uint32_t *inst  = (volatile uint32_t *)huart[0];   /* USART1 */
+
+    volatile uint16_t * const rx_idx  = (volatile uint16_t *)0x2000084c;
+    uint8_t           * const rx_ring = (uint8_t *)0x20000798;
+    volatile uint16_t * const tx_tail = (volatile uint16_t *)0x2000084a;
+    volatile uint16_t * const tx_head = (volatile uint16_t *)0x2000084e;
+    uint8_t           * const tx_ring = (uint8_t *)0x20000784;
+
+    volatile uint8_t  * const gstate  = (volatile uint8_t *)(0x200007ac + 0x69);
+    volatile uint8_t  * const rxstate = (volatile uint8_t *)(0x200007ac + 0x6a);
+    volatile uint32_t * const errcode = &huart[0x1b];           /* +0x6c */
+
+    uint32_t isrflags   = inst[7];   /* ISR (+0x1c) */
+    uint32_t cr1its     = inst[0];   /* CR1 (+0x00) */
+    uint32_t errorflags = inst[2];   /* CR3 (+0x08), holds EIE here */
+
+    if ((isrflags & 0xf) == 0) {
+        /* No error flags pending: plain RXNE receive. */
+        if ((isrflags & 0x20) != 0 && (cr1its & 0x20) != 0) {
+            rx_ring[*rx_idx] = (uint8_t)*(volatile uint16_t *)((uint8_t *)inst + 0x24);
+            uint16_t next = (uint16_t)(*rx_idx + 1);
+            *rx_idx = next;
+            if (next > 0x13) {
+                *rx_idx = 0;
+            }
+        }
+    } else if ((errorflags & 1) != 0 || (cr1its & 0x120) != 0) {
+        /* Error path: latch active error sources into ErrorCode + clear them. */
+        if ((isrflags & 1) != 0 && (cr1its & 0x100) != 0) {          /* PE + PEIE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 1;       /* ICR.PECF */
+            *errcode |= 1u;
+        }
+        if ((isrflags & 2) != 0 && (errorflags & 1) != 0) {          /* FE + EIE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 2;       /* ICR.FECF */
+            *errcode |= 4u;
+        }
+        if ((isrflags & 4) != 0 && (errorflags & 1) != 0) {          /* NE + EIE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 4;       /* ICR.NCF */
+            *errcode |= 2u;
+        }
+        if ((isrflags & 8) != 0 &&                                   /* ORE */
+            ((cr1its & 0x20) != 0 || (errorflags & 1) != 0)) {       /* RXNEIE | EIE */
+            *(volatile uint32_t *)((uint8_t *)inst + 0x20) = 8;       /* ICR.ORECF */
+            *errcode |= 8u;
+        }
+
+        if (*errcode != 0) {
+            if ((isrflags & 0x20) != 0 && (cr1its & 0x20) != 0) {    /* drain RXNE */
+                rx_ring[*rx_idx] = (uint8_t)*(volatile uint16_t *)((uint8_t *)inst + 0x24);
+                uint16_t next = (uint16_t)(*rx_idx + 1);
+                *rx_idx = next;
+                if (next > 0x13) {
+                    *rx_idx = 0;
+                }
+            }
+            if ((*errcode & 8u) == 0 && (inst[2] & 0x40) == 0) {
+                /* Non-overrun, non-blocking (CR3.DMAR clear): nothing to abort. */
+                *errcode = 0;
+            } else {
+                inst[0] &= 0xfffffedfu;   /* CR1: clear RXNEIE + PEIE */
+                inst[2] &= 0xfffffffeu;   /* CR3: clear EIE */
+                inst[0] |= 0x20u;         /* CR1: re-enable RXNEIE */
+                *rxstate = 0x20;          /* RxState = READY */
+            }
+        }
+    }
+
+    if ((isrflags & 0x80) != 0 && (cr1its & 0x80) != 0) {            /* TXE + TXEIE */
+        if (*tx_tail == *tx_head) {
+            inst[0] &= 0xffffff7fu;       /* CR1: clear TXEIE */
+            inst[0] |= 0x40u;             /* CR1: set TCIE */
+        } else {
+            uint16_t t = *tx_tail;
+            uint8_t b = tx_ring[t];
+            uint16_t next = (uint16_t)(t + 1);
+            *tx_tail = next;
+            if (next > 0x13) {
+                *tx_tail = 0;
+            }
+            *(volatile uint16_t *)((uint8_t *)inst + 0x28) = (uint16_t)b;   /* TDR */
+        }
+    } else if ((isrflags & 0x40) != 0 && (cr1its & 0x40) != 0) {     /* TC + TCIE */
+        inst[0] &= 0xffffffbfu;           /* CR1: clear TCIE */
+        *gstate = 0x20;                   /* gState = READY */
+    }
+}

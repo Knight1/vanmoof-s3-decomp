@@ -474,3 +474,14 @@ void i2c2_init(void)
     if (hal_i2cex_config_analog_filter(hi2c, 0) != 0)  { spi_error_reset(); }
     if (hal_i2cex_config_digital_filter(hi2c, 0) != 0) { spi_error_reset(); }
 }
+
+/* I2C2_IRQHandler — OEM FUN_0800e320 (STM32F091 I2C2 EV/ER vector, IRQ24).
+ * Empty body: the EEPROM I2C2 path is polling-mode (HAL_I2C_Mem_Write/_Read),
+ * so the I2C2 interrupt is never enabled and the ISR does nothing. The OEM
+ * function at 0x0800e320 is a 10-byte stub (frame prologue / nop / epilogue,
+ * size 10 incl. 2 bytes halfword padding); no MMIO access, no flag clear.
+ * A strong definition here overrides the weak Default_Handler alias in
+ * startup_stm32f091.S. */
+void I2C2_IRQHandler(void)
+{
+}

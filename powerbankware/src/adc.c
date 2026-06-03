@@ -328,3 +328,83 @@ void adc_msp_init(void)
     nvic_set_priority(12, 2, 0);   /* ADC1_COMP_IRQn */
     nvic_enable_irq(12);
 }
+
+/*
+ * ADC1_COMP_IRQHandler — OEM @0x08008688 (HAL_ADC_IRQHandler for ADC1).
+ *
+ * 360 bytes of code (0x08008688..0x080087ee) plus a 5-word literal pool to
+ * 0x08008804. handle = measurement ADC handle @0x200001B4 (DAT_080087f0);
+ * inst = handle[0] = ADC1 @0x40012400. Register/field indices match adc.c:
+ *   ISR inst[0] (+0x00), IER inst[1] (+0x04), CR inst[2] (+0x08),
+ *   CFGR1 inst[3] (+0x0c), DR inst[0x10] (+0x40); handle State word[0x11]
+ *   (+0x44), ErrorCode word[0x12] (+0x48), Init.ContinuousConvMode word[8]
+ *   (+0x20), Init.Overrun word[0xd] (+0x34).
+ *
+ * Literal pool (LE words read from flash):
+ *   DAT_080087f0 -> 0x200001b4  (ADC HAL handle)
+ *   DAT_080087f4 -> 0xfffffefe  (State AND-mask: clear bits 8 and 0 before READY)
+ *   DAT_080087f8 -> 0x20000213  (raw-buffer halfword write index, byte)
+ *   DAT_080087fc -> 0x20000208  (raw ADC halfword buffer base)
+ *   DAT_08008800 -> 0x20000204  ("sample ready" flag byte)
+ *
+ * On EOC it latches the 12-bit DR sample into the raw buffer indexed by the
+ * byte counter; on EOS it raises the sample-ready flag (the inlined
+ * HAL_ADC_ConvCpltCallback) and stops a single-shot scan back to READY.
+ * The overrun branch runs whether or not the EOC/EOS gate fired.
+ *
+ * WHY the magic literals: 0xfffffefe clears State bits 8 and 0 before setting
+ * READY; the DR mask 0x0fff is the 12-bit resolution. The post-store re-read of
+ * the index byte mirrors the OEM (ldrb at 0x8008776 after the strh).
+ */
+void ADC1_COMP_IRQHandler(void)
+{
+    uint32_t * const handle = (uint32_t *)0x200001b4u;         /* DAT_080087f0 */
+    volatile uint32_t *inst = (volatile uint32_t *)handle[0];
+
+    /* Act only on a flag whose interrupt is enabled (EOC&EOCIE || EOS&EOSIE). */
+    if (((inst[0] & 4) == 4 && (inst[1] & 4) == 4) ||
+        ((inst[0] & 8) == 8 && (inst[1] & 8) == 8)) {
+
+        if ((handle[0x11] & 0x10) == 0) {
+            handle[0x11] |= 0x200u;                            /* State: REG_BUSY */
+        }
+
+        /* Single-shot scan: on EOS, stop the conversion and return to READY. */
+        if ((inst[3] & 0xc00u) == 0 &&                         /* CFGR1.EXTEN == 0 */
+            handle[8] == 0 &&                                  /* not continuous   */
+            (inst[0] & 8) == 8) {                              /* ISR.EOS          */
+            if ((inst[2] & 4) == 0) {                          /* CR.ADSTART clear */
+                inst[1] &= ~0xcu;                              /* IER: clear EOCIE|EOSIE */
+                handle[0x11] = (handle[0x11] & 0xfffffefeu) | 1u;   /* State: READY */
+            } else {
+                handle[0x11] |= 0x20u;                         /* State: ERROR_INTERNAL */
+                handle[0x12] |= 1u;                            /* ErrorCode: INTERNAL   */
+            }
+        }
+
+        /* EOC: latch the 12-bit DR sample into the raw buffer. */
+        if ((inst[0] & 4) == 4) {
+            uint16_t val = (uint16_t)(inst[0x10] & 0x0fffu);   /* DR, 12-bit */
+            uint8_t  idx = *(volatile uint8_t *)0x20000213u;   /* DAT_080087f8 */
+            *(volatile uint16_t *)(0x20000208u + (uint32_t)idx * 2u) = val; /* DAT_080087fc */
+            /* OEM re-reads the index byte after the store (ldrb @0x8008776). */
+            idx = *(volatile uint8_t *)0x20000213u;
+            *(volatile uint8_t *)0x20000213u = (uint8_t)(idx + 1u);
+        }
+
+        /* EOS: HAL_ADC_ConvCpltCallback — raise the "sample ready" flag. */
+        if ((inst[0] & 8) == 8) {
+            *(volatile uint8_t *)0x20000204u |= 1u;            /* DAT_08008800 */
+        }
+
+        inst[0] = 0xcu;                                        /* ISR: W1C EOC|EOS */
+    }
+
+    /* Overrun, only when its interrupt is enabled (reached regardless of above). */
+    if ((inst[0] & 0x10u) == 0x10u && (inst[1] & 0x10u) == 0x10u) {
+        if (handle[0xd] == 1 || (inst[3] & 1u) != 0) {         /* DATA_PRESERVED or DMAEN */
+            handle[0x12] |= 2u;                                /* ErrorCode: OVR */
+        }
+        inst[0] = 0x10u;                                       /* ISR: W1C OVR */
+    }
+}

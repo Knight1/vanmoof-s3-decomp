@@ -258,7 +258,7 @@
       "value": "0x00000000"
     }
   ],
-  "function_count": 284,
+  "function_count": 285,
   "functions": [
     {
       "addr": "0x08008110",
@@ -347,6 +347,15 @@
       "name": "FUN_0800864c",
       "auto_named": true,
       "signature": "undefined FUN_0800864c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x08008688",
+      "size": 360,
+      "name": "ADC1_COMP_IRQHandler",
+      "auto_named": false,
+      "signature": "void ADC1_COMP_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -821,9 +830,9 @@
     {
       "addr": "0x0800e320",
       "size": 10,
-      "name": "FUN_0800e320",
-      "auto_named": true,
-      "signature": "undefined FUN_0800e320(void)",
+      "name": "I2C2_IRQHandler",
+      "auto_named": false,
+      "signature": "void I2C2_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -839,9 +848,9 @@
     {
       "addr": "0x0800e438",
       "size": 384,
-      "name": "FUN_0800e438",
-      "auto_named": true,
-      "signature": "undefined FUN_0800e438(void)",
+      "name": "TIM7_IRQHandler",
+      "auto_named": false,
+      "signature": "void TIM7_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -956,9 +965,9 @@
     {
       "addr": "0x0800fe2c",
       "size": 14,
-      "name": "FUN_0800fe2c",
-      "auto_named": true,
-      "signature": "undefined FUN_0800fe2c(void)",
+      "name": "HardFault_Handler",
+      "auto_named": false,
+      "signature": "void HardFault_Handler(void)",
       "thunk": false,
       "external": false
     },
@@ -1100,9 +1109,9 @@
     {
       "addr": "0x08010c4c",
       "size": 320,
-      "name": "FUN_08010c4c",
-      "auto_named": true,
-      "signature": "undefined FUN_08010c4c(void)",
+      "name": "SPI1_IRQHandler",
+      "auto_named": false,
+      "signature": "void SPI1_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -1181,9 +1190,9 @@
     {
       "addr": "0x080114ac",
       "size": 40,
-      "name": "FUN_080114ac",
-      "auto_named": true,
-      "signature": "undefined FUN_080114ac(void)",
+      "name": "EXTI4_15_IRQHandler",
+      "auto_named": false,
+      "signature": "void EXTI4_15_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -1622,9 +1631,9 @@
     {
       "addr": "0x08014a14",
       "size": 162,
-      "name": "FUN_08014a14",
-      "auto_named": true,
-      "signature": "undefined FUN_08014a14(void)",
+      "name": "SysTick_Handler",
+      "auto_named": false,
+      "signature": "void SysTick_Handler(void)",
       "thunk": false,
       "external": false
     },
@@ -1703,9 +1712,9 @@
     {
       "addr": "0x08015e84",
       "size": 624,
-      "name": "FUN_08015e84",
-      "auto_named": true,
-      "signature": "undefined FUN_08015e84(void)",
+      "name": "USART1_IRQHandler",
+      "auto_named": false,
+      "signature": "void USART1_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -1730,9 +1739,9 @@
     {
       "addr": "0x080161e0",
       "size": 630,
-      "name": "FUN_080161e0",
-      "auto_named": true,
-      "signature": "undefined FUN_080161e0(void)",
+      "name": "USART2_IRQHandler",
+      "auto_named": false,
+      "signature": "void USART2_IRQHandler(void)",
       "thunk": false,
       "external": false
     },
@@ -2666,9 +2675,9 @@
     {
       "addr": "0x0801cfa4",
       "size": 74,
-      "name": "FUN_0801cfa4",
-      "auto_named": true,
-      "signature": "undefined FUN_0801cfa4(void)",
+      "name": "tim_base_stop_it",
+      "auto_named": false,
+      "signature": "int tim_base_stop_it(void * handle)",
       "thunk": false,
       "external": false
     },

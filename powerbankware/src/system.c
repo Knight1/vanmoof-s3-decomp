@@ -582,3 +582,45 @@ void __libc_init_array_lite(void)
         (*fn)();
     }
 }
+
+/*
+ * SysTick_Handler — OEM FUN_08014a14 (size 162 bytes).
+ *
+ * The 1 ms system-tick ISR and sole producer of the firmware's time base.
+ * It advances the free-running 32-bit ms counter that tick_get() reads
+ * (0x20002614), advances a 16-bit sub-counter (0x20000778, cleared by
+ * tick_state_reset), and OR-folds the software tick-flag byte (0x2000077c,
+ * consumed by delay_ms / board_init):
+ *   bit0 set every 1 ms, bit1 every 50 ms, bit2 every 250 ms, bit3 each
+ *   full 1000 ms wrap (the |=0xf / |=7 / |=3 / |=1 masks).
+ *
+ * Disasm-confirmed against the OEM image: the 32-bit counter is ldr/str, the
+ * sub-counter ldrh/strh with 16-bit wrap (uxth), the flag byte ldrb/strb. The
+ * wrap test is `cmp counter, #0x3e7` + `bls` (unsigned), i.e. reset and |=0xf
+ * once the post-increment sub-counter exceeds 999 (>= 1000). The two
+ * FUN_0800823c calls are the unsigned div/mod helper taking the remainder,
+ * here the C `%` operator on the re-loaded (== incremented) sub-counter.
+ * 0x3e7 is an inline immediate, not a pointer.
+ */
+void SysTick_Handler(void)
+{
+    volatile uint32_t * const uw_tick   = (volatile uint32_t *)0x20002614u;
+    volatile uint16_t * const sub_count = (volatile uint16_t *)0x20000778u;
+    volatile uint8_t  * const tick_flag = (volatile uint8_t  *)0x2000077cu;
+
+    *uw_tick = *uw_tick + 1u;
+
+    uint16_t count = (uint16_t)(*sub_count + 1u);
+    *sub_count = count;
+
+    if (count > 999u) {
+        *sub_count = 0;
+        *tick_flag |= 0x0fu;
+    } else if ((count % 250u) == 0u) {
+        *tick_flag |= 0x07u;
+    } else if ((count % 50u) == 0u) {
+        *tick_flag |= 0x03u;
+    } else {
+        *tick_flag |= 0x01u;
+    }
+}

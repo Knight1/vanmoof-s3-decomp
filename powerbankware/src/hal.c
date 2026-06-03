@@ -231,3 +231,28 @@ void hal_bringup(void)
     flash_lock();                                     /* FUN_0801a298 */
     board_init();
 }
+
+/*
+ * EXTI4_15_IRQHandler — OEM FUN_080114ac (40 B).
+ *
+ * Handles the shared EXTI lines 4..15 vector. Only EXTI line 13 (PR bit
+ * 0x2000) is wired up by board_init (it enables EXTI4_15_IRQn at NVIC prio 3).
+ * On a line-13 event the OEM sets bit 0 of an 8-bit software wake/event flag
+ * and clears the EXTI pending bit by writing it back to PR (rc_w1).
+ *
+ * The flag byte at 0x2000069c is the EXTI13 software-pending flag: the
+ * application super-loop tests/clears its bit 0 (e.g. in bms_core_update,
+ * alongside reading the matching GPIO line 0x2000) to latch the edge across
+ * loop iterations. Widths (32-bit PR access, 8-bit flag access), the 0x2000
+ * mask and the PR offset (+0x14) are disasm-confirmed against the OEM image.
+ */
+void EXTI4_15_IRQHandler(void)
+{
+    volatile uint32_t * const EXTI_PR   = (volatile uint32_t *)(0x40010400u + 0x14);  /* DAT_080114d4 + 0x14 */
+    volatile uint8_t  * const exti13_flag = (volatile uint8_t *)0x2000069cu;           /* DAT_080114d8 */
+
+    if ((*EXTI_PR & 0x2000u) != 0) {        /* EXTI line 13 pending */
+        *exti13_flag |= 1u;
+        *EXTI_PR = 0x2000u;                 /* rc_w1: clear the line-13 pending bit */
+    }
+}

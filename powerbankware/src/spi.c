@@ -462,3 +462,72 @@ void spi1_init(void)
         *(volatile uint8_t *)(0x20000614u + i) = 0xff;
     }
 }
+
+/*
+ * SPI1_IRQHandler — OEM FUN_08010c4c (HAL_SPI_IRQHandler for the SPI1 handle).
+ *
+ * Reads CR2 (Instance +0x04) and SR (Instance +0x08), then dispatches the
+ * full-duplex IT transfer:
+ *   - RXNE serviced first: !SR.OVR && SR.RXNE && CR2.RXNEIE -> RxISR.
+ *   - else TXE: SR.TXE && CR2.TXEIE -> TxISR.
+ *   - else error: any of SR.{MODF,OVR,FRE} && CR2.ERRIE -> flag ErrorCode,
+ *     clear the offending flag, disable the IRQs, mark READY, run the error
+ *     callback (system reset).
+ *
+ * OVR is cleared by the documented read-DR-then-read-SR sequence. NOTE the OEM
+ * runs that dummy-read pair even when the handle is in the ABORT state
+ * (State==3): it clears OVR in hardware first, then bails out without touching
+ * ErrorCode. Skipping those reads would leave OVR pending, so they are kept as
+ * volatile (void) reads the compiler cannot drop.
+ *
+ * The handle is the SPI1 master at 0x20000634 (spi1_init). RxISR/TxISR live at
+ * handle +0x4C/+0x50; ErrorCode at +0x60; State at +0x5D.
+ * SR bits: 0x01 RXNE, 0x02 TXE, 0x20 MODF, 0x40 OVR, 0x100 FRE.
+ * CR2 bits: 0x20 ERRIE, 0x40 RXNEIE, 0x80 TXEIE.
+ */
+void SPI1_IRQHandler(void)
+{
+    uint8_t *h = (uint8_t *)0x20000634u;                       /* SPI1 HAL handle */
+    volatile uint32_t *spi = *(volatile uint32_t **)(h + 0);   /* Instance */
+    uint32_t cr2 = spi[1];                                     /* +0x04 CR2 */
+    uint32_t sr  = spi[2];                                     /* +0x08 SR  */
+
+    if ((sr & 0x40u) == 0 && (sr & 0x01u) != 0 && (cr2 & 0x40u) != 0) {
+        (*(spi_isr_t *)(h + 0x4c))(h);          /* RxISR */
+        return;
+    }
+
+    if ((sr & 0x02u) != 0 && (cr2 & 0x80u) != 0) {
+        (*(spi_isr_t *)(h + 0x50))(h);          /* TxISR */
+        return;
+    }
+
+    if ((sr & 0x160u) == 0 || (cr2 & 0x20u) == 0) {
+        return;                                 /* no error / ERRIE off */
+    }
+
+    if ((sr & 0x40u) != 0) {                    /* OVR */
+        if (*(volatile uint8_t *)(h + 0x5d) == 3) {   /* State == ABORT */
+            (void)spi[3];                       /* +0x0C DR, then SR clears OVR */
+            (void)spi[2];
+            return;                             /* leave ErrorCode untouched */
+        }
+        *(uint32_t *)(h + 0x60) |= 4u;          /* ErrorCode |= OVR */
+        (void)spi[3];                           /* +0x0C DR, then SR clears OVR */
+        (void)spi[2];
+    }
+    if ((sr & 0x20u) != 0) {                    /* MODF */
+        *(uint32_t *)(h + 0x60) |= 1u;          /* ErrorCode |= MODF */
+        (void)spi[2];                           /* read SR (MODF clear step) */
+        spi[0] &= 0xffffffbfu;                  /* CR1 SPE off */
+    }
+    if ((sr & 0x100u) != 0) {                   /* FRE */
+        *(uint32_t *)(h + 0x60) |= 8u;          /* ErrorCode |= FRE */
+        (void)spi[2];
+    }
+    if (*(uint32_t *)(h + 0x60) != 0) {
+        spi[1] &= 0xffffff1fu;                  /* CR2: disable ERRIE/RXNEIE/TXEIE */
+        *(volatile uint8_t *)(h + 0x5d) = 1;    /* State = READY */
+        spi_error_cb(h);                        /* fatal -> system reset */
+    }
+}
