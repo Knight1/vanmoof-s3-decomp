@@ -35,10 +35,13 @@
 #define UART_READY    0x20u   /* ' ' */
 #define UART_BUSY_TX  0x21u   /* '!' */
 
-/* Ring sizes: the OEM stores (size-1) wrap limits in SRAM; 256 covers the
- * 256-byte OTA data blocks and is refined once the exact globals are pinned. */
-#define RX_SIZE  256
-#define TX_SIZE  256
+/* Ring sizes pinned from the OEM literal-pool wrap limits (the loader compares
+ * "limit < index+1 -> wrap", so the buffer holds limit+1 bytes):
+ *   RX ring @ 0x20000BC4, wrap limit 0x3FF -> 1024 bytes
+ *   TX ring @ 0x20000FCC, wrap limit 0xFFF -> 4096 bytes  (abuts the USART2
+ *                                              handle at 0x20001FCC) */
+#define RX_SIZE  1024
+#define TX_SIZE  4096
 
 static volatile uint8_t  s_rx_buf[RX_SIZE];
 static volatile uint16_t s_rx_head, s_rx_tail;

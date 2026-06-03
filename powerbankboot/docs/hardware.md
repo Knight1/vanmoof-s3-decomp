@@ -78,6 +78,8 @@ pinning these addresses (behaviour-equivalent, not yet byte-placed).
 | `0x20000B94` | RTC handle | `g_hrtc_obj` |
 | `0x20000184` | USART1 handle | debug console |
 | `0x20001FCC` | USART2 handle | comms bus (drained/pumped by the loop + ISR) |
+| `0x20000BC4` | RX ring (1024 B) | USART2 receive ring; wrap limit `0x3FF` |
+| `0x20000FCC` | TX ring (4096 B) | USART2 transmit ring; wrap limit `0xFFF` (ends exactly at the USART2 handle) |
 | `0x20000B42` | `s_ota.state` | download protocol state (0/1/2) |
 | `0x20000B40` | `s_ota.cmd` | current command byte (`0x31` / `0x21`) |
 | `0x20000A38` | `s_ota.idx` | byte index within the current phase |
