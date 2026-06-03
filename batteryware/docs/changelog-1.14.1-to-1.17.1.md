@@ -100,6 +100,10 @@ The byte-identical set is the low-level foundation — these are confirmed
 
 ## What changed — by subsystem
 
+> Per-function before/after C decode for the BMS / fuel-gauge / charge-path
+> functions is in [`compare-1.14.1/`](compare-1.14.1/) (12 functions decompiled in
+> both versions and adversarially verified).
+
 The touched functions cluster into a few areas:
 
 - **BMS state machine & per-state handlers** — `bms_state_machine` (1107 vs
