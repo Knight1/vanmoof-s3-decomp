@@ -564,13 +564,15 @@ bool flash_erase_page_wrapper(uint32_t timeout_ticks)
  * command byte is 0x10. Accumulates a variable-length frame into the
  * command buffer; once the 7-byte header plus payload are present
  * (>= 10 bytes), it validates the half-length field and CRC-16, then:
- *   - command word < 0x15: bulk-writes calibration 16-bit pairs from the
- *     payload into successive EEPROM slots (0x0808000F..0x0808001F), one
- *     extra pair admitted per threshold step;
+ *   - command word < 0x15: writes the pack identity from the payload into
+ *     successive EEPROM cells (0x0808000F..0x08080020) — the 14-byte ESN
+ *     (Modbus regs 0x0C-0x12) followed by the 4-byte manufacture date
+ *     [0x00,year,month,day] (regs 0x13-0x14); one extra register/cell pair
+ *     admitted per command-word step;
  *   - command word 0x82: streams an OTA image into the flash staging area
  *     (0x0801A800 + page address) page-by-page, verifying each page.
- * EEPROM calibration writes are gated on the 32-bit tick triplet differing
- * from the reference triplet persisted at 0x08080021/25/29 (anti-replay).
+ * The ESN/date writes are gated on the 32-bit tick triplet differing from
+ * the reference triplet persisted at 0x08080021/25/29 (anti-replay).
  * On any completed pass it appends a CRC-16 and echoes the 8-byte frame.
  *
  * In the OEM image this shares uart_protocol_handler's stack frame; the
@@ -619,19 +621,21 @@ void flash_stream_handler(uint8_t b)
     uint8_t  pair[2];
     bool     ticks_differ = (t_now != r_now) && (t_ms != r_ms) && (t_to != r_to);
 
-    static const struct { uint16_t thresh; uint32_t eeprom; } cal_slots[] = {
+    /* Modbus reg (cw) -> EEPROM cell: regs 0x0C-0x12 = 14-byte ESN,
+     * regs 0x13-0x14 = 4-byte manufacture date. `thresh` is reg+1. */
+    static const struct { uint16_t thresh; uint32_t eeprom; } esn_date_slots[] = {
         { 0x0d, 0x0808000F }, { 0x0e, 0x08080011 }, { 0x0f, 0x08080013 },
         { 0x10, 0x08080015 }, { 0x11, 0x08080017 }, { 0x12, 0x08080019 },
         { 0x13, 0x0808001B }, { 0x14, 0x0808001D }, { 0x15, 0x0808001F },
     };
-    for (unsigned i = 0; i < sizeof(cal_slots) / sizeof(cal_slots[0]); i++) {
-        if (cw < cal_slots[i].thresh && len > 1) {
+    for (unsigned i = 0; i < sizeof(esn_date_slots) / sizeof(esn_date_slots[0]); i++) {
+        if (cw < esn_date_slots[i].thresh && len > 1) {
             pair[1] = cmdbuf[pos++];
             pair[0] = cmdbuf[pos++];
             if (ticks_differ) {
-                memcmp_verify((char *)cal_slots[i].eeprom, 2, (char *)pair);
+                memcmp_verify((char *)esn_date_slots[i].eeprom, 2, (char *)pair);
             }
-            if (cal_slots[i].thresh == 0x15) {
+            if (esn_date_slots[i].thresh == 0x15) {
                 memcmp_verify((char *)0x08080021, 4, (char *)&t_now);
                 memcmp_verify((char *)0x08080025, 4, (char *)&t_ms);
                 memcmp_verify((char *)0x08080029, 4, (char *)&t_to);
