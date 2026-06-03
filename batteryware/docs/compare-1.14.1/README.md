@@ -12,6 +12,13 @@ byte-identical** (position-independent body-hash match). The 1.17.1 side ("after
 is the reconstruction already in [`../../src/`](../../src/); this set documents
 what the 1.14.1 side ("before") looked like and exactly what changed.
 
+> ### ⚠ Safety-critical: the secondary-fuse path → [fuse.md](fuse.md)
+> `state_handler_17_19` (the only path that blows the pack's irreversible fuse via
+> PB7) was audited separately. **The fuse *trigger* is byte-identical**, but a
+> **GPIOH PH0 hardware interlock was removed from every per-state dispatcher** that
+> reaches it — so 1.17.1 can reach the fuse blow in more situations than 1.14.1.
+> Full analysis (every call site, verified) in [fuse.md](fuse.md).
+
 ## How this was produced
 
 1. Position-independent body hashing over both images (symmetric pure-auto Ghidra

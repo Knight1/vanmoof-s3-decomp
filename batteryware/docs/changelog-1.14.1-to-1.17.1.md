@@ -103,6 +103,13 @@ The byte-identical set is the low-level foundation — these are confirmed
 > Per-function before/after C decode for the BMS / fuel-gauge / charge-path
 > functions is in [`compare-1.14.1/`](compare-1.14.1/) (12 functions decompiled in
 > both versions and adversarially verified).
+>
+> **Safety-critical:** the secondary-fuse path (`state_handler_17_19`, the only
+> code that blows the pack's irreversible PB7 fuse) was audited separately in
+> [`compare-1.14.1/fuse.md`](compare-1.14.1/fuse.md). The fuse *trigger* is
+> byte-identical, but a **GPIOH PH0 hardware interlock was removed from every
+> per-state dispatcher** that can reach it — 1.17.1 can reach the fuse blow in
+> more situations than 1.14.1.
 
 The touched functions cluster into a few areas:
 
