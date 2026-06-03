@@ -36,6 +36,18 @@ reading, what CRC polynomial+seed the integrity check uses, and
 how mainboot hands per-subsystem blobs off (probably over Modbus
 to the eShifter/motor/battery MCUs).
 
+> **Partly answered (see `docs/hardware.md` → Version footer).** The
+> loader's own version lives in a `vanmoof_ware_t` footer in the last
+> `0x28` bytes (magic `0xAA55AA55`, version major.minor, date/time) →
+> **v1.09, Feb 21 2020**; its crc/length are left unset (the loader is not
+> self-CRC'd). The image slots are enumerated by the literal pool at
+> `0x08002A80`: Loaded `0x08020000`, Shadow `0x08060000`, Shifter
+> `0x08010000`, Motor `0x080A0000`, Battery `0x080C0000`, each a
+> `vanmoof_ware_t` (magic + crc + length) at its base; the version banners
+> read `version[3].[2]` (loader) or `version[3].[2].[1]` (apps). Still
+> open: the **CRC polynomial+seed** of the integrity check itself, and the
+> per-subsystem hand-off path.
+
 ## Summary
 
 | Count | Status |

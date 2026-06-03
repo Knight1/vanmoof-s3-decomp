@@ -10,11 +10,49 @@ Thumb-2 instruction set, real Cortex-M3+ system-exception slots).
 | --- | --- |
 | File | `muco-boot.bin` |
 | Size | 32768 bytes |
-| Version | **unknown** |
+| Version | **v1.09**, built Feb 21 2020 14:50:53 (see Version footer below) |
 | SHA-256 | `16dbd08c90d322b550a5653fd6b15f91e4f67775d17fdcc6f80fed6af53f6043` |
 | SHA-512 | `cf8f1e480ed729360a4a83643fb41f6f4e6d085f0ad5faca24eacb7afc0339a6bdcd0657d6a42b9f624e822bea6d86cb3db10faeda6c6e2e0990182c8a309575` |
 
 The hashes are the contract — if a future blob differs by a single byte, it is a different mainboot.
+
+### Version footer
+
+The loader carries a 40-byte `vanmoof_ware_t`-style record in the **last
+`0x28` bytes** of the image (at `0x08007FD8`) — same struct as the wares,
+but at the tail rather than the head:
+
+| Off | Field | Value in this blob |
+| --- | --- | --- |
+| `0x08007FD8` | magic | `0xAA55AA55` |
+| `0x08007FDC` | version[4] | `ff ff 09 01` → major `version[3]`=1, minor `version[2]`=9 |
+| `0x08007FE0` | crc | `0xFFFFFFFF` (**unset**) |
+| `0x08007FE4` | length | `0xFFFFFFFF` (**unset**) |
+| `0x08007FE8` | date[12] | `"Feb 21 2020"` |
+| `0x08007FF4` | time[12] | `"14:50:53"` |
+
+So the loader is **v1.09**. The banner at `0x080058BC`
+(`"STM32 bootloader v%x.%02x (%s %s)"`) reads major/minor from
+`version[3]`/`version[2]` and the two `%s` from the date/time fields.
+
+The loader's **own crc/length are left blank** — mainboot is *not*
+self-CRC-verified. The `*CRC*` strings ("APP CRC error", "Shadow CRC
+error", …) refer to the **application images** it loads, each of which has
+its own `vanmoof_ware_t` header (magic `0xAA55AA55` + crc + length) at its
+flash base. The version/info command's literal pool at `0x08002A80`
+enumerates those slots:
+
+| Image | Base | "missing" string |
+| --- | --- | --- |
+| Loaded Application | `0x08020000` | "No Application" |
+| Shadow Application | `0x08060000` | "No Shadow Application" |
+| Shifter Application | `0x08010000` | "No Shifter Application" |
+| Motor Application | `0x080A0000` | "No Motor Application" |
+| Battery Application | `0x080C0000` | "No Battery Application" |
+
+Each is printed via `"… Application: v%x.%02x.%02X (%s %s)"` — i.e. app
+versions are major.minor.**patch** (`version[3].[2].[1]`), one more field
+than the loader's own major.minor banner.
 
 ## Provenance: Muco Technologies third-party bootloader
 
