@@ -62,8 +62,20 @@ Voltages are in **mV**; temperatures use `°C = (int16(reg) − 2731) / 10`
 | 41 | 0x29 | Maximum cell voltage | mV | `0x200027FA` |
 | 42 | 0x2A | Minimum cell voltage | mV | `0x2000282A` |
 | 43 | 0x2B | Cell-balance mask | bits | `0x20002820` |
-| 44 | 0x2C | Bootloader version | hex | hwid string `0x08004FE4` |
+| 44 | 0x2C | Bootloader version | hex | bootloader flash `0x08004FE4` (see note) |
 | 71–86 | 0x47–0x56 | Protection trip thresholds (DOTP…SCP, see below) | per-protection | `bms_ctx`-region |
+
+> **Reg 0x2C (bootloader version).** The app reads three hex-ASCII chars in the
+> bootloader's flash at `0x08004FF9/FA/FB` (= `0x08004FE4 + 0x15/16/17`). Only
+> if `[0x4FFA]` and `[0x4FFB]` are ASCII `'0'` does it parse them — as
+> `reg = (nibble[0x4FFB]<<8) | (nibble[0x4FFA]<<4) | nibble[0x4FF9]` — otherwise
+> it returns the hardcoded default **`0x0004`**. So the slot stores the version
+> digit at `0x4FF9` with `"00"` following (only single-hex-digit versions fit).
+> Verified against two real bootloaders:
+>   - **BL V004** (2019-11-19, on shipped packs): slot is unprogrammed
+>     (`00 00 00`) → condition false → fallback `0x0004`. Banner at `0x080049C1`.
+>   - **BL V007** (2022-11-04, `bmsboot.bin` in the firmware archive): slot is
+>     `'7' '0' '0'` → `0x0007`. Banner at `0x08004919`.
 
 ### Cell mapping (the headline)
 
@@ -122,9 +134,11 @@ AA 10 cwHi cwLo  qtyHi qtyLo  len  <payload …>  CRClo CRChi
 accepted once ≥10 bytes are in and `qty == len/2`, CRC-16 over `len+7` bytes.
 Two payload modes by command word `cw`:
 
-- **`cw < 0x15`** — bulk-write 16-bit calibration pairs into EEPROM
-  `0x0808000F`…`0x0808001F`, one extra pair per threshold step, gated on an
-  anti-replay tick triplet at EEPROM `0x08080021/25/29`.
+- **`cw < 0x15`** — write the pack **identity** into EEPROM
+  `0x0808000F`…`0x08080020`: the 14-byte **ESN** (regs `0x0C`–`0x12`) then the
+  4-byte **manufacture date** `[0x00,year,month,day]` (regs `0x13`–`0x14`),
+  one register/cell pair per command-word step, gated on an anti-replay tick
+  triplet at EEPROM `0x08080021/25/29`. See `docs/eeprom.md` §3.
 - **`cw == 0x82`** — stream an OTA image into the flash staging area at
   `0x0801A800` page-by-page (page address in `0x200047CC`, scratch
   `0x2000474C`), verified per 0x80-byte page. The cmd-0x80 reset then copies
