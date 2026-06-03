@@ -1,5 +1,54 @@
 #include "powerbankware.h"
 
+/* ── Peripheral / GPIO bases ─────────────────────────────────────────── */
+#define GPIOB_BASE   0x48000400u
+#define PIN_PB9      0x200u
+
+/* ── HAL handles / flash regions ─────────────────────────────────────── */
+#define RTC_HANDLE        ((void *)0x200006f0)
+#define FLASH_FW_VERSION  (*(const volatile uint32_t *)0x08008004) /* image FW version word */
+#define OTA_FLASH_BASE    0x08024000u                              /* staged OTA image region */
+
+/* ── Persisted BMS record + error-log / ESN-FW destinations ──────────── */
+#define CFG     ((volatile uint8_t *)0x200004d0)   /* 128-byte BMS record */
+#define ERRLOG  ((volatile uint8_t *)0x200005b0)   /* 64-byte error-log / trace */
+#define S_ESN   ((void *)0x2000052e)               /* 14-byte ESN  (record +0x5e) */
+#define S_FW_ID ((void *)0x2000053c)               /* 4-byte fw id (record +0x6c) */
+
+/* ── Per-channel RX state machine + request frame (ch-1 indexed) ─────── */
+#define MODBUS_STATE_BASE  0x2000260c              /* u16[ch-1] RX state */
+#define MODBUS_FRAME_BASE  0x20001b00              /* u8[ch-1][0x100] request frame */
+
+/* ── Telemetry / response builder cells (SRAM) ───────────────────────── */
+#define RESP_BUF   ((volatile uint8_t *)0x20001d00)   /* response frame build buffer */
+static volatile uint16_t * const s_resp_wr     = (volatile uint16_t *)0x20002608; /* response write index */
+static volatile uint16_t * const s_resp_remain = (volatile uint16_t *)0x20002610; /* response byte count remaining */
+static volatile uint16_t * const s_resp_nreg   = (volatile uint16_t *)0x20001e00; /* emitted register count / ack */
+
+/* ── Live BMS globals read by the telemetry cascade ──────────────────── */
+static volatile uint8_t  * const s_state      = (volatile uint8_t  *)0x200005ac; /* current state */
+static volatile uint16_t * const s_mode       = (volatile uint16_t *)0x200006a0; /* mode/cfg word */
+static volatile uint8_t  * const s_fet_ctrl   = (volatile uint8_t  *)0x20000412; /* AFE reg-9 FET shadow */
+static volatile uint8_t  * const s_idblk      = (volatile uint8_t  *)0x20000724; /* identity/wake word */
+static volatile uint8_t  * const s_idblk_inv  = (volatile uint8_t  *)0x20000698; /* ~idblk mirror */
+static volatile uint16_t * const s_mb_reg28   = (volatile uint16_t *)0x200006a6; /* modbus reg 0x28 shadow */
+static volatile uint8_t  * const s_temp       = (volatile uint8_t  *)0x20000218; /* [1]/[2] temps, [0] SOC idx */
+static volatile uint16_t * const s_cell       = (volatile uint16_t *)0x20000380; /* 10 cell voltages */
+static volatile uint16_t * const s_cell_sum   = (volatile uint16_t *)0x200003ce; /* total pack voltage */
+static volatile uint16_t * const s_cell_max   = (volatile uint16_t *)0x200003a2; /* max cell mV */
+static volatile uint16_t * const s_cell_min   = (volatile uint16_t *)0x200003d2; /* min cell mV */
+static volatile int32_t  * const s_current    = (volatile int32_t  *)0x20000424; /* signed avg current */
+static volatile uint16_t * const s_cell1_mv   = (volatile uint16_t *)0x200001ae; /* cell1 mV (I base) */
+static volatile uint16_t * const s_cell2_mv   = (volatile uint16_t *)0x20000202; /* cell2 mV (V base) */
+static volatile uint8_t  * const s_ts0_cal    = (volatile uint8_t  *)0x2000020e; /* TS0 offset mirror */
+static volatile uint8_t  * const s_ts1_cal    = (volatile uint8_t  *)0x2000021b; /* TS1 offset mirror */
+static volatile uint8_t  * const s_ts2_cal    = (volatile uint8_t  *)0x20000205; /* TS2 offset mirror */
+
+/* ── OTA write-multiple staging cells ────────────────────────────────── */
+static volatile uint8_t  * const s_ota_off  = (volatile uint8_t  *)0x20002604; /* 4-byte flash offset */
+static volatile uint16_t * const s_ota_idx  = (volatile uint16_t *)0x20001e02; /* staged payload length */
+static volatile uint8_t  * const s_ota_data = (volatile uint8_t  *)0x20001e04; /* staged payload buffer */
+
 /*
  * Modbus RTU host link.
  *
@@ -47,18 +96,18 @@ uint16_t modbus_crc16(const uint8_t *data, int16_t len)
  * cascade. The framing layer (own pass) validates a request frame, sets the
  * register base + count, then this emits each holding register from `base`
  * onward while the count remains. Every register is gated on the running
- * count at 0x20002610; the push helpers decrement it.
+ * count at s_resp_remain; the push helpers decrement it.
  */
 
-#define RESP_COUNT (*(volatile uint16_t *)0x20002610)
+#define RESP_COUNT (*s_resp_remain)
 
 /* push a 16-bit register value big-endian (OEM FUN_08019130). */
 static void mb_push16(uint8_t hi, uint8_t lo)
 {
-    volatile uint8_t  * const buf = (volatile uint8_t  *)0x20001d00;
-    volatile uint16_t * const wr  = (volatile uint16_t *)0x20002608;
-    volatile uint16_t * const remain = (volatile uint16_t *)0x20002610;
-    volatile uint16_t * const nreg   = (volatile uint16_t *)0x20001e00;
+    volatile uint8_t  * const buf = RESP_BUF;
+    volatile uint16_t * const wr  = s_resp_wr;
+    volatile uint16_t * const remain = s_resp_remain;
+    volatile uint16_t * const nreg   = s_resp_nreg;
 
     buf[*wr] = hi; (*wr)++; (*remain)--;
     buf[*wr] = lo; (*wr)++; (*remain)--;
@@ -121,11 +170,11 @@ static uint16_t modbus_state_reg2(uint8_t state)
 
 void modbus_telemetry(uint16_t base)
 {
-    volatile uint8_t  * const cfg  = (volatile uint8_t  *)0x200004d0;
-    volatile uint8_t  * const err  = (volatile uint8_t  *)0x200005b0;
-    volatile uint8_t  * const temp = (volatile uint8_t  *)0x20000218;
-    volatile uint16_t * const cell = (volatile uint16_t *)0x20000380;
-    const uint8_t state = *(volatile uint8_t *)0x200005ac;
+    volatile uint8_t  * const cfg  = CFG;
+    volatile uint8_t  * const err  = ERRLOG;
+    volatile uint8_t  * const temp = s_temp;
+    volatile uint16_t * const cell = s_cell;
+    const uint8_t state = *s_state;
 
 #define REG(N) if (base < (N) + 1 && RESP_COUNT != 0)
 
@@ -136,8 +185,8 @@ void modbus_telemetry(uint16_t base)
         if (state - 7u < 0x15u) {
             status = modbus_state_reg2(state);
         } else if (state == 3 &&
-                   *(volatile uint16_t *)0x20000202 <= 0x4e1f &&
-                   *(volatile uint16_t *)0x200001ae < 500) {
+                   *s_cell2_mv <= 0x4e1f &&
+                   *s_cell1_mv < 500) {
             status = 8;
         } else {
             status = 0;
@@ -145,21 +194,21 @@ void modbus_telemetry(uint16_t base)
         mb_emit16(status);
     }
     REG(3)  mb_push_temp((temp[2] < temp[1]) ? temp[1] : temp[2]);
-    REG(4)  mb_emit16(*(volatile uint16_t *)0x200003ce);              /* total voltage */
+    REG(4)  mb_emit16(*s_cell_sum);                                   /* total voltage */
     REG(5)  mb_push16(0, cfg[0x5a]);                                  /* SOC */
-    REG(6)  mb_emit16(mb_scale_current(*(volatile int32_t *)0x20000424)); /* current */
+    REG(6)  mb_emit16(mb_scale_current(*s_current));                  /* current */
     REG(7) {
         uint16_t v = (state == 2) ? 2 : (state == 3) ? 1 : 0;
-        if ((int32_t)((uint32_t)*(volatile uint16_t *)0x200006a0 << 0x13) < 0) {
+        if ((int32_t)((uint32_t)*s_mode << 0x13) < 0) {
             v = 3;
         }
         mb_push16(0, (uint8_t)v);
     }
-    REG(8)  mb_push16(0, (uint8_t)(*(volatile uint8_t *)0x20000412 & 1));
+    REG(8)  mb_push16(0, (uint8_t)(*s_fet_ctrl & 1));
     REG(9)  mb_push16(0, 0);
     REG(0xa) mb_emit16(*(volatile uint16_t *)(cfg + 0x54));           /* HW version */
     REG(0xb) {                                                        /* image version (hi word) */
-        uint32_t ver = *(const volatile uint32_t *)0x08008004;
+        uint32_t ver = FLASH_FW_VERSION;
         mb_push16((uint8_t)(ver >> 24), (uint8_t)(ver >> 16));
     }
     /* cfg serial/FW byte-pairs 0x5e..0x6f -> registers 0xc..0x14 */
@@ -171,20 +220,20 @@ void modbus_telemetry(uint16_t base)
     REG(0x17) mb_emit16((uint16_t)*(volatile uint32_t *)(cfg + 0x20));/* remaining cap */
     REG(0x18) mb_push16(0, cfg[0x5b]);                                /* RSOC */
     REG(0x19) mb_emit16(*(volatile uint16_t *)(cfg + 0x50));
-    REG(0x1a) mb_push16(0, (uint8_t)((*(volatile uint8_t *)0x20000412 & 2) == 2));
+    REG(0x1a) mb_push16(0, (uint8_t)((*s_fet_ctrl & 2) == 2));
     /* 10 cell voltages 0x20000380[0..9] -> registers 0x1b..0x24 */
     for (uint8_t r = 0x1b; r <= 0x24; r++) {
         REG(r) mb_emit16(cell[r - 0x1b]);
     }
     REG(0x25) mb_push_temp(temp[1]);                                  /* TS0 */
     REG(0x26) mb_push_temp(temp[2]);                                  /* TS1 */
-    REG(0x27) mb_push_temp(*(volatile uint8_t *)0x20000218);          /* TS2 (raw) */
-    REG(0x28) mb_emit16(*(volatile uint16_t *)0x200006a6);
-    REG(0x29) mb_emit16(*(volatile uint16_t *)0x200003a2);            /* cell max */
-    REG(0x2a) mb_emit16(*(volatile uint16_t *)0x200003d2);            /* cell min */
-    REG(0x2b) mb_emit16(*(volatile uint16_t *)0x20000202);           /* V base */
+    REG(0x27) mb_push_temp(*s_temp);                                  /* TS2 (raw) */
+    REG(0x28) mb_emit16(*s_mb_reg28);
+    REG(0x29) mb_emit16(*s_cell_max);                                 /* cell max */
+    REG(0x2a) mb_emit16(*s_cell_min);                                 /* cell min */
+    REG(0x2b) mb_emit16(*s_cell2_mv);                                /* V base */
     REG(0x2c) {                                                       /* I base (abs) */
-        int16_t v = *(volatile int16_t *)0x200001ae;
+        int16_t v = *(volatile int16_t *)s_cell1_mv;
         if (v < 0) v = (int16_t)-v;
         mb_emit16((uint16_t)v);
     }
@@ -232,8 +281,8 @@ void modbus_write_multi(uint8_t channel, uint8_t b); /* FUN_080187e4 (fn 0x10) �
 void modbus_process(uint8_t channel, uint8_t b)
 {
     const int c = channel - 1;
-    volatile uint16_t * const state = (volatile uint16_t *)(0x2000260c + c * 2);
-    volatile uint8_t  * const frame = (volatile uint8_t  *)(0x20001b00 + c * 0x100);
+    volatile uint16_t * const state = (volatile uint16_t *)(MODBUS_STATE_BASE + c * 2);
+    volatile uint8_t  * const frame = (volatile uint8_t  *)(MODBUS_FRAME_BASE + c * 0x100);
 
     /* sync byte */
     if (*state == 0) {
@@ -276,7 +325,7 @@ void modbus_process(uint8_t channel, uint8_t b)
         return;
     }
 
-    *(volatile uint16_t *)0x20001e00 = 0;                 /* emitted register count */
+    *s_resp_nreg = 0;                                     /* emitted register count */
     uint16_t crc_rx = (uint16_t)((frame[7] << 8) | frame[6]);
     if (modbus_crc16((const uint8_t *)frame, 6) != crc_rx) {
         *state = 0;
@@ -289,8 +338,8 @@ void modbus_process(uint8_t channel, uint8_t b)
     }
 
     /* function 0x03 read response */
-    volatile uint16_t * const wr   = (volatile uint16_t *)0x20002608;
-    volatile uint8_t  * const resp = (volatile uint8_t  *)0x20001d00;
+    volatile uint16_t * const wr   = s_resp_wr;
+    volatile uint8_t  * const resp = RESP_BUF;
 
     *wr = 3;
     uint16_t base = (uint16_t)((frame[2] << 8) | frame[3]);
@@ -334,26 +383,26 @@ static void mb_echo_frame(volatile uint8_t *frame)
 void modbus_write_single(uint8_t channel)
 {
     const int c = channel - 1;
-    volatile uint8_t  * const frame = (volatile uint8_t  *)(0x20001b00 + c * 0x100);
-    volatile uint16_t * const state = (volatile uint16_t *)(0x2000260c + c * 2);
-    volatile uint16_t * const ack   = (volatile uint16_t *)0x20001e00;
-    volatile uint8_t  * const cfg   = (volatile uint8_t  *)0x200004d0;
+    volatile uint8_t  * const frame = (volatile uint8_t  *)(MODBUS_FRAME_BASE + c * 0x100);
+    volatile uint16_t * const state = (volatile uint16_t *)(MODBUS_STATE_BASE + c * 2);
+    volatile uint16_t * const ack   = s_resp_nreg;
+    volatile uint8_t  * const cfg   = CFG;
 
     if (frame[1] == 6) {
         uint16_t addr  = (uint16_t)((frame[2] << 8) | frame[3]);
         uint16_t value = (uint16_t)((frame[4] << 8) | frame[5]);
 
         if (addr == 0x80) {
-            if ((*(volatile uint16_t *)0x200006a0 & 4) != 0) {   /* mode bit 2 */
-                void * const hrtc = (void *)0x200006f0;
+            if ((*s_mode & 4) != 0) {   /* mode bit 2 */
+                void * const hrtc = RTC_HANDLE;
                 bypass_fet_off();
-                gpio_bit_write(0x48000400, 0x200, 0);            /* PB9 = 0 */
-                *(volatile uint8_t *)0x20000412 = 0;
+                gpio_bit_write(GPIOB_BASE, PIN_PB9, 0);            /* PB9 = 0 */
+                *s_fet_ctrl = 0;
                 fedl5236_command_write(9, 0);
-                *(volatile uint8_t *)0x20000724 = 1;
-                *(volatile uint8_t *)0x20000698 = (uint8_t)~*(volatile uint8_t *)0x20000724;
-                rtc_backup_write(hrtc, 0, *(volatile uint8_t *)0x20000724);
-                rtc_backup_write(hrtc, 1, *(volatile uint8_t *)0x20000698);
+                *s_idblk = 1;
+                *s_idblk_inv = (uint8_t)~*s_idblk;
+                rtc_backup_write(hrtc, 0, *s_idblk);
+                rtc_backup_write(hrtc, 1, *s_idblk_inv);
                 mb_echo_frame(frame);
                 if (channel == 1) {
                     uart_flush_ch1();
@@ -372,21 +421,21 @@ void modbus_write_single(uint8_t channel)
         } else if (addr == 0xf020) {
             if (value < 0x14 || value > 0xeb) {
                 cfg[8] = (uint8_t)value;
-                *(volatile uint8_t *)0x2000020e = cfg[8];
+                *s_ts0_cal = cfg[8];
                 fedl5236_record_save();
             }
             (*ack)++;
         } else if (addr == 0xf021) {
             if (value < 0x14 || value > 0xeb) {
                 cfg[9] = (uint8_t)value;
-                *(volatile uint8_t *)0x2000021b = cfg[9];
+                *s_ts1_cal = cfg[9];
                 fedl5236_record_save();
             }
             (*ack)++;
         } else if (addr == 0xf022) {
             if (value < 0x14 || value > 0xeb) {
                 cfg[0xa] = (uint8_t)value;
-                *(volatile uint8_t *)0x20000205 = cfg[0xa];
+                *s_ts2_cal = cfg[0xa];
                 fedl5236_record_save();
             }
             (*ack)++;
@@ -420,8 +469,8 @@ void modbus_write_single(uint8_t channel)
 void modbus_write_multi(uint8_t channel, uint8_t b)
 {
     const int c = channel - 1;
-    volatile uint8_t  * const frame = (volatile uint8_t  *)(0x20001b00 + c * 0x100);
-    volatile uint16_t * const state = (volatile uint16_t *)(0x2000260c + c * 2);
+    volatile uint8_t  * const frame = (volatile uint8_t  *)(MODBUS_FRAME_BASE + c * 0x100);
+    volatile uint16_t * const state = (volatile uint16_t *)(MODBUS_STATE_BASE + c * 2);
 
     frame[*state] = b;
     (*state)++;
@@ -446,26 +495,26 @@ void modbus_write_multi(uint8_t channel, uint8_t b)
         return;
     }
 
-    volatile uint8_t * const cfg = (volatile uint8_t *)0x200004d0;
+    volatile uint8_t * const cfg = CFG;
     uint8_t  ack = 0;
     uint16_t off = 7;
 
     if (reg_addr < 0xc || reg_addr > 0x14 || byte_count != 0x12) {
         if (reg_addr == 0x82 && byte_count > 4 && (byte_count & 3) == 0) {
-            volatile uint8_t  * const fa  = (volatile uint8_t  *)0x20002604;
-            volatile uint16_t * const idx = (volatile uint16_t *)0x20001e02;
-            volatile uint8_t  * const data = (volatile uint8_t  *)0x20001e04;
+            volatile uint8_t  * const fa  = s_ota_off;
+            volatile uint16_t * const idx = s_ota_idx;
+            volatile uint8_t  * const data = s_ota_data;
 
-            *(volatile uint16_t *)0x200006a0 |= 4;          /* upgrade mode */
+            *s_mode |= 4;          /* upgrade mode */
             fa[3] = frame[off++];
             fa[2] = frame[off++];
             fa[1] = frame[off++];
             fa[0] = frame[off++];
             byte_count = (uint8_t)(byte_count - 4);
 
-            uint32_t flash_off = *(volatile uint32_t *)0x20002604;
+            uint32_t flash_off = *(volatile uint32_t *)s_ota_off;
             if ((flash_off & 0x7ff) == 0) {
-                flash_erase_page(flash_off + 0x08024000);       /* erase page */
+                flash_erase_page(flash_off + OTA_FLASH_BASE);       /* erase page */
                 *idx = 0;
             }
             while (byte_count != 0) {
@@ -473,10 +522,10 @@ void modbus_write_multi(uint8_t channel, uint8_t b)
                 (*idx)++;
                 byte_count--;
             }
-            int r = flash_program_words((flash_off & 0xfffff800) + 0x08024000, *idx, (const void *)data);
+            int r = flash_program_words((flash_off & 0xfffff800) + OTA_FLASH_BASE, *idx, (const void *)data);
             while (r != 0) {
-                flash_erase_page((flash_off & 0xfffff800) + 0x08024000);
-                r = flash_program_words((flash_off & 0xfffff800) + 0x08024000, *idx, (const void *)data);
+                flash_erase_page((flash_off & 0xfffff800) + OTA_FLASH_BASE);
+                r = flash_program_words((flash_off & 0xfffff800) + OTA_FLASH_BASE, *idx, (const void *)data);
             }
             ack++;
         }
@@ -492,8 +541,8 @@ void modbus_write_multi(uint8_t channel, uint8_t b)
                 byte_count = (uint8_t)(byte_count - 2);
                 ack++;
                 if (reg == 0x14 && *(volatile uint16_t *)(cfg + 0x54) == 0) {
-                    mem_copy((void *)0x2000052e, &buf[4], 0xe);  /* ESN */
-                    mem_copy((void *)0x2000053c, &buf[0], 4);    /* FW  */
+                    mem_copy(S_ESN, &buf[4], 0xe);  /* ESN */
+                    mem_copy(S_FW_ID, &buf[0], 4);  /* FW  */
                     fedl5236_record_save();
                 }
             }

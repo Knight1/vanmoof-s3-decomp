@@ -20,10 +20,25 @@
 #define FETB  (*(volatile uint8_t  *)0x20000412)   /* reg-9 FET-control shadow */
 #define RECF  (*(volatile uint8_t  *)0x2000052C)   /* record +0x5C fault-type  */
 
+/* Per-monitor debounce counters (one SRAM word each). */
+#define CNT_B0  ((volatile uint16_t *)0x20000550)
+#define CNT_B1  ((volatile uint16_t *)0x20000580)
+#define CNT_B2  ((volatile uint16_t *)0x20000584)
+#define CNT_B3  ((volatile uint16_t *)0x200004CA)
+#define CNT_B4  ((volatile uint16_t *)0x20000588)
+#define CNT_B5  ((volatile uint8_t  *)0x2000058D)
+#define CNT_B6  ((volatile uint16_t *)0x200004BC)
+#define CNT_B7  ((volatile uint16_t *)0x200005AE)
+
+/* Sensed inputs. */
+#define GPIOB_BASE  0x48000400u                       /* PUPIN PB6 read           */
+#define CHG_CURRENT (*(volatile uint32_t *)0x200003A8) /* charge current           */
+#define DSG_CURRENT (*(volatile uint32_t *)0x20000420) /* discharge current        */
+
 /* bit0: limit[1] & limit[2] both ≥ 0x55 sustained */
 void alarm_scan_b0(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x20000550;
+    volatile uint16_t *cnt = CNT_B0;
     if (LIMIT[1] < 0x55 && LIMIT[2] < 0x55) {
         *cnt = 0;
     } else if (++*cnt > 0x3B) {
@@ -34,7 +49,7 @@ void alarm_scan_b0(void)
 /* bit1: limit[1] or limit[2] < 0x29 sustained */
 void alarm_scan_b1(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x20000580;
+    volatile uint16_t *cnt = CNT_B1;
     if (LIMIT[1] < 0x29 || LIMIT[2] < 0x29) {
         if (++*cnt > 0x3B) {
             REQ |= 2;
@@ -47,7 +62,7 @@ void alarm_scan_b1(void)
 /* bit2: limit[1] & limit[2] both ≥ 0x6E sustained */
 void alarm_scan_b2(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x20000584;
+    volatile uint16_t *cnt = CNT_B2;
     if (LIMIT[1] < 0x6E && LIMIT[2] < 0x6E) {
         *cnt = 0;
     } else if (++*cnt > 0x3B) {
@@ -58,7 +73,7 @@ void alarm_scan_b2(void)
 /* bit3: limit[1] or limit[2] < 0x15 sustained */
 void alarm_scan_b3(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x200004CA;
+    volatile uint16_t *cnt = CNT_B3;
     if (LIMIT[1] < 0x15 || LIMIT[2] < 0x15) {
         if (++*cnt > 0x3B) {
             REQ |= 8;
@@ -71,8 +86,8 @@ void alarm_scan_b3(void)
 /* bit4: SOC-index byte (0x20000218[0]) ≥ 0x82 sustained */
 void alarm_scan_b4(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x20000588;
-    if (*(volatile uint8_t *)0x20000218 < 0x82) {
+    volatile uint16_t *cnt = CNT_B4;
+    if (LIMIT[0] < 0x82) {
         *cnt = 0;
     } else if (++*cnt > 0x3B) {
         REQ |= 0x10;
@@ -82,8 +97,8 @@ void alarm_scan_b4(void)
 /* bit5: PUPIN (GPIOB PB6) held low for 0x13 ticks -> fault code 3 */
 void alarm_scan_b5(void)
 {
-    volatile uint8_t *cnt = (volatile uint8_t *)0x2000058D;
-    if (!gpio_bit_read(0x48000400u, 0x40)) {
+    volatile uint8_t *cnt = CNT_B5;
+    if (!gpio_bit_read(GPIOB_BASE, 0x40)) {
         if (++*cnt > 0x13) {
             *cnt = 0;
             RECF = 3;
@@ -97,10 +112,10 @@ void alarm_scan_b5(void)
 /* bit6: charge FET off (FETB bit1 clear) and current ≥ 500 sustained -> code 1 */
 void alarm_scan_b6(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x200004BC;
+    volatile uint16_t *cnt = CNT_B6;
     if ((FETB & 2) == 2) {
         *cnt = 0;
-    } else if (*(volatile uint32_t *)0x200003A8 < 500) {
+    } else if (CHG_CURRENT < 500) {
         *cnt = 0;
     } else if (++*cnt > 0x3B) {
         RECF = 1;
@@ -111,10 +126,10 @@ void alarm_scan_b6(void)
 /* bit7: discharge FET off (FETB bit0 clear) and current ≥ 500 sustained -> code 2 */
 void alarm_scan_b7(void)
 {
-    volatile uint16_t *cnt = (volatile uint16_t *)0x200005AE;
+    volatile uint16_t *cnt = CNT_B7;
     if ((FETB & 1) == 1) {
         *cnt = 0;
-    } else if (*(volatile uint32_t *)0x20000420 < 500) {
+    } else if (DSG_CURRENT < 500) {
         *cnt = 0;
     } else if (++*cnt > 0x3B) {
         RECF = 2;

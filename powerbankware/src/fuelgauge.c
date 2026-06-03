@@ -24,16 +24,38 @@
  * "sample ready" flag (0x20000204 bit0) and the scratch byte 0x20000213, then
  * start the measurement ADC in interrupt mode (handle at 0x200001B4).
  */
+/* ── Peripheral base / pin (AFE chip-select on GPIOB) ─────────────────── */
+#define GPIOB_BASE     0x48000400u
+#define AFE_CS_PIN     0x8000u                   /* PB15 */
+
+/* ── Measurement window / sample-ready (see docs/hardware.md) ─────────── */
+#define CNT (*(volatile uint16_t *)0x200001AC)   /* sample-window counter   */
+#define CTL (*(volatile uint8_t  *)0x20000204)   /* sample-ready flag byte  */
+#define RAW ((volatile uint16_t  *)0x20000208)   /* [0]=cell1 [1]=cell2 [2]=current */
+
+/* ── AFE handle / scratch + computed measurement cells ───────────────── */
+#define ADC_HANDLE   ((uint32_t *)0x200001B4)               /* measurement ADC HAL handle */
+static volatile uint8_t  * const s_prime_scratch = (volatile uint8_t  *)0x20000213;
+static volatile int16_t  * const s_cell1_mv      = (volatile int16_t  *)0x200001AE; /* cell1 mV */
+static volatile int16_t  * const s_cell2_mv      = (volatile int16_t  *)0x20000202; /* cell2 mV */
+static volatile uint8_t  * const s_soc_idx       = (volatile uint8_t  *)0x20000218; /* SOC index */
+static volatile uint8_t  * const s_soc_corr      = (volatile uint8_t  *)0x2000020E; /* signed SOC correction (TS0 cell) */
+static volatile uint8_t  * const s_soc_debounce  = (volatile uint8_t  *)0x2000020F; /* SOC high-water debounce */
+static volatile uint32_t * const s_evtlog_en     = (volatile uint32_t *)0x2000072C; /* event-log enable/counter */
+
+/* Record (0x200004D0) calibration / SOC-history fields, at the OEM widths. */
+#define REC_IOUT_CAL (*(volatile int16_t  *)(0x200004D0u + 0x72)) /* +0x72 Iout cal (signed test) */
+#define REC_IOUT_CALU (*(volatile uint16_t *)(0x200004D0u + 0x72)) /* +0x72 Iout cal (unsigned mul) */
+#define REC_VOUT_CAL (*(volatile int16_t  *)(0x200004D0u + 0x70)) /* +0x70 Vout cal (signed test) */
+#define REC_VOUT_CALU (*(volatile uint16_t *)(0x200004D0u + 0x70)) /* +0x70 Vout cal (unsigned mul) */
+#define REC_SOC_HIST (*(volatile uint8_t  *)(0x200004D0u + 0x7A)) /* +0x7A SOC high-water mark    */
+
 void bms_measure_prime(void)
 {
-    *(volatile uint8_t *)0x20000204 &= 0xFEu;
-    *(volatile uint8_t *)0x20000213 = 0;
-    adc_start_it((uint32_t *)0x200001B4);
+    CTL &= 0xFEu;
+    *s_prime_scratch = 0;
+    adc_start_it(ADC_HANDLE);
 }
-
-#define CNT (*(volatile uint16_t *)0x200001AC)
-#define CTL (*(volatile uint8_t  *)0x20000204)
-#define RAW ((volatile uint16_t  *)0x20000208)   /* [0]=cell1 [1]=cell2 [2]=current */
 
 /* Descending current->SOC-index lookup table (OEM 0x0801E820, 0x92 entries). */
 static const uint32_t soc_lut[0x92] = {
@@ -66,14 +88,14 @@ static const uint32_t soc_lut[0x92] = {
 
 void bms_measure_update(void)
 {
-    volatile uint8_t *soc  = (volatile uint8_t *)0x20000218;
-    volatile uint8_t *corr = (volatile uint8_t *)0x2000020E;
+    volatile uint8_t *soc  = s_soc_idx;
+    volatile uint8_t *corr = s_soc_corr;
     uint16_t cnt = CNT;
     CNT = cnt + 1;
 
     if ((uint16_t)(cnt + 1) >= 0x32) {
         CNT = 0;
-        gpio_bit_write(0x48000400u, 0x8000, 1);     /* AFE CS high */
+        gpio_bit_write(GPIOB_BASE, AFE_CS_PIN, 1);     /* AFE CS high */
         return;
     }
 
@@ -92,22 +114,22 @@ void bms_measure_update(void)
     acc = (int64_t)RAW[0] * 0x325;
     acc = acc / 0xC5;
     acc = acc / 3;
-    if (*(volatile int16_t *)(0x200004D0 + 0x72) != 0) {
-        acc = acc * *(volatile uint16_t *)(0x200004D0 + 0x72);
+    if (REC_IOUT_CAL != 0) {
+        acc = acc * REC_IOUT_CALU;
         acc = acc / 1000;
     }
-    *(volatile int16_t *)0x200001AE = (int16_t)acc;
+    *s_cell1_mv = (int16_t)acc;
 
     /* cell 2 voltage -> 0x20000202 */
     acc = (int64_t)RAW[1] * 0x325;
     acc = acc * 0x1A1;
     acc = acc / 0x1B;
     acc = acc / 1000;
-    if (*(volatile int16_t *)(0x200004D0 + 0x70) != 0) {
-        acc = acc * *(volatile uint16_t *)(0x200004D0 + 0x70);
+    if (REC_VOUT_CAL != 0) {
+        acc = acc * REC_VOUT_CALU;
         acc = acc / 1000;
     }
-    *(volatile int16_t *)0x20000202 = (int16_t)acc;
+    *s_cell2_mv = (int16_t)acc;
 
     /* pack current -> descending SOC-index lookup */
     int64_t base = (int64_t)RAW[2] * 0x325;
@@ -121,24 +143,24 @@ void bms_measure_update(void)
     }
 
     /* signed SOC correction + history high-water debounce */
-    if (*(volatile uint32_t *)0x2000072C > 4) {
-        if (*(volatile int8_t *)0x2000020E != 0) {
-            if (*(volatile int8_t *)0x2000020E < 0) {
+    if (*s_evtlog_en > 4) {
+        if (*(volatile int8_t *)s_soc_corr != 0) {
+            if (*(volatile int8_t *)s_soc_corr < 0) {
                 *soc = (uint8_t)(*soc - (uint8_t)(~(uint32_t)*corr + 1));
             } else {
-                *soc = (uint8_t)(*(volatile int8_t *)0x2000020E + *soc);
+                *soc = (uint8_t)(*(volatile int8_t *)s_soc_corr + *soc);
             }
         }
-        if (*(volatile uint8_t *)(0x200004D0 + 0x7A) < *soc) {
-            uint8_t d = *(volatile uint8_t *)0x2000020F;
-            *(volatile uint8_t *)0x2000020F = d + 1;
+        if (REC_SOC_HIST < *soc) {
+            uint8_t d = *s_soc_debounce;
+            *s_soc_debounce = d + 1;
             if ((uint8_t)(d + 1) > 5) {
-                *(volatile uint8_t *)0x2000020F = 0;
-                *(volatile uint8_t *)(0x200004D0 + 0x7A) = *soc;
+                *s_soc_debounce = 0;
+                REC_SOC_HIST = *soc;
             }
         } else {
-            *(volatile uint8_t *)0x2000020F = 0;
+            *s_soc_debounce = 0;
         }
     }
-    gpio_bit_write(0x48000400u, 0x8000, 0);         /* AFE CS low */
+    gpio_bit_write(GPIOB_BASE, AFE_CS_PIN, 0);         /* AFE CS low */
 }

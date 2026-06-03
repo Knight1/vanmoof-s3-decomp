@@ -19,6 +19,25 @@
  * return 0=HAL_OK, 1=HAL_ERROR, 2=HAL_BUSY.
  */
 
+/* ── Peripheral bases / register offsets ─────────────────────────────── */
+#define RCC_BASE       0x40021000u
+#define RCC_AHBENR     (*(volatile uint32_t *)(RCC_BASE + 0x14))
+#define RCC_APB2ENR    (*(volatile uint32_t *)(RCC_BASE + 0x18))
+#define GPIOA_BASE     0x48000000u
+#define GPIOB_BASE     0x48000400u
+#define SPI1_BASE      0x40013000u
+#define SCB_AIRCR      (*(volatile uint32_t *)(0xE000ED00u + 0x0C))
+
+/* ── HAL handle / SRAM cells ─────────────────────────────────────────── */
+#define SPI1_HANDLE    ((void *)0x20000634)              /* HAL_SPI_HandleTypeDef */
+#define TICK_MS        (*(volatile uint32_t *)0x20002614)   /* ms tick counter */
+#define SPI_TXBUF      ((volatile uint8_t *)0x200005f4)     /* 32-byte scratch */
+#define SPI_RXBUF      ((volatile uint8_t *)0x20000614)     /* 32-byte scratch */
+
+/* GPIO CS / release pins on GPIOA. */
+#define PIN_PA8        0x100u
+#define PIN_PA15       0x8000u
+
 typedef void (*spi_isr_t)(void *handle);
 
 /* The four interrupt-mode transfer ISRs (8- vs 16-bit data), selected by
@@ -42,7 +61,7 @@ uint8_t spi_get_state(void *handle)
 static void hal_error_reset(void)
 {
     __DSB();
-    *(volatile uint32_t *)(0xE000ED00u + 0x0C) = 0x05FA0004u;   /* SCB_AIRCR */
+    SCB_AIRCR = 0x05FA0004u;   /* VECTKEY | SYSRESETREQ */
     __DSB();
     for (;;) {
     }
@@ -130,7 +149,7 @@ int spi_transmit_receive(void *handle, volatile uint8_t *tx,
 
 uint32_t tick_get(void)
 {
-    return *(volatile uint32_t *)0x20002614;
+    return TICK_MS;
 }
 
 /* HAL_SPI_TxRxCpltCallback (FUN_08010eec): raise CS (PA15) + PA8 to release
@@ -138,8 +157,8 @@ uint32_t tick_get(void)
 static void spi_txrx_cplt_cb(void *handle)
 {
     (void)handle;
-    gpio_bit_write(0x48000000u, 0x8000, 1);   /* PA15 = CS high */
-    gpio_bit_write(0x48000000u, 0x100, 1);    /* PA8 high       */
+    gpio_bit_write(GPIOA_BASE, PIN_PA15, 1);   /* CS high  */
+    gpio_bit_write(GPIOA_BASE, PIN_PA8, 1);    /* PA8 high */
 }
 
 /* HAL_SPI_RxCpltCallback (FUN_0801c9dc): empty in this firmware. */
@@ -417,24 +436,22 @@ int hal_spi_init(void *handle)
  */
 void spi1_init(void)
 {
-    volatile uint32_t * const RCC_AHBENR  = (volatile uint32_t *)(0x40021000u + 0x14);
-    volatile uint32_t * const RCC_APB2ENR = (volatile uint32_t *)(0x40021000u + 0x18);
-    uint32_t * const hspi = (uint32_t *)0x20000634u;
+    uint32_t * const hspi = (uint32_t *)SPI1_HANDLE;
 
     gpio_pin_cfg_t cfg;
     mem_set(&cfg, 0, sizeof cfg);
 
-    *RCC_APB2ENR |= 0x1000u;    (void)(*RCC_APB2ENR & 0x1000u);    /* SPI1EN */
-    *RCC_AHBENR  |= 0x40000u;   (void)(*RCC_AHBENR  & 0x40000u);   /* IOPBEN */
+    RCC_APB2ENR |= 0x1000u;    (void)(RCC_APB2ENR & 0x1000u);    /* SPI1EN */
+    RCC_AHBENR  |= 0x40000u;   (void)(RCC_AHBENR  & 0x40000u);   /* IOPBEN */
 
     cfg.pin_mask = 0x38;   /* PB3, PB4, PB5 */
     cfg.mode     = GPIO_MODE_AF;
     cfg.pupd     = 0;
     cfg.speed    = 3;
     cfg.af       = 0;      /* AF0 = SPI1 */
-    gpio_pin_config((uint32_t *)0x48000400u, &cfg);
+    gpio_pin_config((uint32_t *)GPIOB_BASE, &cfg);
 
-    hspi[0]  = 0x40013000u;   /* Instance (SPI1)        */
+    hspi[0]  = SPI1_BASE;     /* Instance (SPI1)        */
     hspi[1]  = 0x104u;        /* Init.Mode (master)     */
     hspi[2]  = 0;             /* Init.Direction (2line) */
     hspi[3]  = 0x700u;        /* Init.DataSize (8-bit)  */
@@ -448,7 +465,7 @@ void spi1_init(void)
     hspi[11] = 7;             /* Init.CRCPolynomial     */
     hspi[12] = 0;             /* Init.CRCLength         */
     hspi[13] = 0;             /* Init.NSSPMode          */
-    *(volatile uint32_t *)0x20002614u = 0;
+    TICK_MS = 0;
 
     if (hal_spi_init(hspi) != 0) {
         spi_error_reset();
@@ -458,8 +475,8 @@ void spi1_init(void)
     nvic_enable_irq(0x19);
 
     for (uint8_t i = 0; i < 0x20; i++) {
-        *(volatile uint8_t *)(0x200005f4u + i) = 0xff;
-        *(volatile uint8_t *)(0x20000614u + i) = 0xff;
+        SPI_TXBUF[i] = 0xff;
+        SPI_RXBUF[i] = 0xff;
     }
 }
 
@@ -487,7 +504,7 @@ void spi1_init(void)
  */
 void SPI1_IRQHandler(void)
 {
-    uint8_t *h = (uint8_t *)0x20000634u;                       /* SPI1 HAL handle */
+    uint8_t *h = (uint8_t *)SPI1_HANDLE;                       /* SPI1 HAL handle */
     volatile uint32_t *spi = *(volatile uint32_t **)(h + 0);   /* Instance */
     uint32_t cr2 = spi[1];                                     /* +0x04 CR2 */
     uint32_t sr  = spi[2];                                     /* +0x08 SR  */

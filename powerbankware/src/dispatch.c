@@ -34,6 +34,50 @@
 #define REC ((volatile uint8_t *)0x200004D0)         /* BMS record */
 #define LOG ((volatile uint8_t *)0x200005B0)         /* circular trace entry */
 
+/* ── GPIO / RTC handle ───────────────────────────────────────────────── */
+#define GPIOA_BASE  0x48000000u
+#define RTC_HANDLE  ((void *)0x200006F0)
+
+/* ── Identity / wake word (+ complement mirror) ──────────────────────── */
+#define IDBLK     (*(volatile uint32_t *)0x20000724)   /* identity/wake word; [1]=state */
+#define IDBLK_INV (*(volatile uint32_t *)0x20000698)   /* ~idblk mirror */
+
+/* ── AFE / measurement cells (owned by fedl5236.c, charger.c, alarms.c) ─ */
+#define FET_STATUS  (*(volatile uint8_t  *)0x200003A5)  /* cached FET/balance status */
+#define AFE_BUF     ((volatile uint8_t  *)0x20000614)   /* AFE RX frame buffer       */
+#define CELL_MV     ((volatile uint16_t *)0x20000380)   /* 10 cell voltages          */
+#define CELL_SUM    (*(volatile uint16_t *)0x200003CE)  /* pack-voltage sum          */
+#define CUR_AVG     (*(volatile int32_t  *)0x20000424)  /* signed avg current        */
+#define LIMIT       ((volatile uint8_t  *)0x20000218)   /* cal/limit block; [0..2]   */
+#define BAL_SEL     (*(volatile uint8_t  *)0x20000224)  /* selected balance cell     */
+#define BAL_DEBNC   (*(volatile uint8_t  *)0x2000041C)  /* balance debounce tick     */
+
+/* ── Per-state soft counters / debounces cleared on every entry ──────── */
+#define S_UPTIME_1S  (*(volatile uint32_t *)0x20000594)  /* uptime seconds        */
+#define S_REQ        (*(volatile uint8_t  *)0x200006E4)  /* request/REQ low byte  */
+#define S_TCNT_550   (*(volatile uint16_t *)0x20000550)  /* temp/ship debounce    */
+#define S_TCNT_584   (*(volatile uint16_t *)0x20000584)  /* temp-recovery debounce*/
+#define S_TCNT_580   (*(volatile uint16_t *)0x20000580)  /* temp/ship debounce    */
+#define S_TCNT_4CA   (*(volatile uint16_t *)0x200004CA)  /* temp-recovery debounce*/
+#define S_TCNT_588   (*(volatile uint16_t *)0x20000588)  /* temp-recovery debounce*/
+#define S_TCNT_4BC   (*(volatile uint16_t *)0x200004BC)  /* soft counter          */
+#define S_TCNT_5AE   (*(volatile uint16_t *)0x200005AE)  /* soft counter          */
+#define S_TCNT_4B8   (*(volatile uint16_t *)0x200004B8)  /* soft counter          */
+#define S_SHIP_CNT   (*(volatile uint16_t *)0x200006A2)  /* ship-mode tick counter*/
+#define S_CNT_41B    (*(volatile uint8_t  *)0x2000041B)  /* soft counter          */
+#define S_CHG_CNT    (*(volatile uint16_t *)0x200006A8)  /* charger present/absent*/
+#define S_NOLOAD2    (*(volatile uint16_t *)0x2000069E)  /* no-load (bit12) counter*/
+#define S_DDON_CNT   (*(volatile uint8_t  *)0x20000720)  /* DD-on tick counter    */
+#define S_BTN_DEB    (*(volatile uint8_t  *)0x20000710)  /* PB8 button debounce   */
+#define S_BLINK      (*(volatile uint16_t *)0x20000728)  /* blink counter         */
+#define S_TEST_MODE  (*(volatile uint8_t  *)0x2000069C)  /* 0 = normal, else test */
+#define S_CNT_248    (*(volatile uint32_t *)0x20000248)  /* soft counter          */
+#define S_SOFTCNT_BC (*(volatile uint16_t *)0x200006BC)  /* per-state soft counter*/
+
+/* ── Per-state diagnostic event counters ─────────────────────────────── */
+#define EVT_582   (*(volatile uint8_t *)0x20000582)
+#define EVT_554   (*(volatile uint8_t *)0x20000554)
+
 /* transition-trace log strings (src/strings.c). */
 extern const char s_new_state[];   /* "\nNew State = %d\r"      0x0801E0F4 */
 extern const char s_prev_state[];  /* "\nPrevious State = %d\r" 0x0801E108 */
@@ -53,14 +97,14 @@ static inline volatile uint16_t *rec16(uint32_t off)
  */
 static void state_persist_to_backup(uint8_t state)
 {
-    volatile uint8_t *packed = (volatile uint8_t *)0x20000724;
+    volatile uint8_t *packed = (volatile uint8_t *)&IDBLK;
 
     packed[0] = 0;
     packed[1] = state;
-    packed[2] = *(volatile uint8_t *)0x200004B0;        /* previous state */
-    *(volatile uint32_t *)0x20000698 = ~*(volatile uint32_t *)0x20000724;
-    rtc_backup_write((void *)0x200006F0, 0, *(volatile uint32_t *)0x20000724);
-    rtc_backup_write((void *)0x200006F0, 1, *(volatile uint32_t *)0x20000698);
+    packed[2] = PREVB;                                  /* previous state */
+    IDBLK_INV = ~IDBLK;
+    rtc_backup_write(RTC_HANDLE, 0, IDBLK);
+    rtc_backup_write(RTC_HANDLE, 1, IDBLK_INV);
 }
 
 /*
@@ -72,7 +116,7 @@ static void state_persist_to_backup(uint8_t state)
 static void afe_fet_status_refresh(void)
 {
     if (fedl5236_read_data(0x0d, 1) != 0) {
-        *(volatile uint8_t *)0x200003A5 = *(volatile uint8_t *)(0x20000614 + 2);
+        FET_STATUS = AFE_BUF[2];
     }
 }
 
@@ -85,47 +129,47 @@ void bms_state_enter(int state_in)
     STATEB = state;
 
     /* clear the per-state soft counters and alarm debounces */
-    *(volatile uint32_t *)0x20000594 = 0;
-    *(volatile uint8_t  *)0x200006E4 = 0;
-    *(volatile uint16_t *)0x20000550 = 0;
-    *(volatile uint16_t *)0x20000584 = 0;
-    *(volatile uint16_t *)0x20000580 = 0;
-    *(volatile uint16_t *)0x200004CA = 0;
-    *(volatile uint16_t *)0x20000588 = 0;
-    *(volatile uint16_t *)0x200004BC = 0;
-    *(volatile uint16_t *)0x200005AE = 0;
-    *(volatile uint16_t *)0x200004B8 = 0;
-    *(volatile uint16_t *)0x200006A2 = 0;
-    *(volatile uint8_t  *)0x2000041B = 0;
-    *(volatile uint16_t *)0x200006A8 = 0;
-    *(volatile uint16_t *)0x2000069E = 0;
-    *(volatile uint8_t  *)0x20000720 = 0;
-    *(volatile uint8_t  *)0x20000710 = 0;
-    *(volatile uint16_t *)0x20000728 = 0;
-    *(volatile uint8_t  *)0x2000069C = 0;
-    *(volatile uint32_t *)0x20000248 = 0;
-    *(volatile uint16_t *)0x200006BC = 0;
+    S_UPTIME_1S  = 0;
+    S_REQ        = 0;
+    S_TCNT_550   = 0;
+    S_TCNT_584   = 0;
+    S_TCNT_580   = 0;
+    S_TCNT_4CA   = 0;
+    S_TCNT_588   = 0;
+    S_TCNT_4BC   = 0;
+    S_TCNT_5AE   = 0;
+    S_TCNT_4B8   = 0;
+    S_SHIP_CNT   = 0;
+    S_CNT_41B    = 0;
+    S_CHG_CNT    = 0;
+    S_NOLOAD2    = 0;
+    S_DDON_CNT   = 0;
+    S_BTN_DEB    = 0;
+    S_BLINK      = 0;
+    S_TEST_MODE  = 0;
+    S_CNT_248    = 0;
+    S_SOFTCNT_BC = 0;
 
     vout_bypass_off();
-    gpio_bit_write(0x48000000u, 0x200, 1);   /* PA9 high */
+    gpio_bit_write(GPIOA_BASE, 0x200, 1);   /* PA9 high */
     MODE &= 0xFF7Fu;                          /* clear mode bit 7 */
 
     if (MODE & 0x20u) {                       /* cell-balance active (bit 5) */
         MODE &= 0xFFDFu;
         fedl5236_command_write(10, 0);
         fedl5236_command_write(11, 0);
-        *(volatile uint8_t *)0x20000224 = 0;
-        *(volatile uint8_t *)0x2000041C = 0;
+        BAL_SEL   = 0;
+        BAL_DEBNC = 0;
     }
 
     /* per-state diagnostic event counters (event log enabled only) */
     switch (state) {
     case 2:
-        *(volatile uint8_t  *)0x20000582 = 0;
-        *(volatile uint32_t *)0x20000724 &= 0xFEFFFFFFu;
+        EVT_582 = 0;
+        IDBLK &= 0xFEFFFFFFu;
         break;
     case 3:
-        *(volatile uint8_t *)0x20000554 = 0;
+        EVT_554 = 0;
         break;
     case 7:  if (LOGGING) (*rec16(0x40))++; break;
     case 8:  if (LOGGING) (*rec16(0x42))++; break;
@@ -134,8 +178,8 @@ void bms_state_enter(int state_in)
             uint32_t ts[2];
             (*rec16(0x44))++;
             rtc_timestamp_read(ts);
-            *(volatile uint32_t *)(0x200004D0 + 0x10) = ts[0];
-            *(volatile uint32_t *)(0x200004D0 + 0x14) = ts[1];
+            *(volatile uint32_t *)(REC + 0x10) = ts[0];
+            *(volatile uint32_t *)(REC + 0x14) = ts[1];
         }
         break;
     case 0xa:
@@ -143,20 +187,20 @@ void bms_state_enter(int state_in)
             uint32_t ts[2];
             (*rec16(0x46))++;
             rtc_timestamp_read(ts);
-            *(volatile uint32_t *)(0x200004D0 + 0x10) = ts[0];
-            *(volatile uint32_t *)(0x200004D0 + 0x14) = ts[1];
+            *(volatile uint32_t *)(REC + 0x10) = ts[0];
+            *(volatile uint32_t *)(REC + 0x14) = ts[1];
         }
         break;
     case 0xb:
-        if (LOGGING) { (*(volatile uint8_t *)0x20000554)++; (*rec16(0x3c))++; }
+        if (LOGGING) { EVT_554++; (*rec16(0x3c))++; }
         break;
     case 0xc:
-        if (LOGGING) { (*(volatile uint8_t *)0x20000554)++; (*rec16(0x3e))++; }
+        if (LOGGING) { EVT_554++; (*rec16(0x3e))++; }
         break;
     case 0xd:  if (LOGGING) (*rec16(0x38))++; break;
     case 0xe:  if (LOGGING) (*rec16(0x3a))++; break;
     case 0xf:
-        if (LOGGING) { (*(volatile uint8_t *)0x20000582)++; (*rec16(0x48))++; }
+        if (LOGGING) { EVT_582++; (*rec16(0x48))++; }
         break;
     case 0x10: if (LOGGING) (*rec16(0x4a))++; break;
     case 0x11: if (LOGGING) (*rec16(0x4e))++; break;
@@ -201,19 +245,18 @@ void bms_state_enter(int state_in)
 
         *(volatile uint16_t *)(LOG + 0x0c) = *rec16(0x2a);
         *(volatile uint16_t *)(LOG + 0x0e) = evt;
-        LOG[0x2a] = *(volatile uint8_t *)(0x20000218 + 1);
-        LOG[0x2b] = *(volatile uint8_t *)(0x20000218 + 2);
-        LOG[0x2c] = *(volatile uint8_t *)0x20000218;
-        *(volatile uint16_t *)(LOG + 0x26) = *(volatile uint16_t *)0x200003CE;
-        *(volatile uint32_t *)(LOG + 0x00) = *(volatile uint32_t *)0x20000424;
-        *(volatile uint32_t *)(LOG + 0x04) = *(volatile uint32_t *)(0x200004D0 + 0x1c);
-        *(volatile uint32_t *)(LOG + 0x08) = *(volatile uint32_t *)(0x200004D0 + 0x20);
+        LOG[0x2a] = LIMIT[1];
+        LOG[0x2b] = LIMIT[2];
+        LOG[0x2c] = LIMIT[0];
+        *(volatile uint16_t *)(LOG + 0x26) = CELL_SUM;
+        *(volatile uint32_t *)(LOG + 0x00) = (uint32_t)CUR_AVG;
+        *(volatile uint32_t *)(LOG + 0x04) = *(volatile uint32_t *)(REC + 0x1c);
+        *(volatile uint32_t *)(LOG + 0x08) = *(volatile uint32_t *)(REC + 0x20);
         LOG[0x28] = REC[0x5a];
         LOG[0x29] = REC[0x5b];
-        *(volatile uint16_t *)(LOG + 0x10) = *(volatile uint16_t *)(0x200004D0 + 0x50);
+        *(volatile uint16_t *)(LOG + 0x10) = *(volatile uint16_t *)(REC + 0x50);
         for (uint8_t i = 0; i < 10; i++) {
-            *(volatile uint16_t *)(LOG + 0x12 + i * 2) =
-                *(volatile uint16_t *)(0x20000380 + i * 2);
+            *(volatile uint16_t *)(LOG + 0x12 + i * 2) = CELL_MV[i];
         }
 
         idx = *rec16(0x2a);

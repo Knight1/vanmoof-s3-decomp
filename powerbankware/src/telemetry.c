@@ -15,6 +15,11 @@
 #define SN   ((volatile uint8_t  *)0x200006E8)   /* serial number */
 #define FLEN (*(volatile uint8_t *)0x20000480)   /* working length */
 
+#define REC_CYCLECNT (*(volatile uint16_t *)(0x200004D0 + 0x50)) /* cycle count   */
+#define BMS_STATE    (*(volatile uint8_t  *)0x200004B4)          /* current state */
+#define SN_VERSION   (*(volatile uint16_t *)(0x200006E8 + 2))    /* fw version    */
+#define FR_BITCNT    (*(volatile uint8_t  *)0x2000048A)          /* frame bit-count */
+
 extern const char s_send_sn[];   /* "\nSend SN = %x %x ... State = %x\r" 0x0801E000 */
 
 /*
@@ -70,21 +75,21 @@ void status_frame_emit(void)
     FR[0x12] = 3;
     FR[0x13] = REC[0x5b];                        /* SOH */
     {
-        uint16_t cyc = *(volatile uint16_t *)(0x200004D0 + 0x50);
+        uint16_t cyc = REC_CYCLECNT;
         FR[0x14] = (uint8_t)cyc;
         FR[0x15] = (uint8_t)(cyc >> 8);
     }
-    FR[0x16] = *(volatile uint8_t *)0x200004B4;  /* state */
+    FR[0x16] = BMS_STATE;                         /* state */
     crc16_append(FR + 0x12, FLEN - 2);           /* sub-block at 0x2000049E */
 
     FLEN = 8;
     log_print(2, s_send_sn,
               FR[1], FR[2], FR[3], FR[4], FR[5],
-              *(volatile uint16_t *)(0x200006E8 + 2),  /* version */
+              SN_VERSION,                              /* version */
               REC[0x5a],                               /* SOC */
               REC[0x5b],                               /* SOH */
-              *(volatile uint16_t *)(0x200004D0 + 0x50),/* cycle count */
-              *(volatile uint8_t *)0x200004B4);        /* state */
+              REC_CYCLECNT,                            /* cycle count */
+              BMS_STATE);                              /* state */
 
-    *(volatile uint8_t *)0x2000048A = 0;
+    FR_BITCNT = 0;
 }

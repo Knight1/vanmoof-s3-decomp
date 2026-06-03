@@ -1,5 +1,15 @@
 #include "powerbankware.h"
 
+/* TIM instance bases (APB literal-pool values from the OEM image). */
+#define TIM1_BASE   0x40012c00u
+#define TIM2_BASE   0x40000000u
+#define TIM3_BASE   0x40000400u
+#define TIM7_BASE   0x40001400u
+#define TIM14_BASE  0x40002000u
+#define TIM15_BASE  0x40014000u
+#define TIM16_BASE  0x40014400u
+#define TIM17_BASE  0x40014800u
+
 /*
  * timer_start_it — OEM FUN_0801CF70.
  *
@@ -38,19 +48,19 @@ void tim_base_set_config(volatile uint32_t *inst, const uint32_t *init)
     uint32_t base = (uint32_t)(uintptr_t)inst;
     uint32_t cr1 = inst[0];
 
-    if (base == 0x40012c00u || base == 0x40000000u || base == 0x40000400u) {   /* TIM1/2/3 */
+    if (base == TIM1_BASE || base == TIM2_BASE || base == TIM3_BASE) {   /* TIM1/2/3 */
         cr1 = init[1] | (cr1 & 0xffffff8fu);            /* CounterMode (CMS|DIR) */
     }
-    if (base == 0x40012c00u || base == 0x40000000u || base == 0x40000400u ||
-        base == 0x40002000u || base == 0x40014000u || base == 0x40014400u ||
-        base == 0x40014800u) {                          /* TIM1/2/3/14/15/16/17 */
+    if (base == TIM1_BASE || base == TIM2_BASE || base == TIM3_BASE ||
+        base == TIM14_BASE || base == TIM15_BASE || base == TIM16_BASE ||
+        base == TIM17_BASE) {                           /* TIM1/2/3/14/15/16/17 */
         cr1 = init[3] | (cr1 & 0xfffffcffu);            /* ClockDivision (CKD) */
     }
     inst[0]   = init[5] | (cr1 & 0xffffff7fu);          /* CR1: AutoReloadPreload (ARPE) */
     inst[0xb] = init[2];                                 /* ARR = Period    */
     inst[10]  = init[0];                                 /* PSC = Prescaler */
-    if (base == 0x40012c00u || base == 0x40014000u ||
-        base == 0x40014400u || base == 0x40014800u) {   /* TIM1/15/16/17 */
+    if (base == TIM1_BASE || base == TIM15_BASE ||
+        base == TIM16_BASE || base == TIM17_BASE) {     /* TIM1/15/16/17 */
         inst[0xc] = init[4];                            /* RCR = RepetitionCounter */
     }
     inst[5] = 1;                                         /* EGR = UG (generate update) */
@@ -121,7 +131,7 @@ void tim7_init(void)
 
     *rcc_apb1enr |= 0x20u;  (void)(*rcc_apb1enr & 0x20u);   /* TIM7EN + read-back */
 
-    htim[0] = 0x40001400u;   /* Instance = TIM7              */
+    htim[0] = TIM7_BASE;     /* Instance = TIM7              */
     htim[1] = 0;             /* Init.Prescaler              */
     htim[2] = 0;             /* Init.CounterMode = UP       */
     htim[3] = 0x6820;        /* Init.Period (ARR)           */

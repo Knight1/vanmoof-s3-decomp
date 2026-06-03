@@ -35,6 +35,17 @@
 #define GPIOB 0x48000400u
 #define FETB  (*(volatile uint8_t *)0x20000412)
 
+/* Shared SRAM cells driven by the entry sequences. */
+#define MODE     (*(volatile uint16_t *)0x200006A0)   /* mode/cfg word           */
+#define REQ      (*(volatile uint16_t *)0x200006E4)   /* alarm request word      */
+#define FAULT    (*(volatile uint16_t *)0x20000410)   /* fault word              */
+#define BOOTCNT  (*(volatile uint16_t *)0x200003CE)   /* boot counter vs 0x752F  */
+#define IDLE_CNT0 (*(volatile uint16_t *)0x200003CC)  /* idle3 soft counter      */
+#define IDLE_CNT1 (*(volatile uint16_t *)0x2000042C)  /* idle3 soft counter      */
+#define OP_VAL644 (*(volatile uint16_t *)0x200003C8)  /* operating preset (4000) */
+#define OP_CLR    (*(volatile uint16_t *)0x200003BC)  /* operating clear cell    */
+#define OP_HOLD   (*(volatile uint16_t *)0x20000220)  /* operating hold counter  */
+
 /* boot-path bypass log strings (src/strings.c). */
 extern const char s_bypass_on[];           /* "\nByPass On\r"                 0x0801DB94 */
 extern const char s_bypass_off_batt_low[]; /* "\nByPass Off --> Battery Low\r" 0x0801DBA0 */
@@ -209,8 +220,8 @@ void bms_enter_idle3(void)
     FETB = 1;
     fedl5236_command_write(9, FETB);
     bypass_fet_on();
-    *(volatile uint16_t *)0x200003CC = 0;
-    *(volatile uint16_t *)0x2000042C = 0;
+    IDLE_CNT0 = 0;
+    IDLE_CNT1 = 0;
     bms_state_enter(3);
 }
 
@@ -222,11 +233,7 @@ void bms_enter_idle3(void)
  */
 void bms_enter_ov2_record(void)
 {
-    volatile uint16_t *req   = (volatile uint16_t *)0x200006E4;
-    volatile uint16_t *mode  = (volatile uint16_t *)0x200006A0;
-    volatile uint16_t *fault = (volatile uint16_t *)0x20000410;
-
-    if (((*req & 0x40) || (*req & 0x80)) && !(*mode & 0x2000)) {  /* req bit6/7, mode bit13 clear */
+    if (((REQ & 0x40) || (REQ & 0x80)) && !(MODE & 0x2000)) {  /* req bit6/7, mode bit13 clear */
         gpio_bit_write(GPIOB, 0x80, 1);    /* PB7 high */
     }
     gpio_bit_write(GPIOA, 0x80, 0);
@@ -237,9 +244,9 @@ void bms_enter_ov2_record(void)
     FETB = 0;
     fedl5236_command_write(9, FETB);
 
-    if (*fault & 0x800) {                   /* fault bit11 */
+    if (FAULT & 0x800) {                    /* fault bit11 */
         bms_state_enter(0x19);
-    } else if ((*req & 0x40) || (*req & 0x80)) {
+    } else if ((REQ & 0x40) || (REQ & 0x80)) {
         bms_state_enter(0x17);
     } else {
         bms_state_enter(0x18);
@@ -253,27 +260,27 @@ void bms_enter_ov2_record(void)
  */
 void boot_enter_operating(int from_recovery)
 {
-    *(volatile uint16_t *)0x200003C8 = 4000;
-    *(volatile uint16_t *)0x200003BC = 0;
+    OP_VAL644 = 4000;
+    OP_CLR = 0;
     gpio_bit_write(GPIOB, 1, 1);
     gpio_bit_write(GPIOB, 0x800, 0);
     bypass_fet_off();
 
     if (from_recovery == 0) {
-        if (*(volatile uint16_t *)0x200003CE > 0x752F) {   /* boot counter high */
+        if (BOOTCNT > 0x752F) {   /* boot counter high */
             gpio_bit_write(GPIOB, 0x200, 1);
             FETB = 2;
             fedl5236_command_write(9, FETB);
             bms_state_enter(2);
             log_print(2, s_bypass_off);
-            *(volatile uint16_t *)0x20000220 = 0x3C;
+            OP_HOLD = 0x3C;
         } else {
             gpio_bit_write(GPIOB, 0x200, 0);
             FETB = 2;
             fedl5236_command_write(9, FETB);
             bms_state_enter(2);
             log_print(2, s_bypass_off_batt_low);
-            *(volatile uint16_t *)0x20000220 = 0x3C;
+            OP_HOLD = 0x3C;
         }
     } else {
         gpio_bit_write(GPIOB, 0x200, 0);
@@ -281,8 +288,8 @@ void boot_enter_operating(int from_recovery)
         fedl5236_command_write(9, FETB);
         bms_state_enter(2);
         log_print(2, s_bypass_on);
-        *(volatile uint16_t *)0x200006A0 |= 0x1000;   /* mode bit12 */
-        *(volatile uint16_t *)0x20000220 = 0;
+        MODE |= 0x1000;   /* mode bit12 */
+        OP_HOLD = 0;
     }
 
     gpio_bit_write(GPIOA, 0x80, 1);

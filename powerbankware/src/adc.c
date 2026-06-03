@@ -1,5 +1,18 @@
 #include "powerbankware.h"
 
+/* ── Peripheral bases ────────────────────────────────────────────────── */
+#define RCC_BASE        0x40021000u
+#define GPIOA_BASE      0x48000000u
+#define ADC1_BASE       0x40012400u   /* measurement ADC instance        */
+#define ADC12_CCR       (*(volatile uint32_t *)0x40012708u)  /* ADC common CCR */
+
+/* ── SRAM globals (see docs/hardware.md) ─────────────────────────────── */
+#define SYSTEM_CORE_CLOCK (*(volatile uint32_t *)0x200000c0u) /* OEM _sdata[0] */
+#define ADC_HAL_HANDLE    ((uint32_t *)0x200001b4u)           /* HAL ADC handle */
+#define ADC_RAW_BUF       0x20000208u                         /* raw sample buffer base */
+#define ADC_RAW_IDX       (*(volatile uint8_t *)0x20000213u)  /* raw-buffer write index */
+#define ADC_SAMPLE_READY  (*(volatile uint8_t *)0x20000204u)  /* "sample ready" flag */
+
 /*
  * adc_start_it — OEM FUN_080195D0 (HAL_ADC_Start_IT).
  *
@@ -86,7 +99,7 @@ char adc_enable(uint32_t *handle)
 
     /* Stabilization delay = SystemCoreClock/1000000 (0x200000C0 = OEM _sdata[0]).
      * volatile so -Os keeps the busy-wait, matching the OEM __IO loop counter. */
-    volatile int wait = (int)(*(volatile uint32_t *)0x200000C0u / 1000000u);
+    volatile int wait = (int)(SYSTEM_CORE_CLOCK / 1000000u);
     while (wait != 0) {
         wait--;
     }
@@ -230,7 +243,7 @@ char adc_config_channel(uint32_t *handle, uint32_t *sconfig)
 {
     volatile uint32_t *inst = (volatile uint32_t *)handle[0];
     volatile uint8_t  *lock = (volatile uint8_t *)((uint8_t *)handle + 0x40);
-    volatile uint32_t *ccr  = (volatile uint32_t *)0x40012708u;   /* ADC common CCR */
+    volatile uint32_t *ccr  = &ADC12_CCR;                         /* ADC common CCR */
     char rc = 0;
 
     if (*lock == 1) {
@@ -262,7 +275,7 @@ char adc_config_channel(uint32_t *handle, uint32_t *sconfig)
                          : (sconfig[0] == 17) ? 0x400000u : 0x1000000u;
             *ccr |= bit;
             if (sconfig[0] == 16) {                  /* temp-sensor startup delay */
-                volatile int wait = (int)(*(volatile uint32_t *)0x200000c0u / 1000000u) * 10;
+                volatile int wait = (int)(SYSTEM_CORE_CLOCK / 1000000u) * 10;
                 while (wait != 0) {
                     wait--;
                 }
@@ -282,8 +295,8 @@ char adc_config_channel(uint32_t *handle, uint32_t *sconfig)
  */
 void adc_msp_init(void)
 {
-    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000u;
-    uint32_t * const hadc = (uint32_t *)0x200001b4u;
+    volatile uint32_t * const RCC = (volatile uint32_t *)RCC_BASE;
+    uint32_t * const hadc = ADC_HAL_HANDLE;
 
     gpio_pin_cfg_t gcfg;
     uint32_t       sconf[3];
@@ -296,9 +309,9 @@ void adc_msp_init(void)
     gcfg.pin_mask = 0x13;            /* PA0, PA1, PA4 */
     gcfg.mode     = GPIO_MODE_ANALOG;
     gcfg.pupd     = 0;
-    gpio_pin_config((uint32_t *)0x48000000u, &gcfg);
+    gpio_pin_config((uint32_t *)GPIOA_BASE, &gcfg);
 
-    hadc[0]  = 0x40012400u;   /* Instance = ADC1     */
+    hadc[0]  = ADC1_BASE;     /* Instance = ADC1     */
     hadc[1]  = 0x80000000u;   /* Init.ClockPrescaler */
     hadc[2]  = 0;             /* Resolution 12-bit   */
     hadc[3]  = 0;             /* DataAlign           */
@@ -358,7 +371,7 @@ void adc_msp_init(void)
  */
 void ADC1_COMP_IRQHandler(void)
 {
-    uint32_t * const handle = (uint32_t *)0x200001b4u;         /* DAT_080087f0 */
+    uint32_t * const handle = ADC_HAL_HANDLE;                  /* DAT_080087f0 */
     volatile uint32_t *inst = (volatile uint32_t *)handle[0];
 
     /* Act only on a flag whose interrupt is enabled (EOC&EOCIE || EOS&EOSIE). */
@@ -385,16 +398,16 @@ void ADC1_COMP_IRQHandler(void)
         /* EOC: latch the 12-bit DR sample into the raw buffer. */
         if ((inst[0] & 4) == 4) {
             uint16_t val = (uint16_t)(inst[0x10] & 0x0fffu);   /* DR, 12-bit */
-            uint8_t  idx = *(volatile uint8_t *)0x20000213u;   /* DAT_080087f8 */
-            *(volatile uint16_t *)(0x20000208u + (uint32_t)idx * 2u) = val; /* DAT_080087fc */
+            uint8_t  idx = ADC_RAW_IDX;                        /* DAT_080087f8 */
+            *(volatile uint16_t *)(ADC_RAW_BUF + (uint32_t)idx * 2u) = val; /* DAT_080087fc */
             /* OEM re-reads the index byte after the store (ldrb @0x8008776). */
-            idx = *(volatile uint8_t *)0x20000213u;
-            *(volatile uint8_t *)0x20000213u = (uint8_t)(idx + 1u);
+            idx = ADC_RAW_IDX;
+            ADC_RAW_IDX = (uint8_t)(idx + 1u);
         }
 
         /* EOS: HAL_ADC_ConvCpltCallback — raise the "sample ready" flag. */
         if ((inst[0] & 8) == 8) {
-            *(volatile uint8_t *)0x20000204u |= 1u;            /* DAT_08008800 */
+            ADC_SAMPLE_READY |= 1u;                            /* DAT_08008800 */
         }
 
         inst[0] = 0xcu;                                        /* ISR: W1C EOC|EOS */

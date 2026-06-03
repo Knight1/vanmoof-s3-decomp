@@ -1,5 +1,10 @@
 #include "powerbankware.h"
 
+/* IWDG HAL handle cell (Instance/Prescaler/Reload/Window) and the ms-tick. */
+#define IWDG_HANDLE  ((volatile uint32_t *)0x200006ac)
+#define IWDG_BASE    0x40003000u                          /* IWDG peripheral */
+#define MS_TICK      (*(volatile uint32_t *)0x20002614)   /* ms tick counter */
+
 /*
  * iwdg_init — OEM FUN_08013820.
  *
@@ -52,13 +57,13 @@ void iwdg_init(void)
 {
     /* IWDG handle: Instance = IWDG (0x40003000), Prescaler = 4 (÷64),
      * Reload = 0x4e2, Window = 0xfff (disabled). */
-    volatile uint32_t *h = (volatile uint32_t *)0x200006ac;
-    h[0] = 0x40003000u;
+    volatile uint32_t *h = IWDG_HANDLE;
+    h[0] = IWDG_BASE;
     h[1] = 4;
     h[2] = 0x000004e2u;
     h[3] = 0x00000fffu;
 
-    *(volatile uint32_t *)0x20002614 = 0;            /* reset ms tick */
+    MS_TICK = 0;                                     /* reset ms tick */
 
     if (hal_iwdg_init((void *)h) != 0) { spi_error_reset(); }
 

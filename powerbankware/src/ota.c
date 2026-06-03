@@ -20,20 +20,36 @@ void image_copy(uint32_t dst, uint32_t src, uint32_t len);  /* FUN_0800ff18 — 
 extern const char s_copy_shadow_to_ap[], s_copy_ap_to_shadow[],
                   s_copy_shadow_to_bl[], s_copy_done[];
 
-static volatile uint8_t  * const s_state = (volatile uint8_t  *)0x2000037e;
-static volatile uint16_t * const s_idx   = (volatile uint16_t *)0x2000037c;
-static volatile uint8_t  * const s_buf   = (volatile uint8_t  *)0x20000278;
-static volatile uint8_t  * const s_xor   = (volatile uint8_t  *)0x20000276;
-static volatile uint8_t  * const s_cmd   = (volatile uint8_t  *)0x20000277;
-static volatile uint16_t * const s_len   = (volatile uint16_t *)0x20000274;
-static volatile uint32_t * const s_addr  = (volatile uint32_t *)0x20000378;
-static volatile uint16_t * const s_mode  = (volatile uint16_t *)0x200006a0;
+/* Flash regions. */
+#define FLASH_BL_BASE      0x08000000u   /* bootloader image      */
+#define FLASH_AP_BASE      0x08008000u   /* application image     */
+#define FLASH_OTA_BASE     0x08024000u   /* OTA staging region    */
+
+/* HAL handles (shared with sibling modules). */
+#define CRC_HANDLE  ((void *)0x200006c0)
+#define RTC_HANDLE  ((void *)0x200006f0)
+
+/* IWDG HAL handle pointer slot; handle word 0 -> instance, first reg KR. */
+#define IWDG_KR (**(volatile uint32_t **)0x200006acu)
+#define IWDG_KEY_RELOAD 0x0000AAAAu
+
+static volatile uint8_t  * const s_state    = (volatile uint8_t  *)0x2000037e;
+static volatile uint16_t * const s_idx      = (volatile uint16_t *)0x2000037c;
+static volatile uint8_t  * const s_buf      = (volatile uint8_t  *)0x20000278;
+static volatile uint8_t  * const s_xor      = (volatile uint8_t  *)0x20000276;
+static volatile uint8_t  * const s_cmd      = (volatile uint8_t  *)0x20000277;
+static volatile uint16_t * const s_len      = (volatile uint16_t *)0x20000274;
+static volatile uint32_t * const s_addr     = (volatile uint32_t *)0x20000378;
+static volatile uint16_t * const s_mode     = (volatile uint16_t *)0x200006a0;
+static volatile uint8_t  * const s_idblk    = (volatile uint8_t  *)0x20000724; /* upgrade flag */
+static volatile uint8_t  * const s_idblk_inv= (volatile uint8_t  *)0x20000698; /* ~flag mirror */
+static volatile uint8_t  * const s_ota_data = (volatile uint8_t  *)0x20001e04; /* staged payload */
 
 /* CRC the 0x1fff-word image at `addr` and compare to its stored CRC at
  * +0x7ffc. Returns true on mismatch. */
 static bool image_verify(uint32_t addr)
 {
-    uint32_t crc = crc_accumulate((void *)0x200006c0, (const void *)addr, 0x1fff);
+    uint32_t crc = crc_accumulate(CRC_HANDLE, (const void *)addr, 0x1fff);
     return (int32_t)crc != *(volatile int32_t *)(addr + 0x7ffc);
 }
 
@@ -54,8 +70,8 @@ int image_verify_ap(const uint32_t *image)
         header[2] = 0xffffffffu;              /* blanked before CRC: stored CRC  */
         header[3] = 0xffffffffu;              /* and length                      */
 
-        crc_accumulate((void *)0x200006c0, header, 10);
-        uint32_t crc = crc_continue((void *)0x200006c0, image + 10,
+        crc_accumulate(CRC_HANDLE, header, 10);
+        uint32_t crc = crc_continue(CRC_HANDLE, image + 10,
                                     (image[3] - 0x28u) >> 2);
         return crc == image[2] ? 0 : 1;
     }
@@ -86,10 +102,10 @@ static void ota_flush(uint8_t channel)
 /* Latch the upgrade flag (`flag`/~flag) into the RTC backup regs and reset. */
 static void ota_set_flag_and_reset(uint8_t flag)
 {
-    *(volatile uint8_t *)0x20000724 = flag;
-    *(volatile uint8_t *)0x20000698 = (uint8_t)~*(volatile uint8_t *)0x20000724;
-    rtc_backup_write((void *)0x200006f0, 0, *(volatile uint8_t *)0x20000724);
-    rtc_backup_write((void *)0x200006f0, 1, *(volatile uint8_t *)0x20000698);
+    *s_idblk = flag;
+    *s_idblk_inv = (uint8_t)~*s_idblk;
+    rtc_backup_write(RTC_HANDLE, 0, *s_idblk);
+    rtc_backup_write(RTC_HANDLE, 1, *s_idblk_inv);
     system_reset_ota();
 }
 
@@ -122,7 +138,7 @@ void modem_rx_byte(uint8_t channel, uint8_t b)
                     *s_addr = addr;
                     *s_state = 2;
                 } else if (*s_cmd == 0x21) {
-                    if (addr == 0x08008000) {
+                    if (addr == FLASH_AP_BASE) {
                         ota_respond(channel, 0x79);
                         ota_flush(channel);
                         ota_set_flag_and_reset(1);
@@ -139,15 +155,15 @@ void modem_rx_byte(uint8_t channel, uint8_t b)
                 *s_addr = addr;
                 *s_state = 2;
             } else if (*s_cmd == 0x21) {
-                if (addr == 0x08000000 && !image_verify(0x08024000)) {
+                if (addr == FLASH_BL_BASE && !image_verify(FLASH_OTA_BASE)) {
                     ota_respond(channel, 0x79);
                     ota_flush(channel);
-                    image_copy(0x08000000, 0x08024000, 0x8000);   /* BL */
-                    image_copy(0x08024000, 0x08008000, 0x1c000);  /* AP */
+                    image_copy(FLASH_BL_BASE, FLASH_OTA_BASE, 0x8000);   /* BL */
+                    image_copy(FLASH_OTA_BASE, FLASH_AP_BASE, 0x1c000);  /* AP */
                     ota_set_flag_and_reset(0);
                 }
                 ota_respond(channel, 0x1f);
-                image_copy(0x08024000, 0x08008000, 0x1c000);
+                image_copy(FLASH_OTA_BASE, FLASH_AP_BASE, 0x1c000);
             }
         } else {
             ota_respond(channel, 0x1f);
@@ -172,20 +188,20 @@ void modem_rx_byte(uint8_t channel, uint8_t b)
             } else {
                 *s_addr += 0xf8000000u;
             }
-            *s_addr += 0x08024000u;
+            *s_addr += FLASH_OTA_BASE;
 
             if ((*s_addr & 0x7ff) == 0) {
                 flash_erase_page(*s_addr);
             }
             uint32_t a = *s_addr;
-            mem_copy((void *)((a & 0x7ff) + 0x20001e04), (const void *)s_buf, *s_len);
+            mem_copy((void *)((a & 0x7ff) + (uint32_t)s_ota_data), (const void *)s_buf, *s_len);
             int r = flash_program_words(*s_addr & 0xffffff00, *s_len, (const void *)s_buf);
             while (r != 0) {
-                **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG kick */
+                IWDG_KR = IWDG_KEY_RELOAD;
                 flash_erase_page(*s_addr & 0xfffff800);
                 r = flash_program_words(*s_addr & 0xfffff800,
                                         (uint16_t)((a & 0x7ff) + *s_len),
-                                        (const void *)0x20001e04);
+                                        (const void *)s_ota_data);
             }
             ota_respond(channel, 0x79);
         } else {
@@ -239,11 +255,11 @@ static void flash_read(uint32_t src, uint16_t len, uint8_t *dst)
  */
 void image_copy(uint32_t dst, uint32_t src, uint32_t len)
 {
-    if (dst == 0x08008000) {
+    if (dst == FLASH_AP_BASE) {
         log_print(2, s_copy_shadow_to_ap);
-    } else if (dst == 0x08024000) {
+    } else if (dst == FLASH_OTA_BASE) {
         log_print(2, s_copy_ap_to_shadow);
-    } else if (dst == 0x08000000) {
+    } else if (dst == FLASH_BL_BASE) {
         log_print(2, s_copy_shadow_to_bl);
     }
     uart_flush();
@@ -259,7 +275,7 @@ void image_copy(uint32_t dst, uint32_t src, uint32_t len)
                 r = flash_program_words(dst + i, 0x800, page);
             } while (r != 0);
         }
-        if (dst == 0x08000000) {
+        if (dst == FLASH_BL_BASE) {
             bad = image_verify(dst) ? 1 : 0;
         } else {
             bad = image_verify_ap((const uint32_t *)dst);

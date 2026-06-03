@@ -27,6 +27,22 @@
 #define H_LOCK (*(volatile uint8_t  *)(0x20002618 + 0x18))
 #define H_ERR  (*(volatile uint32_t *)(0x20002618 + 0x1c))
 
+/* free-running ms tick written by SysTick (shared with system.c UW_TICK) */
+#define UW_TICK (*(volatile uint32_t *)0x20002614u)
+
+/* IWDG HAL handle pointer slot (installed during HAL bring-up); the handle's
+ * first word is the IWDG instance, whose first register is KR. */
+#define IWDG_KR (**(volatile uint32_t **)0x200006acu)
+#define IWDG_KEY_RELOAD 0x0000AAAAu
+
+/* scratch RAM for the HAL_FLASHEx_Erase config struct + page-error out param */
+#define ERASE_CFG ((int *)0x2000019c)
+#define ERASE_ERR ((uint32_t *)0x200001a8)
+
+/* ARM SCB @ 0xE000ED00: AIRCR +0x0C, SYSRESETREQ + VECTKEY */
+#define SCB_AIRCR        (*(volatile uint32_t *)(0xE000ED00u + 0x0C))
+#define SCB_AIRCR_RESET  0x05FA0004u
+
 extern uint32_t tick_get(void);
 extern void     spi_error_reset(void);   /* shared fatal-error path */
 
@@ -163,8 +179,8 @@ static char flash_program(int type, uint32_t addr, uint32_t data_lo, uint32_t da
 /* FUN_08013878 — erase the 2 KB page at `addr`, retrying up to 50 times. */
 void flash_erase_page(uint32_t addr)
 {
-    int * const cfg = (int *)0x2000019c;
-    uint32_t * const err = (uint32_t *)0x200001a8;
+    int * const cfg = ERASE_CFG;
+    uint32_t * const err = ERASE_ERR;
     uint8_t retry = 0;
 
     flash_unlock();
@@ -172,7 +188,7 @@ void flash_erase_page(uint32_t addr)
     cfg[1] = (int)addr;
     cfg[2] = 1;
     do {
-        *(volatile uint32_t *)0x20002614 = 0;
+        UW_TICK = 0;
         if (flash_ex_erase(cfg, err) == 0) {
             retry = 0x32;
         } else if (++retry > 0x31) {
@@ -193,8 +209,8 @@ int flash_program_words(uint32_t addr, uint16_t len, const void *src)
         uint32_t w = (uint32_t)s[i] | ((uint32_t)s[i + 1] << 8) |
                      ((uint32_t)s[i + 2] << 16) | ((uint32_t)s[i + 3] << 24);
         i = (uint16_t)(i + 4);
-        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG kick */
-        *(volatile uint32_t *)0x20002614 = 0;
+        IWDG_KR = IWDG_KEY_RELOAD;
+        UW_TICK = 0;
         if (flash_program(2, (uint32_t)dst, w, 0) != 0) {
             return 1;
         }
@@ -232,10 +248,10 @@ uint32_t rtc_backup_read(void *hrtc, int idx)
 /* FUN_08013b94 — persist + reset for OTA. */
 void system_reset_ota(void)
 {
-    **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;       /* IWDG kick */
+    IWDG_KR = IWDG_KEY_RELOAD;
     fedl5236_record_save();
     __DSB();
-    *(volatile uint32_t *)(0xE000ED00u + 0x0C) = 0x05FA0004u; /* SYSRESETREQ */
+    SCB_AIRCR = SCB_AIRCR_RESET;                            /* SYSRESETREQ */
     __DSB();
     for (;;) {
     }

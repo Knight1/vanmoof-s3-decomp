@@ -18,6 +18,7 @@
  */
 
 #define CRC_HANDLE  ((void *)0x200006c0)
+#define CRC_BASE    ((volatile uint32_t *)0x40023000u)   /* CRC peripheral */
 
 #define CRC_INSTANCE(h) (*(volatile uint32_t **)((uint8_t *)(h) + 0))
 #define CRC_DR(h)       (CRC_INSTANCE(h)[0])     /* +0x00 */
@@ -274,7 +275,7 @@ void crc_init(void)
     uint8_t * const h = (uint8_t *)CRC_HANDLE;                 /* 0x200006c0 */
     volatile uint32_t * const rcc_ahbenr = (volatile uint32_t *)(0x40021000 + 0x14);
 
-    *(volatile uint32_t **)(h + 0x00) = (volatile uint32_t *)0x40023000u; /* Instance */
+    *(volatile uint32_t **)(h + 0x00) = CRC_BASE;             /* Instance */
     *(volatile uint8_t  *)(h + 0x04) = 0;   /* DefaultPolynomialUse    */
     *(volatile uint8_t  *)(h + 0x05) = 0;   /* DefaultInitValueUse     */
     *(volatile uint32_t *)(h + 0x14) = 0;   /* InputDataInversionMode  */

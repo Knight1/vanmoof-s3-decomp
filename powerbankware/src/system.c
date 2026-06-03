@@ -30,6 +30,14 @@
 
 #define SYSTEM_CORE_CLOCK (*(volatile uint32_t *)0x200000c0u)
 
+#define RTC_BASE      0x40002800u                          /* RTC peripheral block */
+
+/* SRAM globals (shared with rtc.c / hal.c / spi.c). */
+#define UW_TICK       (*(volatile uint32_t *)0x20002614u)  /* free-running ms tick */
+#define SYSTICK_SUB   (*(volatile uint16_t *)0x20000778u)  /* 16-bit sub-counter   */
+#define SYSTICK_FLAGS (*(volatile uint8_t  *)0x2000077cu)  /* periodic tick flags  */
+#define RTC_HANDLE    ((void *)0x200006f0)                 /* RTC HAL handle        */
+
 /* AHB prescaler -> right-shift amount (RCC_CFGR.HPRE index). */
 static const uint8_t ahb_presc_table[16] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9
@@ -503,7 +511,7 @@ void clock_rtc_init(void)
     osc[10] = 0x00010000u;
     osc[11] = 0;
     osc[12] = 0;
-    *(volatile uint32_t *)0x20002614 = 0;                 /* reset ms tick */
+    UW_TICK = 0;                                          /* reset ms tick */
     if (hal_rcc_osc_config(osc) != 0) { spi_error_reset(); }
 
     pclk[0] = 7;
@@ -521,8 +529,8 @@ void clock_rtc_init(void)
     RCC_BDCR |= 0x8000u;                                  /* RTCEN */
 
     /* RTC handle @0x200006f0 (shared with rtc.c): Instance = RTC (0x40002800). */
-    volatile uint32_t *hrtc = (volatile uint32_t *)0x200006f0;
-    hrtc[0] = 0x40002800u;
+    volatile uint32_t *hrtc = (volatile uint32_t *)RTC_HANDLE;
+    hrtc[0] = RTC_BASE;
     hrtc[1] = 0;
     hrtc[2] = 0x7f;
     hrtc[3] = 0xff;
@@ -604,9 +612,9 @@ void __libc_init_array_lite(void)
  */
 void SysTick_Handler(void)
 {
-    volatile uint32_t * const uw_tick   = (volatile uint32_t *)0x20002614u;
-    volatile uint16_t * const sub_count = (volatile uint16_t *)0x20000778u;
-    volatile uint8_t  * const tick_flag = (volatile uint8_t  *)0x2000077cu;
+    volatile uint32_t * const uw_tick   = &UW_TICK;
+    volatile uint16_t * const sub_count = &SYSTICK_SUB;
+    volatile uint8_t  * const tick_flag = &SYSTICK_FLAGS;
 
     *uw_tick = *uw_tick + 1u;
 

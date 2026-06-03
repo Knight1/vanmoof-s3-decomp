@@ -14,6 +14,13 @@
  * (literal-pool values from the OEM image).
  */
 
+/* GPIO port bases on the AHB (0x400 stride). */
+#define GPIOA_BASE  0x48000000u
+#define GPIOB_BASE  0x48000400u
+#define GPIOC_BASE  0x48000800u
+#define GPIOD_BASE  0x48000c00u
+#define GPIOE_BASE  0x48001000u
+
 /* GPIO input read via IDR (+0x10). */
 bool gpio_bit_read(uint32_t gpio_base, uint16_t pin_bit)
 {
@@ -90,11 +97,11 @@ void gpio_pin_config(uint32_t *gpio_base, gpio_pin_cfg_t *cfg)
             *RCC_APB2ENR |= 1U;                    /* SYSCFG clock enable */
 
             int port;
-            if (gpio_base == (uint32_t *)0x48000000)       port = 0;  /* A */
-            else if (gpio_base == (uint32_t *)0x48000400)  port = 1;  /* B */
-            else if (gpio_base == (uint32_t *)0x48000800)  port = 2;  /* C */
-            else if (gpio_base == (uint32_t *)0x48000c00)  port = 3;  /* D */
-            else if (gpio_base == (uint32_t *)0x48001000)  port = 4;  /* E */
+            if (gpio_base == (uint32_t *)GPIOA_BASE)       port = 0;  /* A */
+            else if (gpio_base == (uint32_t *)GPIOB_BASE)  port = 1;  /* B */
+            else if (gpio_base == (uint32_t *)GPIOC_BASE)  port = 2;  /* C */
+            else if (gpio_base == (uint32_t *)GPIOD_BASE)  port = 3;  /* D */
+            else if (gpio_base == (uint32_t *)GPIOE_BASE)  port = 4;  /* E */
             else                                           port = 5;  /* F */
 
             volatile uint32_t *exticr = &SYSCFG[(i >> 2) + 2];        /* EXTICR1 @ +0x08 */

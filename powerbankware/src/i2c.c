@@ -31,6 +31,15 @@
 #define I2C_CR2_CLEAR     0xfe00e800u    /* clear SADD/NBYTES/RELOAD/AUTOEND/RD_WRN/START/STOP */
 #define I2C_TRANSFER_KEEP 0xfc009800u    /* preserve mask in TransferConfig    */
 
+/* Peripheral bases / SRAM cells (i2c2_init). */
+#define RCC_BASE       0x40021000u
+#define RCC_AHBENR     (*(volatile uint32_t *)(RCC_BASE + 0x14))
+#define RCC_APB1ENR    (*(volatile uint32_t *)(RCC_BASE + 0x1c))
+#define GPIOB_BASE     0x48000400u
+#define I2C2_BASE      0x40005800u
+#define I2C2_HANDLE    ((void *)0x20000434)              /* HAL_I2C_HandleTypeDef */
+#define TICK_MS        (*(volatile uint32_t *)0x20002614)   /* ms tick counter */
+
 #define INSTANCE(h)  (*(volatile uint32_t **)((uint8_t *)(h) + 0))
 #define I2C_CR2(h)   (INSTANCE(h)[1])    /* +0x04 */
 #define I2C_ISR(h)   (INSTANCE(h)[6])    /* +0x18 */
@@ -442,24 +451,22 @@ int hal_i2cex_config_digital_filter(void *handle, int digital_filter)
  */
 void i2c2_init(void)
 {
-    volatile uint32_t * const RCC_AHBENR  = (volatile uint32_t *)(0x40021000u + 0x14);
-    volatile uint32_t * const RCC_APB1ENR = (volatile uint32_t *)(0x40021000u + 0x1c);
-    uint32_t * const hi2c = (uint32_t *)0x20000434u;
+    uint32_t * const hi2c = (uint32_t *)I2C2_HANDLE;
 
     gpio_pin_cfg_t cfg;
     mem_set(&cfg, 0, sizeof cfg);
 
-    *RCC_AHBENR  |= 0x40000u;    (void)(*RCC_AHBENR  & 0x40000u);    /* IOPBEN */
-    *RCC_APB1ENR |= 0x400000u;   (void)(*RCC_APB1ENR & 0x400000u);   /* I2C2EN */
+    RCC_AHBENR  |= 0x40000u;    (void)(RCC_AHBENR  & 0x40000u);    /* IOPBEN */
+    RCC_APB1ENR |= 0x400000u;   (void)(RCC_APB1ENR & 0x400000u);   /* I2C2EN */
 
     cfg.pin_mask = 0x6000;   /* PB13, PB14                   */
     cfg.mode     = GPIO_MODE_AF | GPIO_OTYPE_OD;
     cfg.pupd     = GPIO_PUPD_UP;
     cfg.speed    = 3;
     cfg.af       = 5;        /* AF5 = I2C2 */
-    gpio_pin_config((uint32_t *)0x48000400u, &cfg);
+    gpio_pin_config((uint32_t *)GPIOB_BASE, &cfg);
 
-    hi2c[0] = 0x40005800u;   /* Instance (I2C2)       */
+    hi2c[0] = I2C2_BASE;     /* Instance (I2C2)       */
     hi2c[1] = 0x00300f38u;   /* Init.Timing (TIMINGR) */
     hi2c[2] = 0;             /* Init.OwnAddress1      */
     hi2c[3] = 1;             /* Init.AddressingMode   */
@@ -468,7 +475,7 @@ void i2c2_init(void)
     hi2c[6] = 0;             /* Init.OwnAddress2Masks */
     hi2c[7] = 0;             /* Init.GeneralCallMode  */
     hi2c[8] = 0;             /* Init.NoStretchMode    */
-    *(volatile uint32_t *)0x20002614u = 0;
+    TICK_MS = 0;
 
     if (hal_i2c_init(hi2c) != 0)                       { spi_error_reset(); }
     if (hal_i2cex_config_analog_filter(hi2c, 0) != 0)  { spi_error_reset(); }

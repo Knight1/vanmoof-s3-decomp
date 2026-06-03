@@ -1,5 +1,11 @@
 #include "powerbankware.h"
 
+/* ── HAL handle / SRAM cells ─────────────────────────────────────────── */
+#define RTC_HANDLE     ((void *)0x200006f0)          /* HAL_RTC_HandleTypeDef */
+#define TICK_MS        (*(volatile uint32_t *)0x20002614)   /* ms tick counter */
+#define RTC_STAMP_BUF  ((volatile uint8_t *)0x20000718)     /* decoded fields  */
+#define RTC_STAMP_RAW  ((volatile uint8_t *)0x20000730)     /* scratch TR/DR   */
+
 /*
  * rtc_set — OEM FUN_080122dc.
  *
@@ -15,7 +21,7 @@
 
 void rtc_set(uint32_t lo, uint32_t hi)
 {
-    void * const hrtc = (void *)0x200006f0;
+    void * const hrtc = RTC_HANDLE;
 
     /* RTC_TimeTypeDef is 0x14 bytes: SetTime reads DayLightSaving(+0xc) and
      * StoreOperation(+0x10) and OR-s them into CR even in BIN mode, so the struct
@@ -38,7 +44,7 @@ void rtc_set(uint32_t lo, uint32_t hi)
     date[2] = (uint8_t)hi;             /* day     */
     date[3] = (uint8_t)(hi >> 16);     /* year    */
 
-    *(volatile uint32_t *)0x20002614 = 0;
+    TICK_MS = 0;
     rtc_set_time(hrtc, time, 0);
     rtc_set_date(hrtc, date, 0);
 }
@@ -60,13 +66,13 @@ uint8_t bcd_to_bin(uint8_t bcd)
  */
 uint32_t *rtc_timestamp_read(uint32_t *out)
 {
-    volatile uint8_t *raw = (volatile uint8_t *)0x20000730;   /* scratch TR/DR */
-    volatile uint8_t *bin = (volatile uint8_t *)0x20000718;   /* decoded fields */
-    uint32_t inst = *(volatile uint32_t *)0x200006f0;         /* RTC Instance  */
+    volatile uint8_t *raw = RTC_STAMP_RAW;                    /* scratch TR/DR */
+    volatile uint8_t *bin = RTC_STAMP_BUF;                    /* decoded fields */
+    uint32_t inst = *(volatile uint32_t *)RTC_HANDLE;         /* RTC Instance  */
 
-    *(volatile uint32_t *)(0x20000730 + 4) =
+    *(volatile uint32_t *)(RTC_STAMP_RAW + 4) =
         *(volatile uint32_t *)(inst + 4) & 0x00ffff3fu;       /* RTC_DR */
-    *(volatile uint32_t *)0x20000730 =
+    *(volatile uint32_t *)RTC_STAMP_RAW =
         *(volatile uint32_t *)(inst + 0) & 0x007f7f7fu;       /* RTC_TR */
 
     bin[0] = bcd_to_bin(raw[0]);            /* seconds */
@@ -81,8 +87,8 @@ uint32_t *rtc_timestamp_read(uint32_t *out)
     bin[7] = 0;
     raw[7] = 0;
 
-    out[0] = *(volatile uint32_t *)0x20000718;
-    out[1] = *(volatile uint32_t *)(0x20000718 + 4);
+    out[0] = *(volatile uint32_t *)RTC_STAMP_BUF;
+    out[1] = *(volatile uint32_t *)(RTC_STAMP_BUF + 4);
     return out;
 }
 

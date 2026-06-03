@@ -26,12 +26,15 @@
 #define FEDL_SPI_HANDLE  ((void *)0x20000634)
 #define FEDL_CS_PORT     0x48000000u      /* GPIOA */
 #define FEDL_CS_PIN      0x8000u          /* PA15  */
+#define BMS_RECORD       ((void *)0x200004d0)  /* 128-byte BMS record */
+#define EEPROM_HANDLE    ((void *)0x20000434)  /* I2C2 handle */
 
 static volatile uint8_t * const s_tx          = (volatile uint8_t *)0x200005f4;
 static volatile uint8_t * const s_rx          = (volatile uint8_t *)0x20000614;
 static volatile uint8_t * const s_count       = (volatile uint8_t *)0x200005f1;
 static volatile uint8_t * const s_reg9_shadow = (volatile uint8_t *)0x20000412;
 static volatile uint8_t * const s_tick        = (volatile uint8_t *)0x2000077c;
+static volatile uint8_t * const s_test_mode   = (volatile uint8_t *)0x2000069c;  /* 0 = normal */
 
 /* spi_get_state / spi_transmit_receive / spi_error_reset live in spi.c
  * (declared in the header). The rest are not yet translated — declared here
@@ -52,10 +55,13 @@ extern const char s_check_bms_record[];
  * computation itself lives in that relocated block — not analysable as a
  * flash function here — so this faithfully reproduces the indirect dispatch.
  */
+/* SRAM slot holding the relocated CRC-8 routine pointer (Thumb 0x200000c5). */
+#define FEDL_CRC8_FN_SLOT  ((void *)0x200000c4)
+
 uint8_t fedl5236_crc8(volatile uint8_t *buf, int len)
 {
     uint8_t (* const fn)(volatile uint8_t *, int) =
-        *(uint8_t (* const *)(volatile uint8_t *, int))0x200000c4;
+        *(uint8_t (* const *)(volatile uint8_t *, int))FEDL_CRC8_FN_SLOT;
     return fn(buf, len);
 }
 
@@ -212,6 +218,8 @@ int fedl5236_read_data(uint8_t reg, uint8_t count)
 #define GPIOB_BASE 0x48000400u
 #define GPIOC_BASE 0x48000800u
 #define FEDL_INT_PIN 0x2000u            /* PC13 */
+#define PIN_PA11     0x800u             /* AFE power-down ack */
+#define PIN_PB12     0x1000u            /* AFE self-power-down */
 
 static volatile uint16_t * const s_total_voltage   = (volatile uint16_t *)0x20000418;
 static volatile uint8_t  * const s_ts_error        = (volatile uint8_t  *)0x2000041d;
@@ -225,6 +233,19 @@ static volatile uint32_t * const s_charger_voltage = (volatile uint32_t *)0x2000
 static volatile uint8_t  * const s_temp            = (volatile uint8_t  *)0x20000218; /* [1]=TS0 [2]=TS1 */
 static volatile uint8_t  * const s_state           = (volatile uint8_t  *)0x200005ac;
 static volatile uint16_t * const s_mode            = (volatile uint16_t *)0x200006a0;
+static volatile uint8_t  * const s_led_shadow      = (volatile uint8_t  *)0x200006e5;
+
+/* BMS fault-snapshot cells cleared on a clean temperature reading. */
+static volatile uint8_t  * const s_fault_a0  = (volatile uint8_t  *)0x200003a0;
+static volatile uint8_t  * const s_fault_a1  = (volatile uint8_t  *)0x200003a1;
+static volatile uint8_t  * const s_fault_a4  = (volatile uint8_t  *)0x200003a4;
+static volatile uint8_t  * const s_fault_d0  = (volatile uint8_t  *)0x200003d0;
+static volatile uint8_t  * const s_fault_0f  = (volatile uint8_t  *)0x2000020f;
+static volatile uint8_t  * const s_fault_12  = (volatile uint8_t  *)0x20000212;
+static volatile uint8_t  * const s_fault_1c  = (volatile uint8_t  *)0x2000021c;
+static volatile uint8_t  * const s_fault_1e  = (volatile uint8_t  *)0x2000041e;
+static volatile uint8_t  * const s_fault_28  = (volatile uint8_t  *)0x20000428;
+static volatile uint16_t * const s_fault_reg = (volatile uint16_t *)0x20000410;
 
 extern const char s_fedl_init[];          /* "\nFEDL5236_Initialize()\r"        */
 extern const char s_fedl_default[];       /* "\nFEDL5236_Default_Setting()\r"   */
@@ -392,16 +413,16 @@ void fedl5236_initialize(void)
         }
         if (fail == 0) {
             /* Clean reading — clear the BMS fault snapshot and return. */
-            *(volatile uint8_t  *)0x200003d0 = 0;
-            *(volatile uint8_t  *)0x20000428 = 0;
-            *(volatile uint8_t  *)0x200003a0 = 0;
-            *(volatile uint8_t  *)0x200003a1 = 0;
-            *(volatile uint8_t  *)0x200003a4 = 0;
-            *(volatile uint8_t  *)0x2000041e = 0;
-            *(volatile uint8_t  *)0x2000020f = 0;
-            *(volatile uint8_t  *)0x2000021c = 0;
-            *(volatile uint8_t  *)0x20000212 = 0;
-            *(volatile uint16_t *)0x20000410 = 0;
+            *s_fault_d0  = 0;
+            *s_fault_28  = 0;
+            *s_fault_a0  = 0;
+            *s_fault_a1  = 0;
+            *s_fault_a4  = 0;
+            *s_fault_1e  = 0;
+            *s_fault_0f  = 0;
+            *s_fault_1c  = 0;
+            *s_fault_12  = 0;
+            *s_fault_reg = 0;
             return;
         }
     }
@@ -409,7 +430,7 @@ void fedl5236_initialize(void)
     /* --- TS-fault path: power down and halt --- */
     *s_state = (s_temp[1] < 0x6e && s_temp[2] < 0x6e) ? 0x15 : 0x14;
     *s_mode &= (uint16_t)0xefffu;                  /* clear bit 12 */
-    *(volatile uint8_t *)0x200006e5 = 0;
+    *s_led_shadow = 0;
     extend_io_update();
     log_print(2, s_fedl_ts_error);
     uart_flush();
@@ -419,10 +440,10 @@ void fedl5236_initialize(void)
     fedl5236_powerdown(0);
     log_print(2, s_fedl_pd_finish);
     uart_flush();
-    gpio_bit_write(GPIOB_BASE, 0x1000, 1);         /* PB12 high */
-    while (!gpio_bit_read(GPIOA_BASE, 0x800)) {     /* wait PA11 */
+    gpio_bit_write(GPIOB_BASE, PIN_PB12, 1);       /* PB12 high */
+    while (!gpio_bit_read(GPIOA_BASE, PIN_PA11)) {  /* wait PA11 */
     }
-    gpio_bit_write(GPIOB_BASE, 0x1000, 0);         /* PB12 low */
+    gpio_bit_write(GPIOB_BASE, PIN_PB12, 0);       /* PB12 low */
     for (;;) {
     }
 }
@@ -448,7 +469,7 @@ void fedl5236_aux_off(void)
 
 void fedl5236_wakeup(void)
 {
-    volatile uint8_t * const boot_mode = (volatile uint8_t *)0x2000069c;
+    volatile uint8_t * const boot_mode = s_test_mode;
 
     fedl5236_aux_on();
     delay_ms(*boot_mode == 0 ? 100 : 0x14);
@@ -478,8 +499,8 @@ void fedl5236_wakeup(void)
  */
 void fedl5236_powerdown(int enable_record)
 {
-    volatile uint8_t  * const rx    = (volatile uint8_t *)0x20000614;
-    volatile uint8_t  * const flags = (volatile uint8_t *)0x2000077c;
+    volatile uint8_t  * const rx    = s_rx;
+    volatile uint8_t  * const flags = s_tick;
     uint8_t attempt = 0;
 
     for (;;) {
@@ -545,7 +566,7 @@ void fedl5236_powerdown(int enable_record)
         if (++attempt > 5) {
             break;
         }
-        if (gpio_bit_read(GPIOA_BASE, 0x800)) {        /* PA11 high -> down */
+        if (gpio_bit_read(GPIOA_BASE, PIN_PA11)) {     /* PA11 high -> down */
             if (enable_record != 0) {
                 fedl5236_record_save();
             }
@@ -575,8 +596,8 @@ void fedl5236_powerdown(int enable_record)
  */
 void fedl5236_record_save(void)
 {
-    void * const  record = (void *)0x200004d0;
-    void * const  handle = (void *)0x20000434;
+    void * const  record = BMS_RECORD;
+    void * const  handle = EEPROM_HANDLE;
     uint8_t       scratch[128];
 
     *(volatile uint32_t *)((uint8_t *)record + 0x7c) = bms_record_crc(record, 0x1f);

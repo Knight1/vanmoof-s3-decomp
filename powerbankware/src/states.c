@@ -10,9 +10,60 @@
  * addresses differ — never copied).
  */
 
+/* ── SysTick sub-tick flag + named SRAM/peripheral cells (see docs/hardware.md
+ *    and docs/fuse.md; widths kept exactly as the OEM accesses them) ───────── */
 static volatile uint8_t * const s_tick = (volatile uint8_t *)0x2000077c;
-#define CFG   ((volatile uint8_t *)0x200004d0)
-#define FAULT (*(volatile uint16_t *)0x20000410)
+
+/* GPIO bases (gpio_bit_read/write port arg) */
+#define GPIOA_BASE   0x48000000u
+#define GPIOB_BASE   0x48000400u
+
+/* record / multi-width buffer bases (used with +offset or odd-width casts) */
+#define CFG          ((volatile uint8_t *)0x200004d0)   /* 128-byte BMS record */
+#define S_ALARM      ((volatile uint8_t *)0x200006e4)   /* alarm/request word; read u8/u16/u32 */
+#define S_TS         ((volatile uint8_t *)0x20000218)   /* [0] SOC idx, [1] charge TS, [2] dsg TS */
+#define S_DAC_CMP    ((volatile uint8_t *)0x20000254)   /* DAC compare shadow; value at +2 */
+#define FAULT        (*(volatile uint16_t *)0x20000410)
+#define IWDG_KICK    ((volatile uint32_t **)0x200006ac) /* IWDG-kick handle cell (**=KR) */
+#define TIM7_HANDLE  ((void *)0x20000738)
+
+/* live BMS globals */
+static volatile uint16_t * const s_mode        = (volatile uint16_t *)0x200006a0; /* mode/cfg word */
+static volatile uint16_t * const s_fault       = (volatile uint16_t *)0x20000410; /* protection fault reg */
+static volatile uint8_t  * const s_state       = (volatile uint8_t  *)0x200005ac; /* current state byte */
+static volatile uint8_t  * const s_idblk       = (volatile uint8_t  *)0x20000724; /* identity/wake word (u32 access) */
+static volatile uint8_t  * const s_ts_error    = (volatile uint8_t  *)0x2000041d; /* AFE latch-fault byte */
+static volatile uint8_t  * const s_fet_ctrl    = (volatile uint8_t  *)0x20000412; /* AFE reg-9 FET shadow */
+static volatile uint8_t  * const s_fault_class = (volatile uint8_t  *)0x200004b4; /* fault class latch */
+static volatile uint32_t * const s_charger_v   = (volatile uint32_t *)0x2000042c; /* charger voltage */
+static volatile uint32_t * const s_chg_i       = (volatile uint32_t *)0x200003a8; /* charge current mag */
+static volatile uint32_t * const s_dsg_i       = (volatile uint32_t *)0x20000420; /* discharge current mag */
+static volatile uint32_t * const s_cur_avg     = (volatile uint32_t *)0x20000424; /* signed current avg */
+static volatile uint16_t * const s_cell_sum    = (volatile uint16_t *)0x200003ce; /* pack voltage sum */
+static volatile uint16_t * const s_cell1_mv    = (volatile uint16_t *)0x200001ae; /* cell1 mV / pack voltage */
+#define S_CHGDET_V     ((volatile uint8_t *)0x20000202) /* charger-detect V; read u16 (gate) / u32 (regulation) */
+static volatile uint8_t  * const s_dsg_hold    = (volatile uint8_t  *)0x20000220; /* discharge hold-off */
+static volatile uint32_t * const s_uptime      = (volatile uint32_t *)0x20000594; /* 1 s uptime counter */
+static volatile uint32_t * const s_evtlog_en   = (volatile uint32_t *)0x2000072c; /* event-log enable/counter */
+static volatile uint8_t  * const s_btn_deb     = (volatile uint8_t  *)0x20000710; /* PB8 button debounce */
+static volatile uint16_t * const s_chg_cnt     = (volatile uint16_t *)0x200006a8; /* charger-present/absent counter */
+static volatile uint16_t * const s_noload_cnt  = (volatile uint16_t *)0x200006a2; /* no-load slow counter */
+static volatile uint16_t * const s_noload2_cnt = (volatile uint16_t *)0x2000069e; /* no-load (bit12) counter */
+static volatile uint16_t * const s_softcnt_bc  = (volatile uint16_t *)0x200006bc; /* per-state soft counter */
+static volatile uint8_t  * const s_ddon_cnt    = (volatile uint8_t  *)0x20000720; /* DD-on tick counter */
+static volatile uint16_t * const s_tcnt_550    = (volatile uint16_t *)0x20000550; /* temp/ship debounce */
+static volatile uint16_t * const s_tcnt_580    = (volatile uint16_t *)0x20000580; /* temp/ship debounce */
+static volatile uint16_t * const s_tcnt_584    = (volatile uint16_t *)0x20000584; /* temp-recovery debounce */
+static volatile uint16_t * const s_tcnt_588    = (volatile uint16_t *)0x20000588; /* temp-recovery debounce */
+static volatile uint16_t * const s_tcnt_4ca    = (volatile uint16_t *)0x200004ca; /* temp-recovery debounce */
+static volatile uint8_t  * const s_led_shadow  = (volatile uint8_t  *)0x200006e5; /* LED shadow */
+static volatile uint32_t * const s_blink       = (volatile uint32_t *)0x20000728; /* blink/aux counter (u32 access) */
+/* indicator-pattern state machine (owned by timer.c) */
+static volatile uint8_t  * const s_ind_flags    = (volatile uint8_t  *)0x20000484;
+static volatile uint8_t  * const s_ind_repeat   = (volatile uint8_t  *)0x20000485;
+static volatile int16_t  * const s_ind_timer    = (volatile int16_t  *)0x20000486;
+static volatile uint8_t  * const s_ind_substate = (volatile uint8_t  *)0x20000488;
+static volatile uint8_t  * const s_ind_pos      = (volatile uint8_t  *)0x20000489;
 
 /* flash log strings (materialised in src/strings.c) */
 extern const char s_charger_absent[], s_charger_load_absent[], s_charger_load_exist[], s_charger_voltage_l[], s_dac_over_range[], s_dd_on[], s_no_load_bypass_off[], s_no_load_d[], s_no_load_d2[], s_state6_charge_mode[], s_state6_charger_present[], s_state6_powerdown_a[], s_state6_powerdown_b[], s_state6_progress[], s_vout_under_20v_3s[], s_vout_under_30v_30min[];
@@ -31,12 +82,12 @@ void FUN_0800823c(void);
  * 1 s uptime counters. Every transition is a tail-branch (call + return). */
 void bms_state_1(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint16_t * const req   = (volatile uint16_t *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint16_t * const req   = (volatile uint16_t *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -97,13 +148,13 @@ void bms_state_1(void)
                 return;
             }
         }
-        if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {    /* charger present */
-            volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
+        if (*s_charger_v > 0x4e1f) {    /* charger present */
+            volatile uint16_t * const cnt = s_chg_cnt;
             uint16_t v = *cnt;
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
                 *cnt = 0;
-                if ((*(volatile uint32_t *)0x20000724 & 0x1000000u) != 0) {  /* bit24 */
+                if ((*(volatile uint32_t *)s_idblk & 0x1000000u) != 0) {  /* bit24 */
                     boot_enter_operating(0);
                     return;
                 }
@@ -115,7 +166,7 @@ void bms_state_1(void)
                 return;
             }
         } else {
-            *(volatile uint16_t *)0x200006a8 = 0;
+            *s_chg_cnt = 0;
         }
         charger_shipping_check();
         extend_io_update();
@@ -124,14 +175,14 @@ void bms_state_1(void)
 
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
-        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR */
-        coulomb_integrate(*(volatile uint32_t *)0x20000424);
+        **IWDG_KICK = 0x0000AAAAu;   /* IWDG_KR */
+        coulomb_integrate(*s_cur_avg);
     }
 
     if ((*s_tick & 8) != 0) {
         *s_tick &= (uint8_t)~8u;
-        (*(volatile uint32_t *)0x2000072c)++;
-        (*(volatile uint32_t *)0x20000594)++;
+        (*s_evtlog_en)++;
+        (*s_uptime)++;
     }
 }
 
@@ -147,13 +198,13 @@ void bms_state_1(void)
  * tail ticks close it out. */
 void bms_state_2(void)
 {
-    volatile uint16_t * const mode   = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault  = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const fault2 = (volatile uint8_t  *)0x200006e4;
-    volatile uint16_t * const vsum   = (volatile uint16_t *)0x200003ce;
+    volatile uint16_t * const mode   = s_mode;
+    volatile uint16_t * const fault  = s_fault;
+    volatile uint8_t  * const fault2 = (volatile uint8_t  *)S_ALARM;
+    volatile uint16_t * const vsum   = s_cell_sum;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -214,87 +265,87 @@ void bms_state_2(void)
         }
 
         if (*vsum > 0x752f) {                            /* pack sum above the discharge floor */
-            if (*(volatile uint8_t *)0x20000412 == 2 &&
-                *(volatile uint8_t *)0x20000220 != 0) {
-                (*(volatile uint8_t *)0x20000220)--;
-            } else if (*(volatile uint32_t *)0x200003a8 < 200) {   /* not charging hard */
-                gpio_bit_write(0x48000400, 0x200, 0);   /* PB9 = 0 */
-                if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {    /* charger present */
-                    *(volatile uint16_t *)0x200006a2 = 0;
-                    *(volatile uint16_t *)0x200006a8 = 0;
+            if (*s_fet_ctrl == 2 &&
+                *s_dsg_hold != 0) {
+                (*s_dsg_hold)--;
+            } else if (*s_chg_i < 200) {   /* not charging hard */
+                gpio_bit_write(GPIOB_BASE, 0x200, 0);   /* PB9 = 0 */
+                if (*s_charger_v > 0x4e1f) {    /* charger present */
+                    *s_noload_cnt = 0;
+                    *s_chg_cnt = 0;
                     if ((*mode & (1u << 12)) != 0) {     /* mode bit12 */
-                        if (*(volatile uint16_t *)0x200001ae < 300) {
-                            (*(volatile uint16_t *)0x2000069e)++;
-                            if (*(volatile uint16_t *)0x2000069e % 0x14 == 0) {
+                        if (*s_cell1_mv < 300) {
+                            (*s_noload2_cnt)++;
+                            if (*s_noload2_cnt % 0x14 == 0) {
                                 log_print(2, s_no_load_d2,
-                                          (*(volatile uint16_t *)0x2000069e) / 0x14);
+                                          (*s_noload2_cnt) / 0x14);
                             }
-                            if (*(volatile uint16_t *)0x2000069e > 199) {
-                                *(volatile uint16_t *)0x2000069e = 0;
+                            if (*s_noload2_cnt > 199) {
+                                *s_noload2_cnt = 0;
                                 *mode &= 0xefffu;        /* clear mode bit12 */
                                 log_print(2, s_no_load_bypass_off);
                                 boot_mode_enter(2);
                                 return;
                             }
                         } else {
-                            *(volatile uint16_t *)0x2000069e = 0;
+                            *s_noload2_cnt = 0;
                         }
                     } else {
-                        *(volatile uint16_t *)0x2000069e = 0;
+                        *s_noload2_cnt = 0;
                     }
                 } else {                                  /* charger absent */
-                    *(volatile uint16_t *)0x2000069e = 0;
-                    uint16_t v = *(volatile uint16_t *)0x200006a8;
-                    *(volatile uint16_t *)0x200006a8 = (uint16_t)(v + 1);
+                    *s_noload2_cnt = 0;
+                    uint16_t v = *s_chg_cnt;
+                    *s_chg_cnt = (uint16_t)(v + 1);
                     if ((uint16_t)(v + 1) > 0x3b) {
-                        *(volatile uint16_t *)0x200006a8 = 0;
+                        *s_chg_cnt = 0;
                         log_print(2, s_charger_absent);
                         boot_mode_enter(1);
                         return;
                     }
                 }
             } else {                                      /* charging hard */
-                gpio_bit_write(0x48000400, 0x200, 1);    /* PB9 = 1 */
-                *(volatile uint16_t *)0x200006a2 = 0;
-                *(volatile uint16_t *)0x200006a8 = 0;
-                *(volatile uint16_t *)0x2000069e = 0;
+                gpio_bit_write(GPIOB_BASE, 0x200, 1);    /* PB9 = 1 */
+                *s_noload_cnt = 0;
+                *s_chg_cnt = 0;
+                *s_noload2_cnt = 0;
             }
 
-            if (gpio_bit_read(0x48000400, 0x100) == 0) { /* PB8 low */
+            if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) { /* PB8 low */
                 if ((*mode & (1u << 8)) != 0) {          /* mode bit8 */
-                    *(volatile uint8_t *)0x20000710 = 0;
+                    *s_btn_deb = 0;
                 } else {
-                    uint8_t b = *(volatile uint8_t *)0x20000710;
-                    *(volatile uint8_t *)0x20000710 = (uint8_t)(b + 1);
+                    uint8_t b = *s_btn_deb;
+                    *s_btn_deb = (uint8_t)(b + 1);
                     if ((uint8_t)(b + 1) > 3) {
-                        *(volatile uint8_t *)0x20000710 = 0;
+                        *s_btn_deb = 0;
                         *mode |= 0x100u;
                         boot_mode_enter(3);
                         return;
                     }
                 }
             } else if ((*mode & (1u << 8)) != 0) {       /* PB8 high, mode bit8 */
-                uint8_t b = *(volatile uint8_t *)0x20000710;
-                *(volatile uint8_t *)0x20000710 = (uint8_t)(b + 1);
+                uint8_t b = *s_btn_deb;
+                *s_btn_deb = (uint8_t)(b + 1);
                 if ((uint8_t)(b + 1) > 3) {
-                    *(volatile uint8_t *)0x20000710 = 0;
+                    *s_btn_deb = 0;
                     *mode &= 0xfeffu;
                     *mode &= 0xf7ffu;
                 }
             } else {
-                *(volatile uint8_t *)0x20000710 = 0;
+                *s_btn_deb = 0;
             }
         } else {                                          /* pack sum at/below the floor */
-            if ((*(volatile uint8_t *)0x20000412 & 2) != 2) {
-                *(volatile uint8_t *)0x20000412 = 2;
-                fedl5236_command_write(9, *(volatile uint8_t *)0x20000412);
+            if ((*s_fet_ctrl & 2) != 2) {
+                *s_fet_ctrl = 2;
+                fedl5236_command_write(9, *s_fet_ctrl);
             }
-            *(volatile uint8_t *)0x20000220 = 0;
-            gpio_bit_write(0x48000400, 0x200, 0);        /* PB9 = 0 */
+            *s_dsg_hold = 0;
+            gpio_bit_write(GPIOB_BASE, 0x200, 0);        /* PB9 = 0 */
         }
 
-        if (*vsum > 0x752f || *(volatile uint32_t *)0x200003a8 < 0x33) {
-            if (*vsum > 0x752f || *(volatile uint32_t *)0x200003a8 > 0x31) {
+        if (*vsum > 0x752f || *s_chg_i < 0x33) {
+            if (*vsum > 0x752f || *s_chg_i > 0x31) {
                 charger_shipping_check();
             } else {
                 charger_shipping_check();
@@ -307,16 +358,16 @@ void bms_state_2(void)
 
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
-        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR */
+        **IWDG_KICK = 0x0000AAAAu;   /* IWDG_KR */
         if ((*mode & (1u << 12)) == 0) {                    /* mode bit12 clear */
-            coulomb_integrate(*(volatile uint32_t *)0x20000424);
+            coulomb_integrate(*s_cur_avg);
         }
     }
 
     if ((*s_tick & 8) != 0) {
         *s_tick &= (uint8_t)~8u;
-        (*(volatile uint32_t *)0x2000072c)++;
-        (*(volatile uint32_t *)0x20000594)++;
+        (*s_evtlog_en)++;
+        (*s_uptime)++;
     }
 }
 
@@ -343,12 +394,12 @@ void bms_state_2(void)
  */
 void bms_state_3(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint32_t * const ext   = (volatile uint32_t *)0x200006e4;  /* protection-request mask */
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint32_t * const ext   = (volatile uint32_t *)S_ALARM;  /* protection-request mask */
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         bms_state_noop();
     }
@@ -413,15 +464,15 @@ void bms_state_3(void)
 
         /* charger present (>20000 mV) resets the absent counter; absent for 40
          * slow ticks -> log & enter boot mode (2 if pack<200 mV, else 3). */
-        if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
-            volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
+        if (*s_charger_v > 0x4e1f) {
+            volatile uint16_t * const cnt = s_chg_cnt;
             uint16_t v = *cnt;
             *cnt = (uint16_t)(v + 1);
-            *(volatile uint16_t *)0x200006a2 = 0;
+            *s_noload_cnt = 0;
             if ((uint16_t)(v + 1) > 0x27) {
                 *cnt = 0;
-                log_print(2, s_charger_voltage_l, *(volatile uint32_t *)0x2000042c);
-                if (*(volatile uint16_t *)0x200001ae < 200) {
+                log_print(2, s_charger_voltage_l, *s_charger_v);
+                if (*s_cell1_mv < 200) {
                     log_print(2, s_charger_load_absent);
                     boot_mode_enter(2);
                     bms_state_noop();
@@ -433,29 +484,29 @@ void bms_state_3(void)
                 return;
             }
         } else {
-            *(volatile uint16_t *)0x200006a8 = 0;
+            *s_chg_cnt = 0;
         }
 
         /* "No Load" report every 20 of the discharge-idle slow ticks. */
-        if (*(volatile uint32_t *)0x20000420 < 200) {
-            volatile uint16_t * const noload = (volatile uint16_t *)0x200006a2;
+        if (*s_dsg_i < 200) {
+            volatile uint16_t * const noload = s_noload_cnt;
             /* FUN_0800823c is the divmod helper; only its remainder is used. */
             if ((uint16_t)(*noload % 0x14) == 0 && *noload > 0x13) {
                 log_print(2, s_no_load_d, *noload / 0x14);
             }
         } else {
-            *(volatile uint16_t *)0x200006a2 = 0;
+            *s_noload_cnt = 0;
         }
 
         /* PB8 (0x100) edge-debounced output-enable (mode bit8). */
-        if (gpio_bit_read(0x48000400, 0x100) == 0) {
+        if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {
             if ((*mode & (1u << 8)) != 0) {
-                *(volatile uint8_t *)0x20000710 = 0;
+                *s_btn_deb = 0;
             } else {
-                uint8_t b = *(volatile uint8_t *)0x20000710;
-                *(volatile uint8_t *)0x20000710 = (uint8_t)(b + 1);
+                uint8_t b = *s_btn_deb;
+                *s_btn_deb = (uint8_t)(b + 1);
                 if ((uint8_t)(b + 1) > 3) {
-                    *(volatile uint8_t *)0x20000710 = 0;
+                    *s_btn_deb = 0;
                     *mode |= 0x100u;
                     boot_mode_enter(1);
                     bms_state_noop();
@@ -463,15 +514,15 @@ void bms_state_3(void)
                 }
             }
         } else if ((*mode & (1u << 8)) != 0) {
-            uint8_t b = *(volatile uint8_t *)0x20000710;
-            *(volatile uint8_t *)0x20000710 = (uint8_t)(b + 1);
+            uint8_t b = *s_btn_deb;
+            *s_btn_deb = (uint8_t)(b + 1);
             if ((uint8_t)(b + 1) > 3) {
-                *(volatile uint8_t *)0x20000710 = 0;
+                *s_btn_deb = 0;
                 *mode &= 0xfeffu;
                 *mode &= 0xf7ffu;
             }
         } else {
-            *(volatile uint8_t *)0x20000710 = 0;
+            *s_btn_deb = 0;
         }
 
         charger_shipping_check();
@@ -480,21 +531,21 @@ void bms_state_3(void)
         /* DD-on: when mode bit10 is set, after two slow ticks drop PB0 / raise
          * PB11, pulse, report, and reset the no-load counter. */
         if ((*mode & (1u << 10)) != 0) {
-            int8_t c = (int8_t)*(volatile uint8_t *)0x20000720;
-            *(volatile uint8_t *)0x20000720 = (uint8_t)(c + 1);
+            int8_t c = (int8_t)*s_ddon_cnt;
+            *s_ddon_cnt = (uint8_t)(c + 1);
             if ((int8_t)(c + 1) == 2) {
-                *(volatile uint8_t *)0x20000720 = 0;
-                gpio_bit_write(0x48000400, 1, 0);       /* PB0 = 0 */
-                gpio_bit_write(0x48000400, 0x800, 1);   /* PB11 = 1 */
+                *s_ddon_cnt = 0;
+                gpio_bit_write(GPIOB_BASE, 1, 0);       /* PB0 = 0 */
+                gpio_bit_write(GPIOB_BASE, 0x800, 1);   /* PB11 = 1 */
                 bypass_fet_off();
                 log_print(2, s_dd_on);
-                *(volatile uint16_t *)0x200006a2 = 0;
+                *s_noload_cnt = 0;
             }
         }
 
         /* shipping when CFG+0x5a config byte is clear. */
-        if (*(volatile int8_t *)(0x200004d0 + 0x5a) == 0) {
-            *(volatile uint32_t *)0x20000724 |= 0x1000000u;   /* mode bit24 */
+        if (*(volatile int8_t *)(CFG + 0x5a) == 0) {
+            *(volatile uint32_t *)s_idblk |= 0x1000000u;   /* mode bit24 */
             shipping_enter();
             bms_state_noop();
             return;
@@ -505,8 +556,8 @@ void bms_state_3(void)
     /* --- bit2: IWDG kick + current-average service --- */
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
-        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;       /* IWDG_KR */
-        coulomb_integrate(*(volatile uint32_t *)0x20000424);
+        **IWDG_KICK = 0x0000AAAAu;       /* IWDG_KR */
+        coulomb_integrate(*s_cur_avg);
     }
 
     /* --- bit3: 1 s uptime + DAC/Vout regulation cascade --- */
@@ -515,10 +566,10 @@ void bms_state_3(void)
         return;
     }
     *s_tick &= (uint8_t)~8u;
-    (*(volatile uint32_t *)0x2000072c)++;
+    (*s_evtlog_en)++;
     {
-        uint32_t up = *(volatile uint32_t *)0x20000594;
-        *(volatile uint32_t *)0x20000594 = up + 1;
+        uint32_t up = *s_uptime;
+        *s_uptime = up + 1;
         if (up + 1 > 0xb3) {                          /* >= 180 s -> boot mode 1 */
             boot_mode_enter(1);
             bms_state_noop();
@@ -526,13 +577,13 @@ void bms_state_3(void)
         }
     }
 
-    volatile uint16_t * const pv = (volatile uint16_t *)0x200001ae;  /* pack voltage */
-    volatile uint8_t  * const ts = (volatile uint8_t  *)0x20000218;  /* [0]=mos [1]=chg [2]=dsg TS */
+    volatile uint16_t * const pv = s_cell1_mv;  /* pack voltage */
+    volatile uint8_t  * const ts = (volatile uint8_t  *)S_TS;  /* [0]=mos [1]=chg [2]=dsg TS */
 
-    if (*(volatile uint32_t *)0x20000202 > 0x752f) {  /* charger > 30000 mV */
+    if (*(volatile uint32_t *)S_CHGDET_V > 0x752f) {  /* charger > 30000 mV */
         if (ts[0] < 0x79 && ts[1] < 0x6d && ts[2] < 0x6d) {
             if (ts[0] < 0x73 && ts[1] < 0x69 && ts[2] < 0x69) {
-                *(volatile uint16_t *)0x200006bc = 0;
+                *s_softcnt_bc = 0;
                 vout_bypass_off();
                 bms_state_noop();
                 return;
@@ -540,7 +591,7 @@ void bms_state_3(void)
             if ((*mode & (1u << 6)) != 0) {                  /* charge allowed */
                 if (*pv > 0xbb8) {                           /* > 3000 mV */
                     if ((*mode & (1u << 7)) == 0) {          /* discharge not active */
-                        uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+                        uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
                         if (dac > 0xce3) {
                             vout_bypass_off();
                             *mode |= 0x80u;
@@ -558,7 +609,7 @@ void bms_state_3(void)
                         return;
                     }
                 } else if (*pv <= 0xaef) {                   /* <= 2799 mV */
-                    uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+                    uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
                     if (dac == 0) {
                         vout_bypass_off();
                         bms_state_noop();
@@ -577,7 +628,7 @@ void bms_state_3(void)
         } else if (*pv > 0xbb8) {
             if ((*mode & (1u << 7)) == 0) {                  /* discharge not active */
                 if ((*mode & (1u << 6)) != 0) {              /* charge allowed */
-                    uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+                    uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
                     if (dac > 0xce3) {
                         vout_bypass_off();
                         *mode |= 0x80u;
@@ -593,7 +644,7 @@ void bms_state_3(void)
                 }
             }
         } else if ((*mode & (1u << 6)) != 0 && *pv <= 0xaef) {
-            uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+            uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
             if (dac == 0) {
                 vout_bypass_off();
             } else if (dac < 5) {
@@ -605,10 +656,10 @@ void bms_state_3(void)
         return;
     }
 
-    if (*(volatile uint32_t *)0x20000202 > 0x4e1f) {  /* charger > 20000 mV */
+    if (*(volatile uint32_t *)S_CHGDET_V > 0x4e1f) {  /* charger > 20000 mV */
         if (*pv < 0x4b1) {                            /* < 1201 mV */
             if ((*mode & (1u << 6)) != 0 && *pv <= 0x31f) {   /* charge allowed & <= 799 mV */
-                uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+                uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
                 if (dac == 0) {
                     vout_bypass_off();
                 } else if (dac < 5) {
@@ -619,7 +670,7 @@ void bms_state_3(void)
             }
         } else if ((*mode & (1u << 7)) == 0) {        /* discharge not active */
             if ((*mode & (1u << 6)) != 0) {           /* charge allowed */
-                uint16_t dac = *(volatile uint16_t *)(0x20000254 + 2);
+                uint16_t dac = *(volatile uint16_t *)(S_DAC_CMP + 2);
                 if (dac == 0x5b4) {
                     vout_set_dac(0x5dc);
                 } else if (dac > 0xce3) {
@@ -639,11 +690,11 @@ void bms_state_3(void)
 
         /* <30V-for-30min shutdown timer (0x707 = 1799 ticks). */
         {
-            uint16_t v = *(volatile uint16_t *)0x200006bc;
-            *(volatile uint16_t *)0x200006bc = (uint16_t)(v + 1);
+            uint16_t v = *s_softcnt_bc;
+            *s_softcnt_bc = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x707) {
-                *(volatile uint16_t *)0x200006bc = 0;
-                if (*(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+                *s_softcnt_bc = 0;
+                if (*s_charger_v <= 0x4e1f) {
                     log_print(2, s_vout_under_30v_30min);
                     shipping_enter();
                     bms_state_noop();
@@ -659,15 +710,15 @@ void bms_state_3(void)
 
     /* charger <= 20000 mV: <20V-for-3s shutdown timer. */
     {
-        uint16_t v = *(volatile uint16_t *)0x200006bc;
-        *(volatile uint16_t *)0x200006bc = (uint16_t)(v + 1);
+        uint16_t v = *s_softcnt_bc;
+        *s_softcnt_bc = (uint16_t)(v + 1);
         if ((uint16_t)(v + 1) < 3) {
             bms_state_noop();
             return;
         }
     }
-    *(volatile uint16_t *)0x200006bc = 0;
-    if (*(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+    *s_softcnt_bc = 0;
+    if (*s_charger_v <= 0x4e1f) {
         log_print(2, s_vout_under_20v_3s);
         shipping_enter();
         bms_state_noop();
@@ -694,12 +745,12 @@ void bms_state_3(void)
  * (2 for charge-fault classes, 3 for the recoverable class). */
 void bms_state_4(void)
 {
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
-    volatile uint8_t  * const cls  = (volatile uint8_t  *)0x200004b4; /* fault class */
-    volatile uint8_t  * const state = (volatile uint8_t  *)0x200005ac;
-    volatile uint8_t  * const retry = (volatile uint8_t  *)0x20000710;
-    volatile uint8_t  * const flags = (volatile uint8_t  *)0x20000484;
-    volatile int16_t  * const tmr   = (volatile int16_t  *)0x20000486;
+    volatile uint16_t * const mode = s_mode;
+    volatile uint8_t  * const cls  = s_fault_class; /* fault class */
+    volatile uint8_t  * const state = s_state;
+    volatile uint8_t  * const retry = s_btn_deb;
+    volatile uint8_t  * const flags = s_ind_flags;
+    volatile int16_t  * const tmr   = s_ind_timer;
 
     bms_core_update();
 
@@ -724,7 +775,7 @@ slow_tick:
             *state = 4;
         }
 
-        if (gpio_bit_read(0x48000400, 0x100) == 0) {
+        if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {
             if (*mode & (1u << 8)) {
                 *retry = 0;
             } else {
@@ -734,7 +785,7 @@ slow_tick:
                     *retry = 0;
                     *mode |= 0x100u;          /* set bit8 */
                     *mode &= 0xf7ffu;         /* clear bit11 */
-                    *(volatile uint8_t *)0x200006e5 = 0xff;
+                    *s_led_shadow = 0xff;
                     *mode &= 0xefffu;         /* clear bit12 */
                     *state = 5;
                     extend_io_update();
@@ -749,8 +800,8 @@ slow_tick:
                 *retry = 0;
                 *mode &= 0xf7ffu;             /* clear bit11 */
                 *mode &= 0xfeffu;             /* clear bit8 */
-                *(volatile uint32_t *)0x20000728 = 0;
-                *(volatile uint8_t *)0x200006e5 = 0xff;
+                *s_blink = 0;
+                *s_led_shadow = 0xff;
                 *mode &= 0xefffu;             /* clear bit12 */
                 uint8_t c = *cls;
                 if (c == 2) {
@@ -771,16 +822,16 @@ slow_tick:
         }
 
         if ((*flags & 1) == 0 ||
-            *(volatile uint32_t *)0x2000072c == 0 ||
-            *(volatile uint16_t *)0x20000202 > 499) {
+            *s_evtlog_en == 0 ||
+            *(volatile uint16_t *)S_CHGDET_V > 499) {
             goto tail;
         }
         *flags &= (uint8_t)~1u;
         status_frame_emit();
-        if (*(volatile uint32_t *)0x2000072c > 4) {
+        if (*s_evtlog_en > 4) {
             goto charge_off;
         }
-        gpio_bit_write(0x48000000, 0x200, 1);
+        gpio_bit_write(GPIOA_BASE, 0x200, 1);
         *tmr = 0x65;
         *flags |= 2u;
     } else {
@@ -820,35 +871,35 @@ slow_tick:
                     goto slow_tick;
                 }
                 *flags &= (uint8_t)~8u;
-                uint8_t rc = *(volatile uint8_t *)0x20000485;
-                *(volatile uint8_t *)0x20000485 = (uint8_t)(rc - 1);
+                uint8_t rc = *s_ind_repeat;
+                *s_ind_repeat = (uint8_t)(rc - 1);
                 if ((uint8_t)(rc - 1) == 0) {
                     uint8_t streak = 0;
                     do {
                         while ((*s_tick & 1) == 0) {
                         }
                         *s_tick &= (uint8_t)~1u;
-                        if (gpio_bit_read(0x48000400, 0x100) == 1) {
+                        if (gpio_bit_read(GPIOB_BASE, 0x100) == 1) {
                             streak = (uint8_t)(streak + 1);
                         } else {
                             streak = 0;
                         }
                     } while (streak < 0x32);
                     *mode &= 0xf7ffu;         /* clear bit11 */
-                    gpio_bit_write(0x48000000, 0x80, 0);
-                    if (*(volatile uint16_t *)0x200003ce <= 0x752f) {
+                    gpio_bit_write(GPIOA_BASE, 0x80, 0);
+                    if (*s_cell_sum <= 0x752f) {
                         boot_enter_operating(0);
                         return;
                     }
-                    if (*(volatile uint8_t *)0x200004b4 != 1) {
-                        if (*(volatile uint8_t *)0x200004b4 == 3) {
+                    if (*s_fault_class != 1) {
+                        if (*s_fault_class == 3) {
                             boot_enter_operating(1);
                             return;
                         }
                         boot_enter_operating(0);
                         return;
                     }
-                    if (*(volatile uint32_t *)0x20000724 & (1u << 24)) {
+                    if (*(volatile uint32_t *)s_idblk & (1u << 24)) {
                         bms_state_idle();
                         return;
                     }
@@ -856,17 +907,17 @@ slow_tick:
                     return;
                 }
                 status_frame_emit();
-                *(volatile uint8_t *)0x20000489 = 0;
+                *s_ind_pos = 0;
             }
         }
 charge_off:
-        gpio_bit_write(0x48000000, 0x200, 0);
-        timer_start_it((uint32_t *)0x20000738);
+        gpio_bit_write(GPIOA_BASE, 0x200, 0);
+        timer_start_it((uint32_t *)TIM7_HANDLE);
         *flags &= (uint8_t)~2u;
-        *(volatile uint8_t *)0x20000488 = 1;
+        *s_ind_substate = 1;
         *tmr = 4;
     }
-    gpio_bit_write(0x48000000, 0x80, 1);
+    gpio_bit_write(GPIOA_BASE, 0x80, 1);
 tail:
     tick_uptime();
 }
@@ -886,7 +937,7 @@ tail:
  * power-down the part deliberately spins forever (hard fault latch). */
 void bms_state_6(void)
 {
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+    volatile uint16_t * const mode = s_mode;
 
     bms_core_update();
 
@@ -901,12 +952,12 @@ void bms_state_6(void)
     if ((*s_tick & 2) != 0) {                            /* slow tick (bit1) */
         *s_tick &= (uint8_t)~2u;
         alarm_scan_b5();
-        if (gpio_bit_read(0x48000400, 0x100) == 0) {     /* PB8 released */
+        if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {     /* PB8 released */
             if (!(*mode & 0x100)) {                       /* bit8 clear */
-                uint8_t v = *(volatile uint8_t *)0x20000710;
-                *(volatile uint8_t *)0x20000710 = (uint8_t)(v + 1);
+                uint8_t v = *s_btn_deb;
+                *s_btn_deb = (uint8_t)(v + 1);
                 if ((uint8_t)(v + 1) > 3) {
-                    *(volatile uint32_t *)0x2000072c = 0;
+                    *s_evtlog_en = 0;
                     log_print(2, s_state6_charge_mode);
                     uart_flush();
                     *mode |= 0x100u;
@@ -918,22 +969,22 @@ void bms_state_6(void)
             if (*mode & 0x100) {                          /* bit8 set */
                 *mode &= 0xfeffu;
             }
-            *(volatile uint8_t *)0x20000710 = 0;
+            *s_btn_deb = 0;
         }
 
-        if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {  /* charger voltage present */
-            *(volatile uint32_t *)0x2000072c = 0;
+        if (*s_charger_v > 0x4e1f) {  /* charger voltage present */
+            *s_evtlog_en = 0;
             log_print(2, s_state6_charger_present);
             uart_flush();
             boot_mode_enter(3);
             return;
         }
 
-        if (*(volatile uint32_t *)0x20000594 > 0x18) {    /* uptime past 0x18 */
+        if (*s_uptime > 0x18) {    /* uptime past 0x18 */
             uint8_t pass = 0;
             do {
                 uint16_t kick = 0;
-                gpio_bit_write(0x48000400, 0x1000, 1);    /* PB12 = 1 */
+                gpio_bit_write(GPIOB_BASE, 0x1000, 1);    /* PB12 = 1 */
                 log_print(2, s_state6_powerdown_a);
                 uart_flush();
                 fedl5236_powerdown(1);
@@ -947,13 +998,13 @@ void bms_state_6(void)
                     }
                     if ((*s_tick & 2) != 0) {
                         *s_tick &= (uint8_t)~2u;
-                        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;  /* IWDG_KR */
+                        **IWDG_KICK = 0x0000AAAAu;  /* IWDG_KR */
                     }
-                    got = gpio_bit_read(0x48000000, 0x800);
+                    got = gpio_bit_read(GPIOA_BASE, 0x800);
                 } while (got == 0 && kick <= 0x3e7);
-                if (gpio_bit_read(0x48000000, 0x800) == 1) {  /* PA11 latched */
-                    gpio_bit_write(0x48000400, 0x1000, 0);
-                    **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;
+                if (gpio_bit_read(GPIOA_BASE, 0x800) == 1) {  /* PA11 latched */
+                    gpio_bit_write(GPIOB_BASE, 0x1000, 0);
+                    **IWDG_KICK = 0x0000AAAAu;
                     for (;;) { }                          /* hard-fault hold */
                 }
                 kick = 0;
@@ -964,15 +1015,15 @@ void bms_state_6(void)
                     }
                     if ((*s_tick & 2) != 0) {
                         *s_tick &= (uint8_t)~2u;
-                        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;
+                        **IWDG_KICK = 0x0000AAAAu;
                     }
                 } while (kick <= 0x3e7);
                 pass = (uint8_t)(pass + 1);
             } while (pass < 3);
 
-            *(volatile uint8_t *)0x200005ac = 0xff;
+            *s_state = 0xff;
             *mode &= 0xefffu;                             /* clear bit12 */
-            *(volatile uint8_t *)0x200006e5 = 0;
+            *s_led_shadow = 0;
             extend_io_update();
 
             uint16_t kick = 0;
@@ -983,49 +1034,49 @@ void bms_state_6(void)
                 }
                 if ((*s_tick & 2) != 0) {
                     *s_tick &= (uint8_t)~2u;
-                    **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;
+                    **IWDG_KICK = 0x0000AAAAu;
                 }
             } while (kick <= 0x1387);
 
-            *(volatile uint8_t *)0x200005ac = 6;
+            *s_state = 6;
             extend_io_update();
-            *(volatile uint8_t *)0x20000710 = 0;
+            *s_btn_deb = 0;
             *mode &= 0xfeffu;                             /* clear bit8 */
 
             do {
                 if ((*s_tick & 1) != 0) {
                     *s_tick &= (uint8_t)~1u;
-                    if (gpio_bit_read(0x48000400, 0x100) == 0) {   /* PB8 released */
+                    if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {   /* PB8 released */
                         if (*mode & 0x100) {              /* bit8 set */
-                            *(volatile uint8_t *)0x20000710 = 0;
+                            *s_btn_deb = 0;
                         } else {
-                            uint8_t v = *(volatile uint8_t *)0x20000710;
-                            *(volatile uint8_t *)0x20000710 = (uint8_t)(v + 1);
+                            uint8_t v = *s_btn_deb;
+                            *s_btn_deb = (uint8_t)(v + 1);
                             if ((uint8_t)(v + 1) > 0x13) {
-                                *(volatile uint8_t *)0x20000710 = 0;
+                                *s_btn_deb = 0;
                                 *mode |= 0x100u;
                                 system_reset_request();
                             }
                         }
                     } else if (*mode & 0x100) {           /* PB8 held, bit8 set */
-                        uint8_t v = *(volatile uint8_t *)0x20000710;
-                        *(volatile uint8_t *)0x20000710 = (uint8_t)(v + 1);
+                        uint8_t v = *s_btn_deb;
+                        *s_btn_deb = (uint8_t)(v + 1);
                         if ((uint8_t)(v + 1) > 0x13) {
-                            *(volatile uint8_t *)0x20000710 = 0;
+                            *s_btn_deb = 0;
                             *mode &= 0xfeffu;             /* clear bit8 */
                         }
                     } else {
-                        *(volatile uint8_t *)0x20000710 = 0;
+                        *s_btn_deb = 0;
                     }
                 }
                 if ((*s_tick & 2) != 0) {
                     *s_tick &= (uint8_t)~2u;
-                    **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;
+                    **IWDG_KICK = 0x0000AAAAu;
                 }
             } while (!(*mode & 0x100));                   /* until bit8 set */
         }
 
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a2;
+        volatile uint16_t * const cnt = s_noload_cnt;
         uint16_t c = *cnt;
         *cnt = (uint16_t)(c + 1);
         if ((uint16_t)((c + 1) % 0x14) == 0 && *cnt > 0x13) {
@@ -1048,12 +1099,12 @@ void bms_state_6(void)
  * tick_uptime(). */
 void bms_state_7(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const prot  = (volatile uint8_t  *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint8_t  * const prot  = (volatile uint8_t  *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1087,8 +1138,8 @@ void bms_state_7(void)
             bms_enter_ov2_record();
             return;
         }
-        if (*(volatile uint32_t *)0x20000420 > 199 &&
-            (*(volatile uint8_t *)0x20000412 & 1) == 1) {
+        if (*s_dsg_i > 199 &&
+            (*s_fet_ctrl & 1) == 1) {
             bms_enter_idle3();
             return;
         }
@@ -1111,11 +1162,11 @@ void bms_state_7(void)
  * state 7 inverts that and uses bms_enter_ovp2. */
 void bms_state_8(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const boot  = (volatile uint16_t *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const boot  = (volatile uint16_t *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1149,8 +1200,8 @@ void bms_state_8(void)
             bms_enter_ov2_record();
             return;
         }
-        if (*(volatile uint32_t *)0x20000420 > 199 &&
-            (*(volatile uint8_t *)0x20000412 & 1) == 1) {
+        if (*s_dsg_i > 199 &&
+            (*s_fet_ctrl & 1) == 1) {
             bms_enter_idle3();
             return;
         }
@@ -1173,10 +1224,10 @@ void bms_state_8(void)
  * charger_shipping_check, extend_io_update, AFE status poll, then tick_uptime. */
 void bms_state_9(void)
 {
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+    volatile uint16_t * const mode = s_mode;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1205,15 +1256,15 @@ void bms_state_9(void)
         *s_tick &= (uint8_t)~2u;
         alarm_scan_b5();
         alarm_scan_b7();
-        if (*(volatile uint16_t *)0x200006e4 != 0 &&
-            (((*(volatile uint16_t *)0x200006e4 & 0x20) != 0) ||
-             ((*(volatile uint16_t *)0x200006e4 & 0x40) != 0) ||
-             ((*(volatile uint16_t *)0x200006e4 & 0x80) != 0))) {
+        if (*(volatile uint16_t *)S_ALARM != 0 &&
+            (((*(volatile uint16_t *)S_ALARM & 0x20) != 0) ||
+             ((*(volatile uint16_t *)S_ALARM & 0x40) != 0) ||
+             ((*(volatile uint16_t *)S_ALARM & 0x80) != 0))) {
             bms_enter_ov2_record();
             return;
         }
-        if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
-            volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
+        if (*s_charger_v > 0x4e1f) {
+            volatile uint16_t * const cnt = s_chg_cnt;
             uint16_t v = *cnt;
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
@@ -1222,7 +1273,7 @@ void bms_state_9(void)
                 return;
             }
         } else {
-            *(volatile uint16_t *)0x200006a8 = 0;
+            *s_chg_cnt = 0;
         }
         charger_shipping_check();
         extend_io_update();
@@ -1238,11 +1289,11 @@ void bms_state_9(void)
  * extend-IO/charger refresh with the "charger absent for 20 ticks" handoff. */
 void bms_state_10(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1271,23 +1322,23 @@ void bms_state_10(void)
         *s_tick &= (uint8_t)~2u;
         alarm_scan_b5();
         alarm_scan_b7();
-        if (*(volatile uint16_t *)0x200006e4 != 0 &&
-            (((*(volatile uint16_t *)0x200006e4 & 0x20) != 0) ||   /* bit5 */
-             ((*(volatile uint16_t *)0x200006e4 & 0x40) != 0) ||   /* bit6 */
-             ((*(volatile uint16_t *)0x200006e4 & 0x80) != 0))) {  /* bit7 */
+        if (*(volatile uint16_t *)S_ALARM != 0 &&
+            (((*(volatile uint16_t *)S_ALARM & 0x20) != 0) ||   /* bit5 */
+             ((*(volatile uint16_t *)S_ALARM & 0x40) != 0) ||   /* bit6 */
+             ((*(volatile uint16_t *)S_ALARM & 0x80) != 0))) {  /* bit7 */
             bms_enter_ov2_record();
             return;
         }
-        if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
-            uint16_t v = *(volatile uint16_t *)0x200006a8;
-            *(volatile uint16_t *)0x200006a8 = (uint16_t)(v + 1);
+        if (*s_charger_v > 0x4e1f) {
+            uint16_t v = *s_chg_cnt;
+            *s_chg_cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x13) {
-                *(volatile uint16_t *)0x200006a8 = 0;
+                *s_chg_cnt = 0;
                 boot_enter_operating(0);
                 return;
             }
         } else {
-            *(volatile uint16_t *)0x200006a8 = 0;
+            *s_chg_cnt = 0;
         }
         charger_shipping_check();
         extend_io_update();
@@ -1305,12 +1356,12 @@ void bms_state_10(void)
  * the uptime tick. */
 void bms_state_11(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
 
     bms_core_update();
 
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1336,7 +1387,7 @@ void bms_state_11(void)
                 return;
             }
             if ((*fault & 0x10) == 0) {
-                if (*(volatile uint32_t *)0x20000420 > 199) {
+                if (*s_dsg_i > 199) {
                     bms_enter_idle3();
                     return;
                 }
@@ -1353,16 +1404,16 @@ void bms_state_11(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        if (*(volatile uint32_t *)0x20000420 > 199) {
+        if (*s_dsg_i > 199) {
             bms_enter_idle3();
             return;
         }
         alarm_scan_b5();
         alarm_scan_b6();
-        if (*(volatile uint8_t *)0x200006e4 != 0 &&
-            (((*(volatile uint8_t *)0x200006e4 & 0x20) != 0) ||
-             ((*(volatile uint8_t *)0x200006e4 & 0x40) != 0) ||
-             ((*(volatile uint8_t *)0x200006e4 & 0x80) != 0))) {
+        if (*(volatile uint8_t *)S_ALARM != 0 &&
+            (((*(volatile uint8_t *)S_ALARM & 0x20) != 0) ||
+             ((*(volatile uint8_t *)S_ALARM & 0x40) != 0) ||
+             ((*(volatile uint8_t *)S_ALARM & 0x80) != 0))) {
             bms_enter_ov2_record();
             return;
         }
@@ -1382,12 +1433,12 @@ void bms_state_11(void)
  * fault bit5 (0x20) here vs bit4 (0x10) there. */
 void bms_state_12(void)
 {
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const m6e4  = (volatile uint16_t *)0x200006e4;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const m6e4  = (volatile uint16_t *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1412,7 +1463,7 @@ void bms_state_12(void)
                 return;
             }
             if (!(*fault & 0x20)) {
-                if (*(volatile uint32_t *)0x20000420 > 199) {
+                if (*s_dsg_i > 199) {
                     bms_enter_idle3();
                     return;
                 }
@@ -1428,7 +1479,7 @@ void bms_state_12(void)
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        if (*(volatile uint32_t *)0x20000420 > 199) {
+        if (*s_dsg_i > 199) {
             bms_enter_idle3();
             return;
         }
@@ -1458,14 +1509,14 @@ void bms_state_12(void)
 void bms_state_13(void)
 {
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
     if ((*s_tick & 1) != 0) {
         *s_tick &= (uint8_t)~1u;
-        volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-        volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+        volatile uint16_t * const mode  = s_mode;
+        volatile uint16_t * const fault = s_fault;
         if (*mode & (1u << 4)) {
             *mode &= 0xffefu;
             if (*fault & (1u << 3)) {
@@ -1489,9 +1540,9 @@ void bms_state_13(void)
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
-        if (*(volatile uint32_t *)0x200003a8 < 200 ||
-            *(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+        volatile uint16_t * const cnt = s_chg_cnt;
+        if (*s_chg_i < 200 ||
+            *s_charger_v <= 0x4e1f) {
             *cnt = 0;
         } else {
             uint16_t v = *cnt;
@@ -1504,7 +1555,7 @@ void bms_state_13(void)
         }
         alarm_scan_b5();
         alarm_scan_b7();
-        volatile uint16_t * const sub = (volatile uint16_t *)0x200006e4;
+        volatile uint16_t * const sub = (volatile uint16_t *)S_ALARM;
         if (*sub != 0 &&
             ((*sub & (1u << 5)) || (*sub & (1u << 6)) || (*sub & (1u << 7)))) {
             bms_enter_ov2_record();
@@ -1527,13 +1578,13 @@ void bms_state_13(void)
  * the only difference is the idle test reads fault bit7 here vs bit6 there.) */
 void bms_state_14(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint16_t * const cnt   = (volatile uint16_t *)0x200006a8;
-    volatile uint8_t  * const trip  = (volatile uint8_t  *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint16_t * const cnt   = s_chg_cnt;
+    volatile uint8_t  * const trip  = (volatile uint8_t  *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1564,8 +1615,8 @@ void bms_state_14(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        if (*(volatile uint32_t *)0x200003a8 < 200 ||
-            *(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+        if (*s_chg_i < 200 ||
+            *s_charger_v <= 0x4e1f) {
             *cnt = 0;
         } else {
             uint16_t v = *cnt;
@@ -1601,15 +1652,15 @@ void bms_state_14(void)
 void bms_state_15(void)
 {
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
 
     if ((*s_tick & 1) != 0) {
         *s_tick &= (uint8_t)~1u;
-        volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-        volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+        volatile uint16_t * const mode  = s_mode;
+        volatile uint16_t * const fault = s_fault;
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 4) != 0) {            /* UVP1 */
@@ -1634,9 +1685,9 @@ void bms_state_15(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
-        if (*(volatile uint32_t *)0x200003a8 < 200 ||
-            *(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+        volatile uint16_t * const cnt = s_chg_cnt;
+        if (*s_chg_i < 200 ||
+            *s_charger_v <= 0x4e1f) {
             *cnt = 0;
         } else {
             uint16_t v = *cnt;
@@ -1649,7 +1700,7 @@ void bms_state_15(void)
         }
         alarm_scan_b5();
         alarm_scan_b7();
-        volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
+        volatile uint8_t * const fault2 = (volatile uint8_t *)S_ALARM;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 || (*fault2 & 0x40) != 0 || (*fault2 & 0x80) != 0)) {
             bms_enter_ov2_record();
@@ -1673,26 +1724,26 @@ void bms_state_15(void)
 void bms_state_16(void)
 {
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
 
     if ((*s_tick & 1) != 0) {
         *s_tick &= (uint8_t)~1u;
-        volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-        if (gpio_bit_read(0x48000400, 0x100) == 0) {       /* PB8 low */
-            uint8_t v = *(volatile uint8_t *)0x20000710;
-            *(volatile uint8_t *)0x20000710 = (uint8_t)(v + 1);
+        volatile uint16_t * const fault = s_fault;
+        if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {       /* PB8 low */
+            uint8_t v = *s_btn_deb;
+            *s_btn_deb = (uint8_t)(v + 1);
             if ((uint8_t)(v + 1) > 0x13) {
                 *fault &= 0xfdffu;                          /* clear bit9 */
                 bms_state_idle();
                 return;
             }
         } else {
-            *(volatile uint8_t *)0x20000710 = 0;
+            *s_btn_deb = 0;
         }
-        volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+        volatile uint16_t * const mode = s_mode;
         if ((*mode & 0x10) != 0) {
             *mode &= 0xffefu;
             if ((*fault & 4) != 0) {            /* UVP1 */
@@ -1713,9 +1764,9 @@ void bms_state_16(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
-        if (*(volatile uint32_t *)0x200003a8 < 200 ||
-            *(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+        volatile uint16_t * const cnt = s_chg_cnt;
+        if (*s_chg_i < 200 ||
+            *s_charger_v <= 0x4e1f) {
             *cnt = 0;
         } else {
             uint16_t v = *cnt;
@@ -1728,7 +1779,7 @@ void bms_state_16(void)
         }
         alarm_scan_b5();
         alarm_scan_b7();
-        volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
+        volatile uint8_t * const fault2 = (volatile uint8_t *)S_ALARM;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 || (*fault2 & 0x40) != 0 || (*fault2 & 0x80) != 0)) {
             bms_enter_ov2_record();
@@ -1753,22 +1804,22 @@ void bms_state_16(void)
  * does not pre-clear FAULT bit9 before the idle transition. */
 void bms_state_17(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
 
     bms_core_update();
 
     if ((*s_tick & 1) != 0) {
         *s_tick &= (uint8_t)~1u;
-        if (gpio_bit_read(0x48000400, 0x100) == 0) {       /* PB8 */
-            uint8_t v = *(volatile uint8_t *)0x20000710;
-            *(volatile uint8_t *)0x20000710 = (uint8_t)(v + 1);
+        if (gpio_bit_read(GPIOB_BASE, 0x100) == 0) {       /* PB8 */
+            uint8_t v = *s_btn_deb;
+            *s_btn_deb = (uint8_t)(v + 1);
             if ((uint8_t)(v + 1) > 0x13) {
                 bms_state_idle();
                 return;
             }
         } else {
-            *(volatile uint8_t *)0x20000710 = 0;
+            *s_btn_deb = 0;
         }
         if ((*mode & 0x10) != 0) {                          /* mode bit4 */
             *mode &= 0xffefu;
@@ -1798,9 +1849,9 @@ void bms_state_17(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a8;
-        if (*(volatile uint32_t *)0x200003a8 < 200 ||
-            *(volatile uint32_t *)0x2000042c <= 0x4e1f) {
+        volatile uint16_t * const cnt = s_chg_cnt;
+        if (*s_chg_i < 200 ||
+            *s_charger_v <= 0x4e1f) {
             *cnt = 0;
         } else {
             uint16_t v = *cnt;
@@ -1813,7 +1864,7 @@ void bms_state_17(void)
         }
         alarm_scan_b5();
         alarm_scan_b7();
-        volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
+        volatile uint8_t * const fault2 = (volatile uint8_t *)S_ALARM;
         if (*fault2 != 0 &&
             ((*fault2 & 0x20) != 0 ||                        /* bit5 */
              (*fault2 & 0x40) != 0 ||                        /* bit6 */
@@ -1839,13 +1890,13 @@ void bms_state_17(void)
  * the uptime tick. */
 void bms_state_18(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const ts    = (volatile uint8_t  *)0x20000218; /* +1 charge TS, +2 discharge TS */
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint8_t  * const ts    = (volatile uint8_t  *)S_TS; /* +1 charge TS, +2 discharge TS */
 
     bms_core_update();
 
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1880,12 +1931,12 @@ void bms_state_18(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        if (*(volatile uint32_t *)0x20000420 > 199) {
+        if (*s_dsg_i > 199) {
             bms_enter_idle3();
             return;
         }
         if (ts[1] < 0x53 && ts[2] < 0x53) {
-            volatile uint16_t * const cnt = (volatile uint16_t *)0x20000550;
+            volatile uint16_t * const cnt = s_tcnt_550;
             uint16_t v = *cnt;
             *cnt = (uint16_t)(v + 1);
             if ((uint16_t)(v + 1) > 0x1d) {
@@ -1893,14 +1944,14 @@ void bms_state_18(void)
                 return;
             }
         } else {
-            *(volatile uint16_t *)0x20000550 = 0;
+            *s_tcnt_550 = 0;
         }
         alarm_scan_b5();
         alarm_scan_b6();
-        if (*(volatile uint8_t *)0x200006e4 != 0 &&
-            (((*(volatile uint8_t *)0x200006e4 & 0x20) != 0) ||
-             ((*(volatile uint8_t *)0x200006e4 & 0x40) != 0) ||
-             ((*(volatile uint8_t *)0x200006e4 & 0x80) != 0))) {
+        if (*(volatile uint8_t *)S_ALARM != 0 &&
+            (((*(volatile uint8_t *)S_ALARM & 0x20) != 0) ||
+             ((*(volatile uint8_t *)S_ALARM & 0x40) != 0) ||
+             ((*(volatile uint8_t *)S_ALARM & 0x80) != 0))) {
             bms_enter_ov2_record();
             return;
         }
@@ -1930,14 +1981,14 @@ void bms_state_18(void)
  */
 void bms_state_19(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const ts    = (volatile uint8_t  *)0x20000218; /* +1 charge TS, +2 discharge TS */
-    volatile uint16_t * const ship  = (volatile uint16_t *)0x20000580;
-    volatile uint16_t * const flags = (volatile uint16_t *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint8_t  * const ts    = (volatile uint8_t  *)S_TS; /* +1 charge TS, +2 discharge TS */
+    volatile uint16_t * const ship  = s_tcnt_580;
+    volatile uint16_t * const flags = (volatile uint16_t *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -1972,7 +2023,7 @@ void bms_state_19(void)
 
     if ((*s_tick & 2) != 0) {                      /* slow tick (bit1) */
         *s_tick &= (uint8_t)~2u;
-        if (*(volatile uint32_t *)0x20000420 > 199) {
+        if (*s_dsg_i > 199) {
             bms_enter_idle3();
             return;
         }
@@ -2017,15 +2068,15 @@ void bms_state_19(void)
 void bms_state_20(void)
 {
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
 
     if ((*s_tick & 1) != 0) {
         *s_tick &= (uint8_t)~1u;
-        volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-        volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
+        volatile uint16_t * const mode  = s_mode;
+        volatile uint16_t * const fault = s_fault;
         if ((*mode & (1u << 4)) != 0) {
             *mode &= 0xffefu;
             if ((*fault & (1u << 3)) != 0) {
@@ -2046,8 +2097,8 @@ void bms_state_20(void)
 
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint8_t  * const ts  = (volatile uint8_t  *)0x20000218; /* +1 charge TS, +2 discharge TS */
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x20000584;
+        volatile uint8_t  * const ts  = (volatile uint8_t  *)S_TS; /* +1 charge TS, +2 discharge TS */
+        volatile uint16_t * const cnt = s_tcnt_584;
         if (ts[1] < 0x65 && ts[2] < 0x65) {
             uint16_t v = *cnt;
             *cnt = (uint16_t)(v + 1);
@@ -2061,7 +2112,7 @@ void bms_state_20(void)
         alarm_scan_b5();
         alarm_scan_b6();
         alarm_scan_b7();
-        volatile uint8_t * const fault2 = (volatile uint8_t *)0x200006e4;
+        volatile uint8_t * const fault2 = (volatile uint8_t *)S_ALARM;
         if (*fault2 != 0 &&
             ((*fault2 & (1u << 5)) != 0 ||
              (*fault2 & (1u << 6)) != 0 ||
@@ -2090,14 +2141,14 @@ void bms_state_20(void)
  * alarm_scan_b6, and the 1 ms fault cascade skips the idle/bit6 test. */
 void bms_state_21(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const ts    = (volatile uint8_t  *)0x20000218; /* +1 charge TS, +2 discharge TS */
-    volatile uint16_t * const cnt   = (volatile uint16_t *)0x200004ca;
-    volatile uint8_t  * const trip  = (volatile uint8_t  *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint8_t  * const ts    = (volatile uint8_t  *)S_TS; /* +1 charge TS, +2 discharge TS */
+    volatile uint16_t * const cnt   = s_tcnt_4ca;
+    volatile uint8_t  * const trip  = (volatile uint8_t  *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }
@@ -2163,14 +2214,14 @@ void bms_state_21(void)
  * 5/6/7 -> bms_enter_ov2_record), and the charger/IO/AFE refresh. Trailing uptime tick. */
 void bms_state_22(void)
 {
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const fault = (volatile uint16_t *)0x20000410;
-    volatile uint8_t  * const temp  = (volatile uint8_t  *)0x20000218;
-    volatile uint16_t * const cnt   = (volatile uint16_t *)0x20000588;
-    volatile uint16_t * const trip  = (volatile uint16_t *)0x200006e4;
+    volatile uint16_t * const mode  = s_mode;
+    volatile uint16_t * const fault = s_fault;
+    volatile uint8_t  * const temp  = (volatile uint8_t  *)S_TS;
+    volatile uint16_t * const cnt   = s_tcnt_588;
+    volatile uint16_t * const trip  = (volatile uint16_t *)S_ALARM;
 
     bms_core_update();
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    if (*s_ts_error != 0) {
         bms_enter_afe_latch();
         return;
     }

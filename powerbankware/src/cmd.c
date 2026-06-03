@@ -184,6 +184,26 @@ void cmd_dispatch(uint8_t channel, void *line_ptr, uint8_t len)
 
 static volatile uint16_t * const s_mode = (volatile uint16_t *)0x200006a0;
 
+/* ── GPIO bases ──────────────────────────────────────────────────────── */
+#define GPIOB_BASE   0x48000400u
+#define PIN_PB7      0x80u
+
+/* ── BMS state / calibration cells (SRAM, see docs/hardware.md) ──────── */
+#define ERRLOG          ((void *)0x200005b0)                   /* error-log / trace buf */
+#define S_ESN           ((void *)0x2000052e)                   /* 14-byte ESN           */
+#define S_FW_ID         ((void *)0x2000053c)                   /* 4-byte fw id          */
+static volatile uint16_t * const s_dsg_cal       = (volatile uint16_t *)0x2000023e;
+static volatile uint16_t * const s_chg_cal       = (volatile uint16_t *)0x2000023c;
+static volatile uint8_t  * const s_cal_flag      = (volatile uint8_t  *)0x2000022c;
+static volatile uint32_t * const s_cal_accum     = (volatile uint32_t *)0x20000250;
+static volatile uint32_t * const s_cal_target    = (volatile uint32_t *)0x20000228;
+static volatile uint32_t * const s_charger_mv    = (volatile uint32_t *)0x2000042c;
+static volatile uint16_t * const s_vout_meas     = (volatile uint16_t *)0x20000202; /* V offset base  */
+static volatile uint16_t * const s_iout_meas     = (volatile uint16_t *)0x200001ae; /* I offset base  */
+static volatile uint8_t  * const s_ts0_mirror    = (volatile uint8_t  *)0x2000020e;
+static volatile uint8_t  * const s_ts1_mirror    = (volatile uint8_t  *)0x2000021b;
+static volatile uint8_t  * const s_ts2_mirror    = (volatile uint8_t  *)0x20000205;
+
 extern const char s_iam_ap2[], s_done[], s_ok[], s_chg_cal_q[], s_dsg_cal_q[],
                   s_write_rtc[], s_charger_v_mv[];
 
@@ -231,7 +251,7 @@ static void cmd_reset_bms(const char *val, uint8_t vlen)
     (void)val;
     if (vlen != 0) return;
     bms_config_reset();
-    mem_zero((void *)0x200005b0, 0x40);
+    mem_zero(ERRLOG, 0x40);
     for (int i = 0; i <= 0x3e7; i++) {
         errlog_erase(i);
     }
@@ -243,9 +263,9 @@ static void cmd_pf(const char *val, uint8_t vlen)
     if (vlen != 1) return;
     if (CFG8(0x5c) == 0) return;
     if (val[0] != '0') return;
-    gpio_bit_write(0x48000400u, 0x80, 0);     /* GPIOB PB7 = 0 */
+    gpio_bit_write(GPIOB_BASE, PIN_PB7, 0);   /* GPIOB PB7 = 0 */
     CFG8(0x5c) = 0;
-    if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
+    if (*s_charger_mv > 0x4e1f) {
         boot_mode_enter(3);
     } else {
         boot_mode_enter(1);
@@ -275,9 +295,9 @@ static void cmd_cal_set(const char *val, uint8_t vlen, uint8_t status_off,
     uint32_t v = cmd_atoi(val, vlen);
     CFG16(status_off) = 0;
     *result_cell = 0;
-    *(volatile uint8_t  *)0x2000022c = 0;
-    *(volatile uint32_t *)0x20000250 = 0;
-    *(volatile uint32_t *)0x20000228 = v;
+    *s_cal_flag = 0;
+    *s_cal_accum = 0;
+    *s_cal_target = v;
     if (is_chg) {
         *s_mode = (uint16_t)((*s_mode | 0x4000) & ~0x8000u);
     } else {
@@ -288,34 +308,34 @@ static void cmd_cal_set(const char *val, uint8_t vlen, uint8_t status_off,
 
 static void cmd_chg_cal_set(const char *val, uint8_t vlen)
 {
-    cmd_cal_set(val, vlen, 0x56, (volatile uint16_t *)0x2000023e, 1);
+    cmd_cal_set(val, vlen, 0x56, s_dsg_cal, 1);
 }
 
 static void cmd_chg_cal_get(const char *val, uint8_t vlen)
 {
     (void)val;
     if (vlen != 0) return;
-    log_print(2, s_chg_cal_q, *(volatile uint16_t *)0x2000023e);
+    log_print(2, s_chg_cal_q, *s_dsg_cal);
 }
 
 static void cmd_dsg_cal_set(const char *val, uint8_t vlen)
 {
-    cmd_cal_set(val, vlen, 0x58, (volatile uint16_t *)0x2000023c, 0);
+    cmd_cal_set(val, vlen, 0x58, s_chg_cal, 0);
 }
 
 static void cmd_dsg_cal_get(const char *val, uint8_t vlen)
 {
     (void)val;
     if (vlen != 0) return;
-    log_print(2, s_dsg_cal_q, *(volatile uint16_t *)0x2000023c);
+    log_print(2, s_dsg_cal_q, *s_chg_cal);
 }
 
 static void cmd_reset_esn(const char *val, uint8_t vlen)
 {
     (void)val;
     if (vlen != 0) return;
-    mem_zero((void *)0x2000052e, 14);
-    mem_zero((void *)0x2000053c, 4);
+    mem_zero(S_ESN, 14);
+    mem_zero(S_FW_ID, 4);
     fedl5236_record_save();
     log_print(2, s_done);
 }
@@ -357,7 +377,7 @@ static void cmd_shipping(const char *val, uint8_t vlen)
 {
     (void)val;
     if (vlen != 0) return;
-    uint32_t charger = *(volatile uint32_t *)0x2000042c;
+    uint32_t charger = *s_charger_mv;
     if (charger > 0x4e1f) {
         log_print(2, s_charger_v_mv, charger);
     } else {
@@ -384,12 +404,12 @@ static void cmd_offset(const char *val, uint8_t vlen, uint16_t base, uint8_t cfg
 
 static void cmd_v_offset(const char *val, uint8_t vlen)
 {
-    cmd_offset(val, vlen, *(volatile uint16_t *)0x20000202, 0x70);
+    cmd_offset(val, vlen, *s_vout_meas, 0x70);
 }
 
 static void cmd_i_offset(const char *val, uint8_t vlen)
 {
-    cmd_offset(val, vlen, *(volatile uint16_t *)0x200001ae, 0x72);
+    cmd_offset(val, vlen, *s_iout_meas, 0x72);
 }
 
 static void cmd_set_rsoc(const char *val, uint8_t vlen)
@@ -431,15 +451,15 @@ static void cmd_ts_offset(const char *val, uint8_t vlen, uint8_t cfg_off,
 
 static void cmd_ts0_offset(const char *val, uint8_t vlen)
 {
-    cmd_ts_offset(val, vlen, 8, (volatile uint8_t *)0x2000020e);
+    cmd_ts_offset(val, vlen, 8, s_ts0_mirror);
 }
 
 static void cmd_ts1_offset(const char *val, uint8_t vlen)
 {
-    cmd_ts_offset(val, vlen, 9, (volatile uint8_t *)0x2000021b);
+    cmd_ts_offset(val, vlen, 9, s_ts1_mirror);
 }
 
 static void cmd_ts2_offset(const char *val, uint8_t vlen)
 {
-    cmd_ts_offset(val, vlen, 0xa, (volatile uint8_t *)0x20000205);
+    cmd_ts_offset(val, vlen, 0xa, s_ts2_mirror);
 }

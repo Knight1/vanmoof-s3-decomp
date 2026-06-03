@@ -29,6 +29,40 @@ static volatile uint8_t  * const s_handle = (volatile uint8_t  *)0x20001a60;
 #define UART_STATE    (*(volatile uint8_t *)(s_handle + 0x69))   /* TX: 0=off ' '=idle '!'=busy */
 #define UART_STATE_RX (*(volatile uint8_t *)(s_handle + 0x6a))   /* RX: ' '=active */
 
+/* Peripheral bases (RCC + GPIOA, and the USART instances UART_SetConfig clocks). */
+#define RCC_BASE       0x40021000u
+#define RCC_CFGR3      (*(volatile uint32_t *)(RCC_BASE + 0x30))
+#define GPIOA_BASE     0x48000000u
+#define USART1_BASE    0x40013800u
+#define USART2_BASE    0x40004400u
+#define USART3_BASE    0x40004800u
+#define UART4_BASE     0x40004c00u
+#define UART5_BASE     0x40005000u
+#define UART6_BASE     0x40011400u
+#define UART7_BASE     0x40011800u
+#define UART8_BASE     0x40011c00u
+
+/* Free-running ms tick cell (shared across the HAL bring-up sub-inits). */
+static volatile uint32_t * const s_ms_tick = (volatile uint32_t *)0x20002614;
+
+/* USART2 RX ring: 512 B base, write/read indices, and the console line buffer. */
+#define RX_RING        ((volatile uint8_t *)0x20000858)
+static volatile uint16_t * const s_rx_wr   = (volatile uint16_t *)0x20000a58;
+static volatile uint16_t * const s_rx_rd   = (volatile uint16_t *)0x20000a5a;
+static volatile uint16_t * const s_mode    = (volatile uint16_t *)0x200006a0;
+static volatile uint16_t * const s_line_len = (volatile uint16_t *)0x20000a5e;
+#define LINE_BUF       ((volatile uint8_t *)0x20001ad0)
+
+/* Channel-1 HAL UART handle + its TX/RX rings (USART1_IRQHandler / ch1 pump). */
+#define CH1_HANDLE     ((volatile uint32_t *)0x200007ac)
+#define CH1_GSTATE     (*(volatile uint8_t *)((volatile uint8_t *)CH1_HANDLE + 0x69))
+#define CH1_RXSTATE    (*(volatile uint8_t *)((volatile uint8_t *)CH1_HANDLE + 0x6a))
+#define CH1_TX_RING    ((volatile uint8_t *)0x20000784)
+#define CH1_RX_RING    ((volatile uint8_t *)0x20000798)
+static volatile uint16_t * const s_ch1_tx_tail = (volatile uint16_t *)0x2000084a;
+static volatile uint16_t * const s_ch1_tx_head = (volatile uint16_t *)0x2000084e;
+static volatile uint16_t * const s_ch1_rx_idx  = (volatile uint16_t *)0x2000084c;
+
 /* Ring enqueue (FUN_0801663c). No enabled-guard in the OEM. */
 void uart_putchar(uint8_t c)
 {
@@ -178,12 +212,12 @@ extern void modem_rx_byte(uint8_t channel, uint8_t c);        /* FUN_0800b518 (b
 
 void uart_rx_handler(void)
 {
-    volatile uint16_t * const rx_wr   = (volatile uint16_t *)0x20000a58;
-    volatile uint16_t * const rx_rd   = (volatile uint16_t *)0x20000a5a;
-    uint8_t           * const rx_ring = (uint8_t *)0x20000858;
-    volatile uint16_t * const mode    = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const line_len = (volatile uint16_t *)0x20000a5e;
-    uint8_t           * const line_buf = (uint8_t *)0x20001ad0;
+    volatile uint16_t * const rx_wr   = s_rx_wr;
+    volatile uint16_t * const rx_rd   = s_rx_rd;
+    uint8_t           * const rx_ring = (uint8_t *)RX_RING;
+    volatile uint16_t * const mode    = s_mode;
+    volatile uint16_t * const line_len = s_line_len;
+    uint8_t           * const line_buf = (uint8_t *)LINE_BUF;
 
     if (UART_STATE_RX == ' ') {
         while (*rx_wr != *rx_rd) {
@@ -236,10 +270,10 @@ void uart_rx_handler(void)
  */
 void uart_ch1_tx_pump(void)
 {
-    volatile uint8_t  *gstate = (volatile uint8_t  *)(0x200007ac + 0x69);
-    volatile uint16_t *tail   = (volatile uint16_t *)0x2000084a;
-    volatile uint16_t *head   = (volatile uint16_t *)0x2000084e;
-    volatile uint8_t  *ring   = (volatile uint8_t  *)0x20000784;
+    volatile uint8_t  *gstate = &CH1_GSTATE;
+    volatile uint16_t *tail   = s_ch1_tx_tail;
+    volatile uint16_t *head   = s_ch1_tx_head;
+    volatile uint8_t  *ring   = CH1_TX_RING;
 
     if (*gstate == 0x20) {                     /* HAL_UART_STATE_READY */
         if (*tail != *head) {
@@ -250,7 +284,7 @@ void uart_ch1_tx_pump(void)
             if ((uint16_t)(t + 1) > 0x13) {    /* wrap at 20 entries */
                 *tail = 0;
             }
-            volatile uint32_t *inst = (volatile uint32_t *)*(volatile uint32_t *)0x200007ac;
+            volatile uint32_t *inst = (volatile uint32_t *)*CH1_HANDLE;
             *(volatile uint16_t *)((uint8_t *)inst + 0x28) = b;   /* USART TDR */
             inst[0] |= 0x80u;                  /* CR1.TXEIE */
         }
@@ -270,9 +304,9 @@ void uart_ch1_tx_pump(void)
  */
 void uart_flush_ch1(void)
 {
-    if (*(volatile uint8_t *)(0x200007ac + 0x69) != 0) {
+    if (CH1_GSTATE != 0) {
         uart_ch1_tx_pump();
-        while (*(volatile uint8_t *)(0x200007ac + 0x69) != 0x20) {
+        while (CH1_GSTATE != 0x20) {
         }
     }
 }
@@ -358,7 +392,7 @@ int uart_set_config(void *handle)
 {
     uint32_t *h = (uint32_t *)handle;
     volatile uint32_t *uart = (volatile uint32_t *)h[0];
-    volatile uint32_t *cfgr3 = (volatile uint32_t *)(0x40021000u + 0x30);
+    volatile uint32_t *cfgr3 = &RCC_CFGR3;
     uint32_t baud = h[1];
     int      ret  = 0;
     uint32_t clk_src = 0x10;                        /* invalid sentinel */
@@ -368,23 +402,23 @@ int uart_set_config(void *handle)
     uart[2] = (h[6] | h[8]) | (uart[2] & 0xfffff4ffu);                 /* CR3 */
 
     /* clk_src encoding: 0=PCLK1, 4=SYSCLK, 8=LSE, 2=HSI, 0x10=invalid. */
-    if (h[0] == 0x40013800u) {                      /* USART1: CFGR3[1:0] */
+    if (h[0] == USART1_BASE) {                      /* USART1: CFGR3[1:0] */
         switch (*cfgr3 & 0x3u) {
         case 0: clk_src = 0; break;  case 1: clk_src = 4; break;
         case 2: clk_src = 8; break;  default: clk_src = 2; break;
         }
-    } else if (h[0] == 0x40004400u) {               /* USART2: CFGR3[17:16] */
+    } else if (h[0] == USART2_BASE) {               /* USART2: CFGR3[17:16] */
         switch (*cfgr3 & 0x30000u) {
         case 0x00000: clk_src = 0; break;  case 0x10000: clk_src = 4; break;
         case 0x20000: clk_src = 8; break;  default: clk_src = 2; break;
         }
-    } else if (h[0] == 0x40004800u) {               /* USART3: CFGR3[19:18] */
+    } else if (h[0] == USART3_BASE) {               /* USART3: CFGR3[19:18] */
         switch (*cfgr3 & 0xc0000u) {
         case 0x00000: clk_src = 0; break;  case 0x40000: clk_src = 4; break;
         case 0x80000: clk_src = 8; break;  default: clk_src = 2; break;
         }
-    } else if (h[0] == 0x40004c00u || h[0] == 0x40005000u || h[0] == 0x40011400u ||
-               h[0] == 0x40011800u || h[0] == 0x40011c00u) {   /* UART4..8: PCLK1 */
+    } else if (h[0] == UART4_BASE || h[0] == UART5_BASE || h[0] == UART6_BASE ||
+               h[0] == UART7_BASE || h[0] == UART8_BASE) {   /* UART4..8: PCLK1 */
         clk_src = 0;
     }
 
@@ -427,7 +461,7 @@ int uart_check_idle_state(void *handle)
     uint32_t tickstart = tick_get();
     uint32_t inst = h[0];
 
-    if (inst == 0x40013800u || inst == 0x40004400u || inst == 0x40004800u) {   /* USART1/2/3 */
+    if (inst == USART1_BASE || inst == USART2_BASE || inst == USART3_BASE) {   /* USART1/2/3 */
         if ((*(volatile uint32_t *)inst & 8) == 8 &&
             uart_wait_on_flag(handle, 0x200000, 0, tickstart, 0x01ffffff) != 0) {   /* TE -> TEACK */
             return 3;
@@ -490,7 +524,7 @@ int hal_uart_init(void *handle)
  */
 void uart_msp_init(void)
 {
-    volatile uint32_t * const RCC = (volatile uint32_t *)0x40021000u;
+    volatile uint32_t * const RCC = (volatile uint32_t *)RCC_BASE;
     uint32_t * const hu = (uint32_t *)s_handle;   /* 0x20001a60 */
 
     gpio_pin_cfg_t gcfg;
@@ -504,9 +538,9 @@ void uart_msp_init(void)
     gcfg.pupd     = 0;
     gcfg.speed    = 3;
     gcfg.af       = 1;               /* AF1 = USART2 */
-    gpio_pin_config((uint32_t *)0x48000000u, &gcfg);
+    gpio_pin_config((uint32_t *)GPIOA_BASE, &gcfg);
 
-    hu[0]  = 0x40004400u;   /* Instance = USART2 */
+    hu[0]  = USART2_BASE;   /* Instance = USART2 */
     hu[1]  = 0x1c200u;      /* Init.BaudRate (115200) */
     hu[2]  = 0;             /* WordLength 8-bit  */
     hu[3]  = 0;             /* StopBits 1        */
@@ -524,7 +558,7 @@ void uart_msp_init(void)
         inst[1] = 0;   /* CR2 */
         inst[2] = 0;   /* CR3 */
     }
-    *(volatile uint32_t *)0x20002614u = 0;   /* free-running ms tick */
+    *s_ms_tick = 0;   /* free-running ms tick */
 
     if (hal_uart_init(hu) != 0) { spi_error_reset(); }
 
@@ -532,10 +566,10 @@ void uart_msp_init(void)
     *(volatile uint8_t *)((uint8_t *)hu + 0x69) = 0x20;     /* TX state = idle */
     *(volatile uint8_t *)((uint8_t *)hu + 0x6a) = 0x20;     /* RX state = idle */
 
-    *(volatile uint16_t *)0x20000a5c = 0;   /* TX ring write index */
-    *(volatile uint16_t *)0x20000854 = 0;   /* TX ring read index  */
-    *(volatile uint16_t *)0x20000a58 = 0;   /* RX ring write index */
-    *(volatile uint16_t *)0x20000a5a = 0;   /* RX ring read index  */
+    *s_wr_idx = 0;   /* TX ring write index */
+    *s_rd_idx = 0;   /* TX ring read index  */
+    *s_rx_wr  = 0;   /* RX ring write index */
+    *s_rx_rd  = 0;   /* RX ring read index  */
 
     *(volatile uint32_t *)hu[0] |= 0x20u;   /* USART2 CR1: RXNEIE */
 
@@ -577,8 +611,8 @@ void USART2_IRQHandler(void)
     volatile uint32_t *inst = *(volatile uint32_t * volatile *)s_handle;  /* USART2 */
     volatile uint32_t *errcode = (volatile uint32_t *)(s_handle + 0x6c);
 
-    volatile uint16_t * const rx_wr   = (volatile uint16_t *)0x20000a58;
-    uint8_t           * const rx_ring = (uint8_t *)0x20000858;
+    volatile uint16_t * const rx_wr   = s_rx_wr;
+    uint8_t           * const rx_ring = (uint8_t *)RX_RING;
 
     uint32_t isr_reg = inst[7];   /* ISR (+0x1c) */
     uint32_t cr1     = inst[0];   /* CR1 (+0x00) */
@@ -638,9 +672,9 @@ void USART2_IRQHandler(void)
 
     if ((isr_reg & 0x80) != 0 && (cr1 & 0x80) != 0) {
         /* TXE with TXEIE: drain the TX ring or, when empty, switch to TC. */
-        volatile uint16_t * const tx_rd   = (volatile uint16_t *)0x20000854;
-        volatile uint16_t * const tx_wr   = (volatile uint16_t *)0x20000a5c;
-        uint8_t           * const tx_ring = (uint8_t *)0x20000a60;
+        volatile uint16_t * const tx_rd   = s_rd_idx;
+        volatile uint16_t * const tx_wr   = s_wr_idx;
+        uint8_t           * const tx_ring = (uint8_t *)UART_RING;
 
         if (*tx_rd == *tx_wr) {
             inst[0] &= 0xffffff7fu;                                /* CR1: clear TXEIE */
@@ -677,17 +711,17 @@ void USART2_IRQHandler(void)
  */
 void USART1_IRQHandler(void)
 {
-    volatile uint32_t *huart = (volatile uint32_t *)0x200007ac;
+    volatile uint32_t *huart = CH1_HANDLE;
     volatile uint32_t *inst  = (volatile uint32_t *)huart[0];   /* USART1 */
 
-    volatile uint16_t * const rx_idx  = (volatile uint16_t *)0x2000084c;
-    uint8_t           * const rx_ring = (uint8_t *)0x20000798;
-    volatile uint16_t * const tx_tail = (volatile uint16_t *)0x2000084a;
-    volatile uint16_t * const tx_head = (volatile uint16_t *)0x2000084e;
-    uint8_t           * const tx_ring = (uint8_t *)0x20000784;
+    volatile uint16_t * const rx_idx  = s_ch1_rx_idx;
+    uint8_t           * const rx_ring = (uint8_t *)CH1_RX_RING;
+    volatile uint16_t * const tx_tail = s_ch1_tx_tail;
+    volatile uint16_t * const tx_head = s_ch1_tx_head;
+    uint8_t           * const tx_ring = (uint8_t *)CH1_TX_RING;
 
-    volatile uint8_t  * const gstate  = (volatile uint8_t *)(0x200007ac + 0x69);
-    volatile uint8_t  * const rxstate = (volatile uint8_t *)(0x200007ac + 0x6a);
+    volatile uint8_t  * const gstate  = &CH1_GSTATE;
+    volatile uint8_t  * const rxstate = &CH1_RXSTATE;
     volatile uint32_t * const errcode = &huart[0x1b];           /* +0x6c */
 
     uint32_t isrflags   = inst[7];   /* ISR (+0x1c) */

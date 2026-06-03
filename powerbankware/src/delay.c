@@ -1,5 +1,9 @@
 #include "powerbankware.h"
 
+/* IWDG kick: the handle cell at 0x200006ac holds the IWDG Instance pointer;
+ * writing the reload key (0xAAAA) through it refreshes the watchdog. */
+#define IWDG_KR  (**(volatile uint32_t **)0x200006ac)
+
 /*
  * delay_ms — OEM FUN_08013ad4.
  *
@@ -23,7 +27,7 @@ void delay_ms(int ms)
 
         if ((*tick & 4) != 0) {
             *tick &= (uint8_t)~4u;
-            **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;  /* IWDG_KR reload */
+            IWDG_KR = 0x0000AAAAu;  /* IWDG_KR reload */
         }
     }
 }
@@ -44,7 +48,7 @@ void delay_ms_service(int ms)
         if ((*tick & 1) != 0) {
             *tick &= (uint8_t)~1u;
             ms--;
-            **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;   /* IWDG_KR reload */
+            IWDG_KR = 0x0000AAAAu;   /* IWDG_KR reload */
         }
         uart_tx_isr();
         uart_rx_handler();

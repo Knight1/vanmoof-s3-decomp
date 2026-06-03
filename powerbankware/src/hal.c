@@ -1,5 +1,31 @@
 #include "powerbankware.h"
 
+/* ── Cortex-M0 core peripheral bases (SCS) ───────────────────────────── */
+#define SCS_NVIC_BASE  0xe000e100u   /* NVIC ISER0 (also IPRn region base) */
+#define SCS_SYSTICK    0xe000e010u   /* SysTick CTRL/LOAD/VAL              */
+#define SCS_SCB_BASE   0xe000ed00u   /* SCB (system handler priority regs) */
+#define SYSTICK_RELOAD_MAX 0xffffffu /* SysTick LOAD is 24-bit             */
+
+/* ── Bus peripheral bases / registers ────────────────────────────────── */
+#define FLASH_ACR    (*(volatile uint32_t *)0x40022000u)        /* prefetch/latency  */
+#define RCC_BASE     0x40021000u
+#define SYSCFG_CFGR1 (*(volatile uint32_t *)0x40010000u)        /* MEM_MODE          */
+#define EXTI_BASE    0x40010400u
+
+/* ── GPIO port bases (AHB, 0x400 stride) ─────────────────────────────── */
+#define GPIOA_BASE   0x48000000u
+#define GPIOB_BASE   0x48000400u
+#define GPIOC_BASE   0x48000800u
+
+/* ── Vector-table relocation (CM0 has no VTOR) ───────────────────────── */
+#define SRAM_VECTORS   ((void *)0x20000000)        /* SRAM copy of vector table */
+#define FLASH_VECTORS  ((const void *)0x08008028)  /* image+0x28 vector source  */
+
+/* ── SRAM software-tick / EXTI cells ─────────────────────────────────── */
+#define SYSTICK_FLAG (*(volatile uint8_t  *)0x2000077cu)  /* 1 ms / periodic flag */
+#define SYSTICK_SUB  (*(volatile uint16_t *)0x20000778u)  /* 16-bit sub-counter   */
+#define EXTI13_FLAG  (*(volatile uint8_t  *)0x2000069cu)  /* EXTI13 software pend  */
+
 /*
  * HAL / board bring-up for the STM32F091 powerbankware.
  *
@@ -30,9 +56,9 @@ void nvic_set_priority_core(int irqn, uint32_t priority)
     volatile uint32_t *reg;
 
     if ((uint8_t)irqn < 0x80u) {                            /* peripheral IRQ (>= 0) */
-        reg = (volatile uint32_t *)(0xe000e100u + (((uint32_t)(((int8_t)irqn) >> 2) + 0xc0u) << 2));
+        reg = (volatile uint32_t *)(SCS_NVIC_BASE + (((uint32_t)(((int8_t)irqn) >> 2) + 0xc0u) << 2));
     } else {                                                /* system handler (< 0) */
-        reg = (volatile uint32_t *)(0xe000ed00u + ((((((uint32_t)irqn & 0xfu) - 8u) >> 2) + 6u) << 2) + 4u);
+        reg = (volatile uint32_t *)(SCS_SCB_BASE + ((((((uint32_t)irqn & 0xfu) - 8u) >> 2) + 6u) << 2) + 4u);
     }
     *reg = val | (keep & *reg);
 }
@@ -40,7 +66,7 @@ void nvic_set_priority_core(int irqn, uint32_t priority)
 /* nvic_enable_irq_core — OEM FUN_08019afc (CMSIS NVIC_EnableIRQ): NVIC ISER0. */
 void nvic_enable_irq_core(int irqn)
 {
-    *(volatile uint32_t *)0xe000e100u = 1u << ((uint32_t)irqn & 0x1fu);
+    *(volatile uint32_t *)SCS_NVIC_BASE = 1u << ((uint32_t)irqn & 0x1fu);
 }
 
 /*
@@ -52,13 +78,13 @@ void nvic_enable_irq_core(int irqn)
  */
 int systick_config(uint32_t ticks)
 {
-    if (ticks - 1u <= 0xffffffu) {
-        *(volatile uint32_t *)(0xe000e010u + 0x04) = ticks - 1u;   /* SysTick->LOAD */
+    if (ticks - 1u <= SYSTICK_RELOAD_MAX) {
+        *(volatile uint32_t *)(SCS_SYSTICK + 0x04) = ticks - 1u;   /* SysTick->LOAD */
         nvic_set_priority_core(-1, 3);                             /* SysTick_IRQn = lowest */
-        *(volatile uint32_t *)(0xe000e010u + 0x08) = 0;            /* SysTick->VAL  */
-        *(volatile uint32_t *)(0xe000e010u + 0x00) = 7;            /* SysTick->CTRL */
+        *(volatile uint32_t *)(SCS_SYSTICK + 0x08) = 0;            /* SysTick->VAL  */
+        *(volatile uint32_t *)(SCS_SYSTICK + 0x00) = 7;            /* SysTick->CTRL */
     }
-    return 0xffffffu < ticks - 1u;
+    return SYSTICK_RELOAD_MAX < ticks - 1u;
 }
 
 /* hal_systick_config — OEM FUN_08019c96 (HAL_SYSTICK_Config): forwards to SysTick_Config. */
@@ -110,7 +136,7 @@ int hal_init_tick(uint32_t tick_priority)
  */
 int hal_init(void)
 {
-    *(volatile uint32_t *)0x40022000 |= 0x10u;   /* FLASH_ACR: PRFTBE (prefetch) */
+    FLASH_ACR |= 0x10u;                          /* FLASH_ACR: PRFTBE (prefetch) */
     hal_init_tick(0);                            /* HAL_InitTick(TICK_INT_PRIORITY=0) */
     hal_msp_init();                              /* HAL_MspInit */
     return 0;
@@ -123,8 +149,8 @@ int hal_init(void)
  */
 void tick_state_reset(void)
 {
-    *(volatile uint8_t  *)0x2000077c = 0;   /* SysTick 1 ms / periodic flag byte */
-    *(volatile uint16_t *)0x20000778 = 0;
+    SYSTICK_FLAG = 0;   /* SysTick 1 ms / periodic flag byte */
+    SYSTICK_SUB  = 0;
 }
 
 /*
@@ -136,8 +162,8 @@ void tick_state_reset(void)
  */
 void board_init(void)
 {
-    volatile uint32_t * const RCC_AHBENR = (volatile uint32_t *)(0x40021000 + 0x14);
-    volatile uint8_t  * const tick_flag  = (volatile uint8_t  *)0x2000077c;
+    volatile uint32_t * const RCC_AHBENR = (volatile uint32_t *)(RCC_BASE + 0x14);
+    volatile uint8_t  * const tick_flag  = &SYSTICK_FLAG;
 
     /* RCC AHBENR: GPIOA(17)/GPIOB(18)/GPIOC(19)/GPIOF(22) clock enable, each
      * with the HAL clock-enable read-back. */
@@ -147,10 +173,10 @@ void board_init(void)
     *RCC_AHBENR |= 0x00400000u; (void)(*RCC_AHBENR & 0x00400000u);
 
     /* Initial output levels. */
-    gpio_bit_write(0x48000000u, 0x8180, 1);   /* GPIOA 7,8,15 high */
-    gpio_bit_write(0x48000000u, 0x1200, 0);   /* GPIOA 9,12 low */
-    gpio_bit_write(0x48000400u, 0x3001, 1);   /* GPIOB 0,12,13 high */
-    gpio_bit_write(0x48000400u, 0x8e86, 0);   /* GPIOB 1,2,7,9,10,11,15 low */
+    gpio_bit_write(GPIOA_BASE, 0x8180, 1);   /* GPIOA 7,8,15 high */
+    gpio_bit_write(GPIOA_BASE, 0x1200, 0);   /* GPIOA 9,12 low */
+    gpio_bit_write(GPIOB_BASE, 0x3001, 1);   /* GPIOB 0,12,13 high */
+    gpio_bit_write(GPIOB_BASE, 0x8e86, 0);   /* GPIOB 1,2,7,9,10,11,15 low */
 
     /* Pin configuration. The OEM reuses a single init struct across calls, so
      * fields it does not re-write inherit the previous call's value (e.g. the
@@ -159,19 +185,19 @@ void board_init(void)
     mem_set(&cfg, 0, sizeof cfg);
 
     cfg.pin_mask = 0x2000; cfg.mode = 0; cfg.pupd = 0;
-    gpio_pin_config((uint32_t *)0x48000800u, &cfg);   /* GPIOC13 input */
+    gpio_pin_config((uint32_t *)GPIOC_BASE, &cfg);   /* GPIOC13 input */
 
     cfg.pin_mask = 0x0c00; cfg.mode = 0; cfg.pupd = 0;
-    gpio_pin_config((uint32_t *)0x48000000u, &cfg);   /* GPIOA10,11 input */
+    gpio_pin_config((uint32_t *)GPIOA_BASE, &cfg);   /* GPIOA10,11 input */
 
     cfg.pin_mask = 0x9380; cfg.mode = 1; cfg.pupd = 0; cfg.speed = 3;
-    gpio_pin_config((uint32_t *)0x48000000u, &cfg);   /* GPIOA7,8,9,12,15 output, vhigh */
+    gpio_pin_config((uint32_t *)GPIOA_BASE, &cfg);   /* GPIOA7,8,9,12,15 output, vhigh */
 
     cfg.pin_mask = 0x4140; cfg.mode = 0; cfg.pupd = 0; /* speed inherits 3 */
-    gpio_pin_config((uint32_t *)0x48000400u, &cfg);   /* GPIOB6,8,14 input */
+    gpio_pin_config((uint32_t *)GPIOB_BASE, &cfg);   /* GPIOB6,8,14 input */
 
     cfg.pin_mask = 0xbe87; cfg.mode = 1; cfg.pupd = 0; cfg.speed = 3;
-    gpio_pin_config((uint32_t *)0x48000400u, &cfg);   /* GPIOB output, vhigh */
+    gpio_pin_config((uint32_t *)GPIOB_BASE, &cfg);   /* GPIOB output, vhigh */
 
     crc_init();
     uart_msp_init();
@@ -182,17 +208,17 @@ void board_init(void)
 
     /* I2C bus recovery: while SDA (PB14) is held low, pulse SCL (PB13) ten
      * times at ~1 ms/edge (gated on the software tick flag), re-checking SDA. */
-    if (!gpio_bit_read(0x48000400u, 0x4000)) {
+    if (!gpio_bit_read(GPIOB_BASE, 0x4000)) {
         do {
             for (uint16_t i = 0; i < 10; i++) {
-                gpio_bit_write(0x48000400u, 0x2000, 0);
+                gpio_bit_write(GPIOB_BASE, 0x2000, 0);
                 while ((*tick_flag & 1) == 0) { }
                 *tick_flag &= (uint8_t)~1u;
-                gpio_bit_write(0x48000400u, 0x2000, 1);
+                gpio_bit_write(GPIOB_BASE, 0x2000, 1);
                 while ((*tick_flag & 1) == 0) { }
                 *tick_flag &= (uint8_t)~1u;
             }
-        } while (!gpio_bit_read(0x48000400u, 0x4000));
+        } while (!gpio_bit_read(GPIOB_BASE, 0x4000));
     }
 
     i2c2_init();
@@ -211,19 +237,19 @@ void board_init(void)
  */
 void hal_bringup(void)
 {
-    *(volatile uint32_t *)0x40022000 |= 0x10u;        /* FLASH_ACR: PRFTBE (prefetch) */
+    FLASH_ACR |= 0x10u;                               /* FLASH_ACR: PRFTBE (prefetch) */
 
     /* Cortex-M0 has no VTOR: copy the 48-entry vector table to SRAM start, then
      * point the 0x00000000 region at SRAM via SYSCFG. Vectors are at image+0x28. */
-    block_copy((void *)0x20000000, (const void *)0x08008028, 0xc0);
-    *(volatile uint32_t *)0x40010000 |= 3u;           /* SYSCFG_CFGR1: MEM_MODE = SRAM */
+    block_copy(SRAM_VECTORS, FLASH_VECTORS, 0xc0);
+    SYSCFG_CFGR1 |= 3u;                               /* SYSCFG_CFGR1: MEM_MODE = SRAM */
 
     hal_init();
 
-    *(volatile uint32_t *)(0x40021000 + 0x18) |= 1u;             /* RCC_APB2ENR: SYSCFGEN */
-    (void)(*(volatile uint32_t *)(0x40021000 + 0x18) & 1u);
-    *(volatile uint32_t *)(0x40021000 + 0x1c) |= 0x10000000u;    /* RCC_APB1ENR: PWREN */
-    (void)(*(volatile uint32_t *)(0x40021000 + 0x1c) & 0x10000000u);
+    *(volatile uint32_t *)(RCC_BASE + 0x18) |= 1u;               /* RCC_APB2ENR: SYSCFGEN */
+    (void)(*(volatile uint32_t *)(RCC_BASE + 0x18) & 1u);
+    *(volatile uint32_t *)(RCC_BASE + 0x1c) |= 0x10000000u;      /* RCC_APB1ENR: PWREN */
+    (void)(*(volatile uint32_t *)(RCC_BASE + 0x1c) & 0x10000000u);
 
     clock_rtc_init();
     tick_state_reset();
@@ -248,8 +274,8 @@ void hal_bringup(void)
  */
 void EXTI4_15_IRQHandler(void)
 {
-    volatile uint32_t * const EXTI_PR   = (volatile uint32_t *)(0x40010400u + 0x14);  /* DAT_080114d4 + 0x14 */
-    volatile uint8_t  * const exti13_flag = (volatile uint8_t *)0x2000069cu;           /* DAT_080114d8 */
+    volatile uint32_t * const EXTI_PR   = (volatile uint32_t *)(EXTI_BASE + 0x14);  /* DAT_080114d4 + 0x14 */
+    volatile uint8_t  * const exti13_flag = &EXTI13_FLAG;                            /* DAT_080114d8 */
 
     if ((*EXTI_PR & 0x2000u) != 0) {        /* EXTI line 13 pending */
         *exti13_flag |= 1u;

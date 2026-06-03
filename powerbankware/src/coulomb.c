@@ -18,6 +18,31 @@
 
 #define REC ((volatile uint8_t  *)0x200004D0)
 
+/* Record (0x200004D0) capacity fields, kept at the OEM widths. */
+#define REC_REMAINING (*(volatile uint32_t *)(0x200004D0u + 0x18))  /* +0x18 remaining mAh */
+#define REC_FULLCAP   (*(volatile uint32_t *)(0x200004D0u + 0x1c))  /* +0x1c full capacity */
+#define REC_SOCSCRATCH (*(volatile uint32_t *)(0x200004D0u + 0x20)) /* +0x20 SOC scratch   */
+#define REC_CYCLEACC  (*(volatile uint32_t *)(0x200004D0u + 0x24))  /* +0x24 cycle accum   */
+#define REC_CYCLECNT  (*(volatile uint16_t *)(0x200004D0u + 0x50))  /* +0x50 cycle count   */
+
+/* Live coulomb-counter SRAM globals (see docs/hardware.md). */
+static volatile uint32_t * const s_remaining_cap = (volatile uint32_t *)0x20000238; /* remaining-cap accumulator (RSOC) */
+static volatile uint32_t * const s_learn_base    = (volatile uint32_t *)0x20000230; /* capacity-learning start sample   */
+static volatile uint32_t * const s_learn_accum   = (volatile uint32_t *)0x20000234; /* capacity-learning accumulator    */
+static volatile uint16_t * const s_learn_count   = (volatile uint16_t *)0x20000240; /* capacity-learning sample count   */
+static volatile uint8_t  * const s_temp_cal      = (volatile uint8_t  *)0x20000218; /* SOC-index/temp block; [1]/[2] TS  */
+static volatile uint16_t * const s_min_cell      = (volatile uint16_t *)0x200003D2; /* min cell mV                      */
+static volatile uint16_t * const s_run_counter   = (volatile uint16_t *)0x200003CE; /* run-time counter vs learn thresh */
+static volatile uint32_t * const s_full_cap_limit= (volatile uint32_t *)0x200005A4;
+static volatile uint32_t * const s_cycle_thresh  = (volatile uint32_t *)0x200005A8;
+
+/* Cell-balance governor SRAM globals. */
+static volatile uint16_t * const s_mode          = (volatile uint16_t *)0x200006A0; /* mode/cfg word */
+static volatile uint8_t  * const s_bal_debounce  = (volatile uint8_t  *)0x2000041C; /* balance debounce tick */
+static volatile uint8_t  * const s_bal_sel       = (volatile uint8_t  *)0x20000224; /* selected balance cell */
+static volatile uint16_t * const s_max_cell      = (volatile uint16_t *)0x200003A2; /* max cell mV */
+static volatile uint8_t  * const s_max_cell_idx  = (volatile uint8_t  *)0x20000430; /* max cell index */
+
 /*
  * Discharge coulomb sub-step: drain `mag` from the remaining-capacity
  * accumulator (record +0x18), clamping at zero. Called once per protection
@@ -25,11 +50,10 @@
  */
 void coulomb_discharge_sub(uint32_t mag)
 {
-    volatile uint32_t *remaining = (volatile uint32_t *)(0x200004D0u + 0x18);
-    if (*remaining < mag) {
-        *remaining = 0;
+    if (REC_REMAINING < mag) {
+        REC_REMAINING = 0;
     } else {
-        *remaining -= mag;
+        REC_REMAINING -= mag;
     }
 }
 
@@ -43,28 +67,28 @@ void coulomb_discharge_sub(uint32_t mag)
  */
 void coulomb_integrate(uint32_t current)
 {
-    volatile uint32_t *rem  = (volatile uint32_t *)0x20000238;
-    volatile uint32_t *lrn0 = (volatile uint32_t *)0x20000230;
-    volatile uint32_t *lrnA = (volatile uint32_t *)0x20000234;
-    volatile uint16_t *lrnC = (volatile uint16_t *)0x20000240;
-    volatile uint8_t  *temp = (volatile uint8_t  *)0x20000218;   /* [1]/[2] temp sensors */
+    volatile uint32_t *rem  = s_remaining_cap;
+    volatile uint32_t *lrn0 = s_learn_base;
+    volatile uint32_t *lrnA = s_learn_accum;
+    volatile uint16_t *lrnC = s_learn_count;
+    volatile uint8_t  *temp = s_temp_cal;                        /* [1]/[2] temp sensors */
 
     if ((int32_t)current < 0) {
         uint32_t mag = ~current + 1;
         if (199 < mag) {
             if (*rem < mag) *rem = 0; else *rem -= mag;
             coulomb_discharge_sub(mag);
-            if (0xC4E < *(volatile uint16_t *)0x200003D2) {
+            if (0xC4E < *s_min_cell) {
                 if (REC[0x5a] < 7) {
                     coulomb_discharge_sub(mag);
-                } else if (*(volatile uint16_t *)0x200003D2 < 0xD01 && 7 < REC[0x5a]) {
+                } else if (*s_min_cell < 0xD01 && 7 < REC[0x5a]) {
                     coulomb_discharge_sub(mag);
                 }
             } else {
                 coulomb_discharge_sub(mag);
                 coulomb_discharge_sub(mag);
             }
-            if (*rem < *(volatile uint32_t *)(0x200004D0 + 0x18)) {
+            if (*rem < REC_REMAINING) {
                 coulomb_discharge_sub(mag);
             }
             if (*lrn0 != 0) { *lrn0 = 0; *lrnA = 0; *lrnC = 0; }
@@ -74,14 +98,14 @@ void coulomb_integrate(uint32_t current)
             *lrn0 = *rem;
         }
         *rem += current;
-        *(volatile uint32_t *)(0x200004D0 + 0x18) += current;
-        *(volatile uint32_t *)(0x200004D0 + 0x24) += current;
-        if (*(volatile uint32_t *)0x200005A8 <= *(volatile uint32_t *)(0x200004D0 + 0x24)) {
-            *(volatile uint32_t *)(0x200004D0 + 0x24) = 0;
-            *(volatile uint16_t *)(0x200004D0 + 0x50) += 1;
+        REC_REMAINING += current;
+        REC_CYCLEACC += current;
+        if (*s_cycle_thresh <= REC_CYCLEACC) {
+            REC_CYCLEACC = 0;
+            REC_CYCLECNT += 1;
         }
 
-        if (0x9E33 < *(volatile uint16_t *)0x200003CE) {
+        if (0x9E33 < *s_run_counter) {
             if (current < 0x14B) {
                 if (REC[0x5a] < 100) {
                     *lrnA += current;
@@ -92,15 +116,15 @@ void coulomb_integrate(uint32_t current)
                         uint32_t sum = *lrnA + *lrn0;
                         *lrnA = 0;
                         *lrn0 = 0;
-                        if (*(volatile uint32_t *)0x200005A4 < sum) {
-                            *(volatile uint32_t *)(0x200004D0 + 0x1c) = 0x25E4;
-                            *(volatile uint32_t *)(0x200004D0 + 0x18) = *(volatile uint32_t *)0x200005A4;
+                        if (*s_full_cap_limit < sum) {
+                            REC_FULLCAP = 0x25E4;
+                            REC_REMAINING = *s_full_cap_limit;
                         } else {
-                            *(volatile uint32_t *)(0x200004D0 + 0x1c) = ((sum) / (0x3840));
-                            *(volatile uint32_t *)(0x200004D0 + 0x18) = sum;
+                            REC_FULLCAP = ((sum) / (0x3840));
+                            REC_REMAINING = sum;
                         }
                         REC[0x5a] = 100;
-                        int full = (int)*(volatile uint32_t *)(0x200004D0 + 0x1c);
+                        int full = (int)REC_FULLCAP;
                         int scaled = 0x25E4;
                         uint8_t lo = (temp[1] < temp[2]) ? temp[1] : temp[2];
                         if (lo < 0x3A) {
@@ -113,14 +137,13 @@ void coulomb_integrate(uint32_t current)
                 } else {
                     *lrnA = 0;
                     *lrn0 = 0;
-                    if (*(volatile uint32_t *)0x200005A4 < *(volatile uint32_t *)(0x200004D0 + 0x18)) {
-                        *(volatile uint32_t *)(0x200004D0 + 0x1c) = 0x25E4;
-                        *(volatile uint32_t *)(0x200004D0 + 0x18) = *(volatile uint32_t *)0x200005A4;
+                    if (*s_full_cap_limit < REC_REMAINING) {
+                        REC_FULLCAP = 0x25E4;
+                        REC_REMAINING = *s_full_cap_limit;
                     } else {
-                        *(volatile uint32_t *)(0x200004D0 + 0x1c) =
-                            ((*(volatile uint32_t *)(0x200004D0 + 0x18)) / (0x3840));
+                        REC_FULLCAP = ((REC_REMAINING) / (0x3840));
                     }
-                    int full = (int)*(volatile uint32_t *)(0x200004D0 + 0x1c);
+                    int full = (int)REC_FULLCAP;
                     int scaled = 0x25E4;
                     uint8_t lo = (temp[1] < temp[2]) ? temp[1] : temp[2];
                     if (lo < 0x3A) {
@@ -142,24 +165,23 @@ void coulomb_integrate(uint32_t current)
     }
 
     /* tail: clamp remaining capacity, recompute SOC% */
-    if (*(volatile uint16_t *)0x200003D2 <= *rem) {
-        *rem = *(volatile uint16_t *)0x200003D2;
+    if (*s_min_cell <= *rem) {
+        *rem = *s_min_cell;
     }
-    if (*(volatile uint16_t *)0x200003D2 <= *(volatile uint32_t *)(0x200004D0 + 0x18)) {
-        *(volatile uint32_t *)(0x200004D0 + 0x18) = *(volatile uint16_t *)0x200003D2;
-        *(volatile uint32_t *)(0x200004D0 + 0x1c) = 0x25E4;
+    if (*s_min_cell <= REC_REMAINING) {
+        REC_REMAINING = *s_min_cell;
+        REC_FULLCAP = 0x25E4;
     }
-    *(volatile uint32_t *)(0x200004D0 + 0x20) = *(volatile uint32_t *)(0x200004D0 + 0x18);
-    if (0x383F < *(volatile uint32_t *)(0x200004D0 + 0x20)) {
-        *(volatile uint32_t *)(0x200004D0 + 0x20) =
-            ((*(volatile uint32_t *)(0x200004D0 + 0x20)) / (0x3840));
+    REC_SOCSCRATCH = REC_REMAINING;
+    if (0x383F < REC_SOCSCRATCH) {
+        REC_SOCSCRATCH = ((REC_SOCSCRATCH) / (0x3840));
     } else {
-        *(volatile uint32_t *)(0x200004D0 + 0x20) = 0;
+        REC_SOCSCRATCH = 0;
     }
-    if (*(volatile uint32_t *)(0x200004D0 + 0x1c) < *(volatile uint32_t *)(0x200004D0 + 0x20)) {
-        *(volatile uint32_t *)(0x200004D0 + 0x20) = *(volatile uint32_t *)(0x200004D0 + 0x1c);
+    if (REC_FULLCAP < REC_SOCSCRATCH) {
+        REC_SOCSCRATCH = REC_FULLCAP;
     }
-    REC[0x5a] = (uint8_t)(((uint32_t)((int)*(volatile uint32_t *)(0x200004D0 + 0x20) * 100)) / (*(volatile uint32_t *)(0x200004D0 + 0x1c)));
+    REC[0x5a] = (uint8_t)(((uint32_t)((int)REC_SOCSCRATCH * 100)) / (REC_FULLCAP));
     if (100 < REC[0x5a]) REC[0x5a] = 100;
 }
 
@@ -173,11 +195,11 @@ void coulomb_integrate(uint32_t current)
  */
 void cell_balance_update(void)
 {
-    volatile uint16_t *mode = (volatile uint16_t *)0x200006A0;
-    volatile uint8_t  *deb  = (volatile uint8_t  *)0x2000041C;
-    volatile uint8_t  *sel  = (volatile uint8_t  *)0x20000224;
-    uint16_t this_cell = *(volatile uint16_t *)0x200003D2;
-    uint16_t max_cell  = *(volatile uint16_t *)0x200003A2;
+    volatile uint16_t *mode = s_mode;
+    volatile uint8_t  *deb  = s_bal_debounce;
+    volatile uint8_t  *sel  = s_bal_sel;
+    uint16_t this_cell = *s_min_cell;
+    uint16_t max_cell  = *s_max_cell;
 
     if (0xED7 < this_cell) {
         int spread = (int)((uint32_t)max_cell - (uint32_t)this_cell);
@@ -195,7 +217,7 @@ void cell_balance_update(void)
                 fedl5236_command_write(10, 0);
                 fedl5236_command_write(0x0b, 0);
             } else {
-                *sel = *(volatile uint8_t *)0x20000430;
+                *sel = *s_max_cell_idx;
                 *deb = 0;
                 uint16_t mask = 0x10;
                 if (*sel > 1) {

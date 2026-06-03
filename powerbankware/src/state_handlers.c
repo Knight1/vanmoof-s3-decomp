@@ -11,19 +11,109 @@
  * (`bms_state_enter`, src/dispatch.c).
  */
 
-static volatile uint8_t * const s_tick = (volatile uint8_t *)0x2000077c;
+/* ── Peripheral / GPIO bases ─────────────────────────────────────────── */
+#define GPIOA_BASE   0x48000000u
+#define GPIOB_BASE   0x48000400u
+#define GPIOC_BASE   0x48000800u
+#define PIN_PA7      0x80u
+#define PIN_PB0      0x1u
+#define PIN_PB9      0x200u
+#define PIN_PB11     0x800u
+#define PIN_PC13     0x2000u
+#define IWDG_KR_PTR  ((volatile uint32_t **)0x200006ac)  /* IWDG handle -> KR */
+
+/* ── BMS record / fault register ─────────────────────────────────────── */
+#define CFG ((volatile uint8_t *)0x200004d0)
+#define FAULT (*(volatile uint16_t *)0x20000410)
+
+/* ── Charger round-robin sample array (15 u32 slots) ─────────────────── */
+#define CHG_RR ((volatile uint32_t *)0x200003d4)
+
+/* ── SysTick / uptime ────────────────────────────────────────────────── */
+static volatile uint8_t  * const s_tick        = (volatile uint8_t  *)0x2000077c;
+static volatile uint32_t * const s_evtlog_en   = (volatile uint32_t *)0x2000072c;
+static volatile uint32_t * const s_uptime_1s   = (volatile uint32_t *)0x20000594;
+
+/* ── BMS live globals (SRAM) ─────────────────────────────────────────── */
+static volatile uint16_t * const s_mode        = (volatile uint16_t *)0x200006a0; /* mode/cfg word */
+static volatile uint8_t  * const s_rx          = (volatile uint8_t  *)0x20000614; /* AFE RX frame buf */
+static volatile uint16_t * const s_cell_voltage= (volatile uint16_t *)0x20000380; /* [10] */
+static volatile uint16_t * const s_cell_sum    = (volatile uint16_t *)0x200003ce;
+static volatile uint16_t * const s_cell_max    = (volatile uint16_t *)0x200003a2;
+static volatile uint16_t * const s_cell_min    = (volatile uint16_t *)0x200003d2;
+static volatile uint8_t  * const s_cell_max_idx= (volatile uint8_t  *)0x20000430;
+static volatile uint8_t  * const s_cell_min_idx= (volatile uint8_t  *)0x200003c4;
+static volatile uint8_t  * const s_cfgmax_dbnc = (volatile uint8_t  *)0x200003a0;
+static volatile uint8_t  * const s_cfgmin_dbnc = (volatile uint8_t  *)0x200003a1;
+static volatile uint8_t  * const s_fet_ctrl    = (volatile uint8_t  *)0x20000412; /* AFE reg-9 FET shadow */
+static volatile uint8_t  * const s_test_mode   = (volatile uint8_t  *)0x2000069c; /* 0 = normal */
+static volatile uint8_t  * const s_afe_substate= (volatile uint8_t  *)0x2000041a; /* AFE round-robin sub-state */
+static volatile uint8_t  * const s_scan_dbnc   = (volatile uint8_t  *)0x2000041c; /* scan-gate counter */
+static volatile uint8_t  * const s_afe_fault   = (volatile uint8_t  *)0x2000041d; /* AFE status bit1 latch */
+static volatile uint16_t * const s_offset      = (volatile uint16_t *)0x20000418; /* zero-current offset */
+static volatile uint16_t * const s_ship_cnt    = (volatile uint16_t *)0x200006a2; /* ship-mode tick counter */
+static volatile uint32_t * const s_chg_voltage = (volatile uint32_t *)0x2000042c; /* detected charger voltage */
+static volatile uint8_t  * const s_mos_state   = (volatile uint8_t  *)0x20000554;
+
+/* current / coulomb integrator (cell_voltage_scan) */
+static volatile uint32_t * const s_dsg_i       = (volatile uint32_t *)0x20000420; /* discharge magnitude */
+static volatile uint32_t * const s_chg_i       = (volatile uint32_t *)0x200003a8; /* charge magnitude */
+static volatile int32_t  * const s_cur_avg     = (volatile int32_t  *)0x20000424; /* signed avg current */
+static volatile uint32_t * const s_cur_inst    = (volatile uint32_t *)0x2000039c; /* instantaneous (sign) */
+static volatile int32_t  * const s_cur_ring    = (volatile int32_t  *)0x200003ac; /* [4] moving avg ring */
+static volatile uint32_t * const s_dsg_mag     = (volatile uint32_t *)0x200003c0; /* discharge magnitude (pos) */
+static volatile uint32_t * const s_chg_mag     = (volatile uint32_t *)0x20000414; /* charge magnitude (pos) */
+static volatile uint16_t * const s_chg_cal     = (volatile uint16_t *)0x2000023c;
+static volatile uint16_t * const s_dsg_cal     = (volatile uint16_t *)0x2000023e;
+static volatile uint32_t * const s_rsoc        = (volatile uint32_t *)0x20000250; /* RSOC accumulator */
+static volatile uint32_t * const s_rsoc_div    = (volatile uint32_t *)0x20000228; /* RSOC divisor */
+static volatile uint8_t  * const s_rsoc_cnt    = (volatile uint8_t  *)0x2000022c; /* 40-sample counter */
+static volatile uint8_t  * const s_chg_peak_dbnc = (volatile uint8_t *)0x200003a4;
+static volatile uint8_t  * const s_dsg_peak_dbnc = (volatile uint8_t *)0x2000041e;
+static volatile uint8_t  * const s_chg_min_dbnc  = (volatile uint8_t *)0x200003bc;
+static volatile uint32_t * const s_chg_min       = (volatile uint32_t *)0x200003c8;
+
+/* temperature step (bms_temp_step) */
+static volatile uint8_t  * const s_ts          = (volatile uint8_t  *)0x20000218; /* +1 chg TS, +2 dsg TS */
+static volatile uint8_t  * const s_ts_max_dbnc = (volatile uint8_t  *)0x2000021c;
+static volatile uint8_t  * const s_ts_min_dbnc = (volatile uint8_t  *)0x20000212;
+static volatile uint8_t  * const s_ts2_cal     = (volatile uint8_t  *)0x20000205;
+static volatile uint8_t  * const s_ts1_cal     = (volatile uint8_t  *)0x2000021b;
+
+/* protection-cascade debounce counters (bms_periodic_update / cell_voltage_scan) */
+static volatile uint16_t * const s_ovp1_set_dbnc = (volatile uint16_t *)0x200005a0;
+static volatile uint16_t * const s_ovp1_clr_dbnc = (volatile uint16_t *)0x2000058a;
+static volatile uint16_t * const s_ovp2_set_dbnc = (volatile uint16_t *)0x20000586;
+static volatile uint16_t * const s_ovp2_clr_dbnc = (volatile uint16_t *)0x20000598;
+static volatile uint16_t * const s_uvp1_set_dbnc = (volatile uint16_t *)0x200004ba;
+static volatile uint16_t * const s_uvp1_clr_dbnc = (volatile uint16_t *)0x200004c0;
+static volatile uint16_t * const s_uvp2_set_dbnc = (volatile uint16_t *)0x2000058e;
+static volatile uint16_t * const s_uvp2_clr_dbnc = (volatile uint16_t *)0x20000590;
+static volatile uint16_t * const s_imbal_dbnc    = (volatile uint16_t *)0x200004c6;
+static volatile uint16_t * const s_chg_volt_dbnc = (volatile uint16_t *)0x200003cc;
+static volatile uint16_t * const s_cocp1_set_dbnc= (volatile uint16_t *)0x200005a2;
+static volatile uint16_t * const s_cocp2_set_dbnc= (volatile uint16_t *)0x200004c8;
+static volatile uint16_t * const s_cocp1_clr_dbnc= (volatile uint16_t *)0x200004cc;
+static volatile uint16_t * const s_cocp2_clr_dbnc= (volatile uint16_t *)0x200004be;
+static volatile uint16_t * const s_docp1_set_dbnc= (volatile uint16_t *)0x200004c4;
+static volatile uint16_t * const s_docp2_set_dbnc= (volatile uint16_t *)0x2000059e;
+static volatile uint16_t * const s_docp1_clr_dbnc= (volatile uint16_t *)0x200004b2;
+static volatile uint16_t * const s_docp2_clr_dbnc= (volatile uint16_t *)0x200004b6;
+static volatile uint16_t * const s_ts_clr_dbnc   = (volatile uint16_t *)0x2000059c;
+static volatile uint16_t * const s_docp_clr_a    = (volatile uint16_t *)0x2000059a;
+static volatile uint16_t * const s_docp_clr_b    = (volatile uint16_t *)0x200004c2;
 
 /* FUN_080100a0 — tail tick: IWDG kick (bit2) and the 1 s uptime counters (bit3). */
 void tick_uptime(void)
 {
     if ((*s_tick & 4) != 0) {
         *s_tick &= (uint8_t)~4u;
-        **(volatile uint32_t **)0x200006ac = 0x0000AAAAu;       /* IWDG_KR */
+        **IWDG_KR_PTR = 0x0000AAAAu;       /* IWDG_KR */
     }
     if ((*s_tick & 8) != 0) {
         *s_tick &= (uint8_t)~8u;
-        (*(volatile uint32_t *)0x2000072c)++;
-        (*(volatile uint32_t *)0x20000594)++;
+        (*s_evtlog_en)++;
+        (*s_uptime_1s)++;
     }
 }
 
@@ -31,8 +121,8 @@ void tick_uptime(void)
  * ticks enters shipping mode. */
 void charger_shipping_check(void)
 {
-    volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a2;
-    if (*(volatile uint32_t *)0x2000042c > 0x4e1f) {
+    volatile uint16_t * const cnt = s_ship_cnt;
+    if (*s_chg_voltage > 0x4e1f) {
         *cnt = 0;
     } else {
         uint16_t v = *cnt;
@@ -47,12 +137,12 @@ void charger_shipping_check(void)
  * reset the AFE and re-init the state machine to state 1. */
 void bms_state_idle(void)
 {
-    gpio_bit_write(0x48000000, 0x80, 0);     /* PA7 = 0 */
-    gpio_bit_write(0x48000400, 1, 1);        /* PB0 = 1 */
-    gpio_bit_write(0x48000400, 0x800, 0);    /* PB11 = 0 */
+    gpio_bit_write(GPIOA_BASE, PIN_PA7, 0);     /* PA7 = 0 */
+    gpio_bit_write(GPIOB_BASE, PIN_PB0, 1);     /* PB0 = 1 */
+    gpio_bit_write(GPIOB_BASE, PIN_PB11, 0);    /* PB11 = 0 */
     bypass_fet_off();
-    gpio_bit_write(0x48000400, 0x200, 0);    /* PB9 = 0 */
-    *(volatile uint8_t *)0x20000412 = 0;
+    gpio_bit_write(GPIOB_BASE, PIN_PB9, 0);     /* PB9 = 0 */
+    *s_fet_ctrl = 0;
     fedl5236_command_write(9, 0);
     bms_state_enter(1);
 }
@@ -88,7 +178,7 @@ void bms_state_shipping_wait(void)
     }
     if ((*s_tick & 2) != 0) {
         *s_tick &= (uint8_t)~2u;
-        volatile uint16_t * const cnt = (volatile uint16_t *)0x200006a2;
+        volatile uint16_t * const cnt = s_ship_cnt;
         uint16_t v = *cnt;
         *cnt = (uint16_t)(v + 1);
         if ((uint16_t)(v + 1) > 99) {
@@ -129,30 +219,27 @@ extern void bms_periodic_update(uint8_t status);
 
 extern const char s_chg_cal_ok[], s_dsg_cal_ok[];
 
-#define CFG ((volatile uint8_t *)0x200004d0)
-#define FAULT (*(volatile uint16_t *)0x20000410)
-
 void bms_core_update(void)
 {
-    volatile uint8_t  * const rx   = (volatile uint8_t  *)0x20000614;
-    volatile uint16_t * const vmax = (volatile uint16_t *)0x200003a2;
-    volatile uint16_t * const vmin = (volatile uint16_t *)0x200003d2;
-    volatile uint16_t * const vsum = (volatile uint16_t *)0x200003ce;
-    volatile uint16_t * const cells = (volatile uint16_t *)0x20000380;
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+    volatile uint8_t  * const rx   = s_rx;
+    volatile uint16_t * const vmax = s_cell_max;
+    volatile uint16_t * const vmin = s_cell_min;
+    volatile uint16_t * const vsum = s_cell_sum;
+    volatile uint16_t * const cells = s_cell_voltage;
+    volatile uint16_t * const mode = s_mode;
 
     /* --- FEDL5236 status read --- */
-    if ((*(volatile uint8_t *)0x2000069c & 1) == 0 &&
-        gpio_bit_read(0x48000800, 0x2000)) {
+    if ((*s_test_mode & 1) == 0 &&
+        gpio_bit_read(GPIOC_BASE, PIN_PC13)) {
         return;
     }
-    *(volatile uint8_t *)0x2000069c &= (uint8_t)~1u;
+    *s_test_mode &= (uint8_t)~1u;
     if (fedl5236_read_data(3, 2) == 0) {
         return;
     }
     uint8_t status = rx[2];
-    *(volatile uint8_t *)0x2000041d = (uint8_t)(rx[3] & 2);
-    if (*(volatile uint8_t *)0x2000041d != 0) {
+    *s_afe_fault = (uint8_t)(rx[3] & 2);
+    if (*s_afe_fault != 0) {
         FAULT |= 0x400;
         fedl5236_command_write(4, 0);
         fedl5236_command_write(3, 0);
@@ -170,7 +257,7 @@ void bms_core_update(void)
      * falls through to the full aggregate update; sub-states 0/1 (and any >=0xc)
      * alias straight to the full update — exactly the OEM jump table where
      * jt[0]=jt[1] point at the full-update entry. */
-    uint8_t ss = *(volatile uint8_t *)0x2000041a;
+    uint8_t ss = *s_afe_substate;
     if (ss >= 2 && ss < 0xc) {
         bms_afe_cell_step(ss);
         if (ss < 11) {
@@ -179,37 +266,37 @@ void bms_core_update(void)
     }
 
     /* --- cell sum / max / min --- */
-    int scan = ((*mode & 0x20) != 0) ? (*(volatile uint8_t *)0x2000041c == 2) : 1;
+    int scan = ((*mode & 0x20) != 0) ? (*s_scan_dbnc == 2) : 1;
     if (scan) {
         *vmax = 0;
-        *(volatile uint8_t *)0x20000430 = 0;
+        *s_cell_max_idx = 0;
         *vmin = 0xffff;
-        *(volatile uint8_t *)0x200003c4 = 0;
+        *s_cell_min_idx = 0;
         *vsum = 0;
         for (uint8_t i = 0; i < 10; i++) {
             uint16_t v = cells[i];
             *vsum = (uint16_t)(v + *vsum);
-            if (*vmax < v) { *vmax = v; *(volatile uint8_t *)0x20000430 = (uint8_t)(i + 1); }
-            if (v < *vmin) { *vmin = v; *(volatile uint8_t *)0x200003c4 = (uint8_t)(i + 1); }
+            if (*vmax < v) { *vmax = v; *s_cell_max_idx = (uint8_t)(i + 1); }
+            if (v < *vmin) { *vmin = v; *s_cell_min_idx = (uint8_t)(i + 1); }
         }
     }
 
     /* cfg max/min trackers (5-tick debounce). */
     if (*(volatile uint16_t *)(CFG + 0x2c) < *vmax) {
-        if ((uint8_t)(++*(volatile uint8_t *)0x200003a0) > 5) {
-            *(volatile uint8_t *)0x200003a0 = 0;
+        if ((uint8_t)(++*s_cfgmax_dbnc) > 5) {
+            *s_cfgmax_dbnc = 0;
             *(volatile uint16_t *)(CFG + 0x2c) = *vmax;
         }
     } else {
-        *(volatile uint8_t *)0x200003a0 = 0;
+        *s_cfgmax_dbnc = 0;
     }
     if (*vmin < *(volatile uint16_t *)(CFG + 0x2e) || *(volatile uint16_t *)(CFG + 0x2e) == 0) {
-        if ((uint8_t)(++*(volatile uint8_t *)0x200003a1) > 5) {
-            *(volatile uint8_t *)0x200003a1 = 0;
+        if ((uint8_t)(++*s_cfgmin_dbnc) > 5) {
+            *s_cfgmin_dbnc = 0;
             *(volatile uint16_t *)(CFG + 0x2e) = *vmin;
         }
     } else {
-        *(volatile uint8_t *)0x200003a1 = 0;
+        *s_cfgmin_dbnc = 0;
     }
 
     /* Protection cascade + current/coulomb + temperature + charger step.
@@ -235,11 +322,11 @@ void bms_core_update(void)
  */
 static void bms_temp_step(uint8_t status)
 {
-    volatile uint8_t  * const rx  = (volatile uint8_t  *)0x20000614;
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
-    volatile uint8_t  * const ts  = (volatile uint8_t  *)0x20000218; /* +1 charge TS, +2 discharge TS */
-    volatile uint8_t  * const cnt_max = (volatile uint8_t *)0x2000021c;
-    volatile uint8_t  * const cnt_min = (volatile uint8_t *)0x20000212;
+    volatile uint8_t  * const rx  = s_rx;
+    volatile uint16_t * const mode = s_mode;
+    volatile uint8_t  * const ts  = s_ts; /* +1 charge TS, +2 discharge TS */
+    volatile uint8_t  * const cnt_max = s_ts_max_dbnc;
+    volatile uint8_t  * const cnt_min = s_ts_min_dbnc;
 
     if ((status & 4) != 0) {
         if ((*mode & 0x8) != 0) {                          /* discharge TS — reg 0x32 */
@@ -247,10 +334,10 @@ static void bms_temp_step(uint8_t status)
                 ts[2] = ntc_temp_read();
                 fedl5236_command_write(7, 0);
                 *mode &= 0xfff7u;
-                *(volatile uint16_t *)0x20000418 = 0;
+                *s_offset = 0;
                 fedl5236_command_write(6, 0x92);
-                if (*(volatile uint32_t *)0x2000072c > 4) {
-                    uint8_t cal = *(volatile uint8_t *)0x20000205;
+                if (*s_evtlog_en > 4) {
+                    uint8_t cal = *s_ts2_cal;
                     if (cal != 0) {
                         if ((int8_t)cal < 0) {
                             ts[2] = (uint8_t)(ts[2] - (uint8_t)(~cal + 1u));
@@ -271,8 +358,8 @@ static void bms_temp_step(uint8_t status)
                 ts[1] = ntc_temp_read();
                 fedl5236_command_write(7, 0x83);
                 *mode |= 0x8u;
-                if (*(volatile uint32_t *)0x2000072c > 4) {
-                    uint8_t cal = *(volatile uint8_t *)0x2000021b;
+                if (*s_evtlog_en > 4) {
+                    uint8_t cal = *s_ts1_cal;
                     if (cal != 0) {
                         if ((int8_t)cal < 0) {
                             ts[1] = (uint8_t)(ts[1] - (uint8_t)(~cal + 1u));
@@ -298,10 +385,10 @@ static void bms_temp_step(uint8_t status)
         return;
     }
 
-    volatile uint8_t * const substate = (volatile uint8_t *)0x2000041a;
+    volatile uint8_t * const substate = s_afe_substate;
     uint32_t cv = (19536u * (uint32_t)(rx[2] | (rx[3] << 8))) / 1000u;
     *mode &= 0xfff7u;
-    *(volatile uint32_t *)((uint32_t)*substate * 4 + 0x200003d4) = cv;
+    *(volatile uint32_t *)((uint32_t)*substate * 4 + (uintptr_t)CHG_RR) = cv;
     *substate = (uint8_t)(*substate + 1);
     if (*substate < 0xc) {
         bms_afe_charger_step(*substate);
@@ -314,7 +401,7 @@ static void bms_temp_step(uint8_t status)
  * to millivolts: raw * 5000 / 4095. */
 static uint16_t afe_adc_to_mv(void)
 {
-    volatile uint8_t * const rx = (volatile uint8_t *)0x20000614;
+    volatile uint8_t * const rx = s_rx;
     uint32_t raw = (uint32_t)(rx[2] | (rx[3] << 8));
     return (uint16_t)((5000u * raw) / 4095u);
 }
@@ -329,11 +416,11 @@ static void bms_afe_cell_step(uint8_t step)
 {
     static const uint8_t rd_reg[12] =
         { 0, 0, 0x1a, 0x1c, 0x1e, 0x20, 0x22, 0x24, 0x26, 0x28, 0x2a, 0x2c };
-    volatile uint16_t * const cells = (volatile uint16_t *)0x20000380;
-    volatile uint16_t * const mode  = (volatile uint16_t *)0x200006a0;
+    volatile uint16_t * const cells = s_cell_voltage;
+    volatile uint16_t * const mode  = s_mode;
 
     if (fedl5236_read_data(rd_reg[step], 2) != 0) {
-        int scan = ((*mode & 0x20) != 0) ? (*(volatile uint8_t *)0x2000041c == 2) : 1;
+        int scan = ((*mode & 0x20) != 0) ? (*s_scan_dbnc == 2) : 1;
         if (scan) {
             cells[step - 2] = afe_adc_to_mv();
         }
@@ -341,7 +428,7 @@ static void bms_afe_cell_step(uint8_t step)
     if (step >= 11) {
         return;                                  /* falls through to the full update */
     }
-    (*(volatile uint8_t *)0x2000041a)++;
+    (*s_afe_substate)++;
     switch (step) {
     case 2:  fedl5236_command_write(5, 0x85); break;
     case 3:  fedl5236_command_write(5, 0x86); break;
@@ -396,27 +483,27 @@ static void bms_afe_charger_step(uint8_t step)
  */
 void bms_periodic_update(uint8_t status)
 {
-    volatile uint16_t * const vmax = (volatile uint16_t *)0x200003a2;
-    volatile uint16_t * const vmin = (volatile uint16_t *)0x200003d2;
-    volatile uint32_t * const dsg_i = (volatile uint32_t *)0x20000420;
-    volatile uint32_t * const chg_i = (volatile uint32_t *)0x200003a8;
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
+    volatile uint16_t * const vmax = s_cell_max;
+    volatile uint16_t * const vmin = s_cell_min;
+    volatile uint32_t * const dsg_i = s_dsg_i;
+    volatile uint32_t * const chg_i = s_chg_i;
+    volatile uint16_t * const mode = s_mode;
 
     /* --- OVP1: max cell > 4249 mV (60-tick set) / < 4150 mV (6-tick clear) -- */
     if (*vmax > 0x1099) {
         if (!(FAULT & 1)) {
-            if (++*(volatile uint16_t *)0x200005a0 > 0x3b) {
-                *(volatile uint16_t *)0x200005a0 = 0;
+            if (++*s_ovp1_set_dbnc > 0x3b) {
+                *s_ovp1_set_dbnc = 0;
                 FAULT |= 1u;
             }
         }
-        *(volatile uint16_t *)0x2000058a = 0;
+        *s_ovp1_clr_dbnc = 0;
     } else {
-        *(volatile uint16_t *)0x200005a0 = 0;
+        *s_ovp1_set_dbnc = 0;
         if (FAULT & 1) {
             if (*vmax > 0x1036) {
-                *(volatile uint16_t *)0x2000058a = 0;
-            } else if (++*(volatile uint16_t *)0x2000058a > 5) {
+                *s_ovp1_clr_dbnc = 0;
+            } else if (++*s_ovp1_clr_dbnc > 5) {
                 FAULT &= 0xfffeu;
             }
         }
@@ -425,18 +512,18 @@ void bms_periodic_update(uint8_t status)
     /* --- OVP2: max cell > 4299 mV (6-tick set) / < 4150 mV (6-tick clear) --- */
     if (*vmax > 0x10cb) {
         if (!(FAULT & 2)) {
-            if (++*(volatile uint16_t *)0x20000586 > 5) {
-                *(volatile uint16_t *)0x20000586 = 0;
+            if (++*s_ovp2_set_dbnc > 5) {
+                *s_ovp2_set_dbnc = 0;
                 FAULT |= 2u;
             }
         }
-        *(volatile uint16_t *)0x20000598 = 0;
+        *s_ovp2_clr_dbnc = 0;
     } else {
-        *(volatile uint16_t *)0x20000586 = 0;
+        *s_ovp2_set_dbnc = 0;
         if (FAULT & 2) {
             if (*vmax > 0x1036) {
-                *(volatile uint16_t *)0x20000598 = 0;
-            } else if (++*(volatile uint16_t *)0x20000598 > 5) {
+                *s_ovp2_clr_dbnc = 0;
+            } else if (++*s_ovp2_clr_dbnc > 5) {
                 FAULT &= 0xfffdu;
             }
         }
@@ -444,44 +531,44 @@ void bms_periodic_update(uint8_t status)
 
     /* --- UVP1: min cell <= 3000 mV (60-tick set) / > 3299 mV (6-tick clear) - */
     if (*vmin > 0xbb8) {
-        *(volatile uint16_t *)0x200004ba = 0;
+        *s_uvp1_set_dbnc = 0;
         if (FAULT & 4) {
             if (*vmin > 0xce3) {
-                if (++*(volatile uint16_t *)0x200004c0 > 5) {
+                if (++*s_uvp1_clr_dbnc > 5) {
                     FAULT &= 0xfffbu;
                 }
             } else {
-                *(volatile uint16_t *)0x200004c0 = 0;
+                *s_uvp1_clr_dbnc = 0;
             }
         }
     } else {
         if (!(FAULT & 4)) {
-            if (++*(volatile uint16_t *)0x200004ba > 0x3b) {
-                *(volatile uint16_t *)0x200004ba = 0;
+            if (++*s_uvp1_set_dbnc > 0x3b) {
+                *s_uvp1_set_dbnc = 0;
                 FAULT |= 4u;
             }
         }
-        *(volatile uint16_t *)0x200004c0 = 0;
+        *s_uvp1_clr_dbnc = 0;
     }
 
     /* --- UVP2: min cell < 2801 mV (6-tick set) / > 3299 mV (6-tick clear) --- */
     if (*vmin < 0xaf1) {
         if (!(FAULT & 8)) {
-            if (++*(volatile uint16_t *)0x2000058e > 5) {
-                *(volatile uint16_t *)0x2000058e = 0;
+            if (++*s_uvp2_set_dbnc > 5) {
+                *s_uvp2_set_dbnc = 0;
                 FAULT |= 8u;
             }
         }
-        *(volatile uint16_t *)0x20000590 = 0;
+        *s_uvp2_clr_dbnc = 0;
     } else {
-        *(volatile uint16_t *)0x2000058e = 0;
+        *s_uvp2_set_dbnc = 0;
         if (FAULT & 8) {
             if (*vmin > 0xce3) {
-                if (++*(volatile uint16_t *)0x20000590 > 5) {
+                if (++*s_uvp2_clr_dbnc > 5) {
                     FAULT &= 0xfff7u;
                 }
             } else {
-                *(volatile uint16_t *)0x20000590 = 0;
+                *s_uvp2_clr_dbnc = 0;
             }
         }
     }
@@ -489,49 +576,49 @@ void bms_periodic_update(uint8_t status)
     /* --- cell imbalance: max>3599 mV and (max-min)>=501 mV, 100-tick (bit11) - */
     if (*vmax > 0xe0f) {
         if ((int)((unsigned)*vmax - (unsigned)*vmin) < 0x1f5) {
-            *(volatile uint16_t *)0x200004c6 = 0;
+            *s_imbal_dbnc = 0;
         } else {
-            if (++*(volatile uint16_t *)0x200004c6 > 99) {
-                *(volatile uint16_t *)0x200004c6 = 0;
+            if (++*s_imbal_dbnc > 99) {
+                *s_imbal_dbnc = 0;
                 FAULT |= 0x800u;
             }
         }
     } else {
-        *(volatile uint16_t *)0x200004c6 = 0;
+        *s_imbal_dbnc = 0;
     }
 
     /* --- current-direction clears: hard discharge clears OVP, hard charge UVP */
     if (*dsg_i > 199) {
         FAULT &= 0xfffeu;
         FAULT &= 0xfffdu;
-        *(volatile uint16_t *)0x200005a0 = 0;
-        *(volatile uint16_t *)0x20000586 = 0;
-        *(volatile uint16_t *)0x2000058a = 0;
-        *(volatile uint16_t *)0x20000598 = 0;
+        *s_ovp1_set_dbnc = 0;
+        *s_ovp2_set_dbnc = 0;
+        *s_ovp1_clr_dbnc = 0;
+        *s_ovp2_clr_dbnc = 0;
     }
     if (*chg_i > 199) {
         FAULT &= 0xfffbu;
         FAULT &= 0xfff7u;
-        *(volatile uint16_t *)0x200004ba = 0;
-        *(volatile uint16_t *)0x2000058e = 0;
-        *(volatile uint16_t *)0x200004c0 = 0;
-        *(volatile uint16_t *)0x20000590 = 0;
+        *s_uvp1_set_dbnc = 0;
+        *s_uvp2_set_dbnc = 0;
+        *s_uvp1_clr_dbnc = 0;
+        *s_uvp2_clr_dbnc = 0;
     }
 
     /* --- charger-voltage detect: max of the 15-slot round-robin array; held
      *     above 19999, dropped to 0 after 900 ticks below it. ------------------ */
     *mode |= 0x10u;
     for (uint8_t i = 0; i < 0xf; i++) {
-        if (*(volatile uint32_t *)((uint32_t)i * 4 + 0x200003d4) > 0x4e1f) {
-            *(volatile uint32_t *)0x2000042c = *(volatile uint32_t *)((uint32_t)i * 4 + 0x200003d4);
-            *(volatile uint16_t *)0x200003cc = 0;
+        if (*(volatile uint32_t *)((uint32_t)i * 4 + (uintptr_t)CHG_RR) > 0x4e1f) {
+            *s_chg_voltage = *(volatile uint32_t *)((uint32_t)i * 4 + (uintptr_t)CHG_RR);
+            *s_chg_volt_dbnc = 0;
         } else {
-            if (++*(volatile uint16_t *)0x200003cc > 0x383) {
-                *(volatile uint16_t *)0x200003cc = 0;
-                *(volatile uint32_t *)0x2000042c = 0;
+            if (++*s_chg_volt_dbnc > 0x383) {
+                *s_chg_volt_dbnc = 0;
+                *s_chg_voltage = 0;
             }
         }
-        *(volatile uint32_t *)((uint32_t)i * 4 + 0x200003d4) = 0;
+        *(volatile uint32_t *)((uint32_t)i * 4 + (uintptr_t)CHG_RR) = 0;
     }
 
     cell_voltage_scan(status);
@@ -549,16 +636,16 @@ void bms_periodic_update(uint8_t status)
  * then the temperature/charger step. */
 void cell_voltage_scan(uint8_t status)
 {
-    volatile uint8_t  * const rx   = (volatile uint8_t  *)0x20000614;
-    volatile uint32_t * const dsg_i = (volatile uint32_t *)0x20000420;
-    volatile uint32_t * const chg_i = (volatile uint32_t *)0x200003a8;
-    volatile int32_t  * const avg  = (volatile int32_t  *)0x20000424;
-    volatile uint32_t * const inst = (volatile uint32_t *)0x2000039c;
-    volatile int32_t  * const ring = (volatile int32_t  *)0x200003ac;
-    volatile uint16_t * const mode = (volatile uint16_t *)0x200006a0;
-    volatile uint16_t * const chgcal = (volatile uint16_t *)0x2000023c;
-    volatile uint16_t * const dsgcal = (volatile uint16_t *)0x2000023e;
-    volatile uint32_t * const rsoc = (volatile uint32_t *)0x20000250;
+    volatile uint8_t  * const rx   = s_rx;
+    volatile uint32_t * const dsg_i = s_dsg_i;
+    volatile uint32_t * const chg_i = s_chg_i;
+    volatile int32_t  * const avg  = s_cur_avg;
+    volatile uint32_t * const inst = s_cur_inst;
+    volatile int32_t  * const ring = s_cur_ring;
+    volatile uint16_t * const mode = s_mode;
+    volatile uint16_t * const chgcal = s_chg_cal;
+    volatile uint16_t * const dsgcal = s_dsg_cal;
+    volatile uint32_t * const rsoc = s_rsoc;
 
     if (!(status & 2)) {
         bms_temp_step(status);
@@ -567,7 +654,7 @@ void cell_voltage_scan(uint8_t status)
 
     /* --- zero-current offset capture (AFE reg 0x2e). Until the offset is
      *     latched the update tail-returns without integrating current. ------- */
-    volatile uint16_t * const offset = (volatile uint16_t *)0x20000418;
+    volatile uint16_t * const offset = s_offset;
     if (*offset == 0) {
         if (fedl5236_read_data(0x2e, 2) != 0) {
             *offset = 0;
@@ -591,8 +678,8 @@ void cell_voltage_scan(uint8_t status)
     /* --- instantaneous current: (|sample-offset| * 69000) >> 16; sign stored
      *     in `inst` (negative=discharge), magnitudes split to the stage cells. */
     *inst = 0;
-    *(volatile uint32_t *)0x20000414 = 0;
-    *(volatile uint32_t *)0x200003c0 = 0;
+    *s_chg_mag = 0;
+    *s_dsg_mag = 0;
     {
         uint32_t sample = *(volatile uint16_t *)(rx + 2);
         if (*offset < sample) {
@@ -601,7 +688,7 @@ void cell_voltage_scan(uint8_t status)
                 diff = (uint32_t)(((uint64_t)diff * 69000u) >> 16);
             }
             *inst += diff;
-            *(volatile uint32_t *)0x200003c0 = *inst;     /* discharge magnitude (positive) */
+            *s_dsg_mag = *inst;     /* discharge magnitude (positive) */
             *inst = ~*inst;
             *inst += 1;                                    /* negate: discharge < 0 */
         } else {
@@ -610,7 +697,7 @@ void cell_voltage_scan(uint8_t status)
                 diff = (uint32_t)(((uint64_t)diff * 69000u) >> 16);
             }
             *inst += diff;
-            *(volatile uint32_t *)0x20000414 = *inst;      /* charge magnitude (positive) */
+            *s_chg_mag = *inst;      /* charge magnitude (positive) */
         }
     }
 
@@ -643,21 +730,21 @@ void cell_voltage_scan(uint8_t status)
             *dsg_i = *dsg_i / 1000u;
         }
         if (*(volatile uint16_t *)(CFG + 0x76) < *dsg_i / 10u) {
-            if (++*(volatile uint8_t *)0x2000041e > 0x13) {
-                *(volatile uint8_t *)0x2000041e = 0;
+            if (++*s_dsg_peak_dbnc > 0x13) {
+                *s_dsg_peak_dbnc = 0;
                 *(volatile uint16_t *)(CFG + 0x76) = (uint16_t)(*dsg_i / 10u);
             }
         } else {
-            *(volatile uint8_t *)0x2000041e = 0;
+            *s_dsg_peak_dbnc = 0;
         }
         *avg = (int32_t)(~*dsg_i + 1);
         if (*mode & 0x8000) {
-            if (++*(volatile uint8_t *)0x2000022c < 0x29) {
+            if (++*s_rsoc_cnt < 0x29) {
                 *rsoc += *dsg_i;
             } else {
                 *chgcal = 0;
                 *rsoc *= 0x19;
-                *rsoc = *rsoc / *(volatile uint32_t *)0x20000228;
+                *rsoc = *rsoc / *s_rsoc_div;
                 if (*rsoc > 0x3e7) {
                     *rsoc += 0xfffffc18u;          /* -1000 */
                     *rsoc = 1000u - *rsoc;
@@ -667,7 +754,7 @@ void cell_voltage_scan(uint8_t status)
                 }
                 *chgcal = (uint16_t)((int16_t)*rsoc + *chgcal);
                 *(volatile uint16_t *)(CFG + 0x58) = *chgcal;
-                *(volatile uint8_t *)0x2000022c = 0;
+                *s_rsoc_cnt = 0;
                 *mode &= 0x7fffu;
                 *dsg_i = *dsg_i * (uint32_t)*chgcal;
                 *dsg_i = *dsg_i / 1000u;
@@ -684,26 +771,26 @@ void cell_voltage_scan(uint8_t status)
         }
         *avg = (int32_t)*chg_i;
         if (*(volatile uint16_t *)(CFG + 0x74) < *chg_i / 10u) {
-            if (++*(volatile uint8_t *)0x200003a4 > 0x13) {
+            if (++*s_chg_peak_dbnc > 0x13) {
                 *(volatile uint16_t *)(CFG + 0x74) = (uint16_t)(*chg_i / 10u);
             }
         } else {
-            *(volatile uint8_t *)0x200003a4 = 0;
+            *s_chg_peak_dbnc = 0;
         }
-        if (*chg_i < *(volatile uint32_t *)0x200003c8 &&
-            *(volatile uint32_t *)0x20000594 > 0x13) {
-            if (++*(volatile uint8_t *)0x200003bc > 0x13) {
-                *(volatile uint8_t *)0x200003bc = 0;
-                *(volatile uint32_t *)0x200003c8 = *chg_i;
+        if (*chg_i < *s_chg_min &&
+            *s_uptime_1s > 0x13) {
+            if (++*s_chg_min_dbnc > 0x13) {
+                *s_chg_min_dbnc = 0;
+                *s_chg_min = *chg_i;
             }
         }
         if (*mode & 0x4000) {
-            if (++*(volatile uint8_t *)0x2000022c < 0x29) {
+            if (++*s_rsoc_cnt < 0x29) {
                 *rsoc += *chg_i;
             } else {
                 *dsgcal = 0;
                 *rsoc *= 0x19;
-                *rsoc = *rsoc / *(volatile uint32_t *)0x20000228;
+                *rsoc = *rsoc / *s_rsoc_div;
                 if (*rsoc > 0x3e7) {
                     *rsoc += 0xfffffc18u;          /* -1000 */
                     *rsoc = 1000u - *rsoc;
@@ -715,7 +802,7 @@ void cell_voltage_scan(uint8_t status)
                 *(volatile uint16_t *)(CFG + 0x56) = *dsgcal;
                 *chgcal = *dsgcal;
                 *(volatile uint16_t *)(CFG + 0x58) = *chgcal;
-                *(volatile uint8_t *)0x2000022c = 0;
+                *s_rsoc_cnt = 0;
                 *mode &= 0xbfffu;
                 *chg_i = *chg_i * (uint32_t)*dsgcal;
                 *chg_i = *chg_i / 1000u;
@@ -728,33 +815,33 @@ void cell_voltage_scan(uint8_t status)
     /* --- charge over-current (bits 4/5): set above 4499 / 5999 mA when
      *     charging hard, debounce-cleared (89 ticks, MOS<3) when idle. ------- */
     if (*chg_i < 200) {
-        *(volatile uint8_t  *)0x200003a4 = 0;
-        *(volatile uint16_t *)0x200005a2 = 0;
-        *(volatile uint16_t *)0x200004c8 = 0;
-        if (((FAULT & 0x10) || (FAULT & 0x20)) && *(volatile uint8_t *)0x20000554 < 3) {
+        *s_chg_peak_dbnc = 0;
+        *s_cocp1_set_dbnc = 0;
+        *s_cocp2_set_dbnc = 0;
+        if (((FAULT & 0x10) || (FAULT & 0x20)) && *s_mos_state < 3) {
             if (FAULT & 0x10) {
-                if (++*(volatile uint16_t *)0x200004cc > 0x59) {
-                    *(volatile uint16_t *)0x200004cc = 0;
+                if (++*s_cocp1_clr_dbnc > 0x59) {
+                    *s_cocp1_clr_dbnc = 0;
                     FAULT &= 0xffefu;
                 }
             } else {
-                *(volatile uint16_t *)0x200004cc = 0;
+                *s_cocp1_clr_dbnc = 0;
             }
             if (FAULT & 0x20) {
-                if (++*(volatile uint16_t *)0x200004be > 0x59) {
-                    *(volatile uint16_t *)0x200004be = 0;
+                if (++*s_cocp2_clr_dbnc > 0x59) {
+                    *s_cocp2_clr_dbnc = 0;
                     FAULT &= 0xffdfu;
                 }
             } else {
-                *(volatile uint16_t *)0x200004be = 0;
+                *s_cocp2_clr_dbnc = 0;
             }
         }
     } else {
-        *(volatile uint8_t  *)0x2000041e = 0;
-        *(volatile uint16_t *)0x200004c4 = 0;
-        *(volatile uint16_t *)0x2000059e = 0;
-        *(volatile uint16_t *)0x200004c2 = 0;
-        *(volatile uint16_t *)0x2000059a = 0;
+        *s_dsg_peak_dbnc = 0;
+        *s_docp1_set_dbnc = 0;
+        *s_docp2_set_dbnc = 0;
+        *s_docp_clr_b = 0;
+        *s_docp_clr_a = 0;
         FAULT &= 0xffbfu;
         FAULT &= 0xff7fu;
         FAULT &= 0xfbffu;
@@ -762,22 +849,22 @@ void cell_voltage_scan(uint8_t status)
         FAULT &= 0xfdffu;
         if (!(FAULT & 0x10)) {
             if (*chg_i > 0x1193) {
-                if (++*(volatile uint16_t *)0x200005a2 > 0x3b) {
-                    *(volatile uint16_t *)0x200005a2 = 0;
+                if (++*s_cocp1_set_dbnc > 0x3b) {
+                    *s_cocp1_set_dbnc = 0;
                     FAULT |= 0x10u;
                 }
             } else {
-                *(volatile uint16_t *)0x200005a2 = 0;
+                *s_cocp1_set_dbnc = 0;
             }
         }
         if (!(FAULT & 0x20)) {
             if (*chg_i > 0x176f) {
-                if (++*(volatile uint16_t *)0x200004c8 > 5) {
-                    *(volatile uint16_t *)0x200004c8 = 0;
+                if (++*s_cocp2_set_dbnc > 5) {
+                    *s_cocp2_set_dbnc = 0;
                     FAULT |= 0x20u;
                 }
             } else {
-                *(volatile uint16_t *)0x200004c8 = 0;
+                *s_cocp2_set_dbnc = 0;
             }
         }
     }
@@ -786,59 +873,59 @@ void cell_voltage_scan(uint8_t status)
      *     discharging hard, debounce-cleared (89 ticks) when idle; bit10 (TS)
      *     also auto-recovers on the idle side. -------------------------------- */
     if (*dsg_i < 200) {
-        *(volatile uint8_t  *)0x2000041e = 0;
-        *(volatile uint16_t *)0x200004c4 = 0;
-        *(volatile uint16_t *)0x2000059e = 0;
-        *(volatile uint16_t *)0x200004c2 = 0;
-        *(volatile uint16_t *)0x2000059a = 0;
+        *s_dsg_peak_dbnc = 0;
+        *s_docp1_set_dbnc = 0;
+        *s_docp2_set_dbnc = 0;
+        *s_docp_clr_b = 0;
+        *s_docp_clr_a = 0;
         if (FAULT & 0x40) {
-            if (++*(volatile uint16_t *)0x200004b2 > 0x59) {
-                *(volatile uint16_t *)0x200004b2 = 0;
+            if (++*s_docp1_clr_dbnc > 0x59) {
+                *s_docp1_clr_dbnc = 0;
                 FAULT &= 0xffbfu;
             }
         } else {
-            *(volatile uint16_t *)0x200004b2 = 0;
+            *s_docp1_clr_dbnc = 0;
         }
         if (FAULT & 0x80) {
-            if (++*(volatile uint16_t *)0x200004b6 > 0x59) {
-                *(volatile uint16_t *)0x200004b6 = 0;
+            if (++*s_docp2_clr_dbnc > 0x59) {
+                *s_docp2_clr_dbnc = 0;
                 FAULT &= 0xff7fu;
             }
         } else {
-            *(volatile uint16_t *)0x200004b6 = 0;
+            *s_docp2_clr_dbnc = 0;
         }
         if (FAULT & 0x400) {
-            if (++*(volatile uint16_t *)0x2000059c > 0x59) {
-                *(volatile uint16_t *)0x2000059c = 0;
+            if (++*s_ts_clr_dbnc > 0x59) {
+                *s_ts_clr_dbnc = 0;
                 FAULT &= 0xfbffu;
             }
         } else {
-            *(volatile uint16_t *)0x2000059c = 0;
+            *s_ts_clr_dbnc = 0;
         }
     } else {
-        *(volatile uint8_t  *)0x200003a4 = 0;
-        *(volatile uint16_t *)0x200005a2 = 0;
-        *(volatile uint16_t *)0x200004c8 = 0;
+        *s_chg_peak_dbnc = 0;
+        *s_cocp1_set_dbnc = 0;
+        *s_cocp2_set_dbnc = 0;
         FAULT &= 0xffefu;
         FAULT &= 0xffdfu;
         if (!(FAULT & 0x40)) {
             if (*dsg_i > 0x1f3f) {
-                if (++*(volatile uint16_t *)0x200004c4 > 0x3b) {
-                    *(volatile uint16_t *)0x200004c4 = 0;
+                if (++*s_docp1_set_dbnc > 0x3b) {
+                    *s_docp1_set_dbnc = 0;
                     FAULT |= 0x40u;
                 }
             } else {
-                *(volatile uint16_t *)0x200004c4 = 0;
+                *s_docp1_set_dbnc = 0;
             }
         }
         if (!(FAULT & 0x80)) {
             if (*dsg_i > 0x270f) {
-                if (++*(volatile uint16_t *)0x2000059e > 5) {
-                    *(volatile uint16_t *)0x2000059e = 0;
+                if (++*s_docp2_set_dbnc > 5) {
+                    *s_docp2_set_dbnc = 0;
                     FAULT |= 0x80u;
                 }
             } else {
-                *(volatile uint16_t *)0x2000059e = 0;
+                *s_docp2_set_dbnc = 0;
             }
         }
     }

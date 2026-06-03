@@ -49,9 +49,12 @@ static const uint32_t s_temp_lut[146] = {
     0x0000036e, 0x00000358,
 };
 
+/* FEDL5236 RX frame buffer (shared with fedl5236.c). */
+#define FEDL_RX_BUF  ((volatile uint8_t *)0x20000614)
+
 uint8_t ntc_temp_read(void)
 {
-    volatile uint8_t * const rx = (volatile uint8_t *)0x20000614;
+    volatile uint8_t * const rx = FEDL_RX_BUF;
 
     uint32_t adc = (uint32_t)(rx[2] | (rx[3] << 8));
     int64_t  p1  = (int64_t)adc * 610;

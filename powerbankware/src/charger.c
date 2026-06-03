@@ -15,6 +15,8 @@
 
 #define AFE   ((volatile uint8_t *)0x20000614)
 #define FETB  (*(volatile uint8_t *)0x20000412)
+#define AFE_SPI_HANDLE ((void *)0x20000634)               /* SPI HAL handle */
+#define AFE_SUBSTATE   (*(volatile uint8_t *)0x2000041A)  /* refresh sub-state */
 
 extern const char s_fedl_proc_busy[];    /* "\nFEDL5236_Process()--> SPI Busy\r"          0x0801DCBC */
 extern const char s_fedl_proc_fet_err[]; /* "\nFEDL5236_Process()--> FET Control Error\r" 0x0801DCE0 */
@@ -24,7 +26,7 @@ extern const char s_fedl_proc_fet_err[]; /* "\nFEDL5236_Process()--> FET Control
 
 void charger_afe_refresh(void)
 {
-    if (spi_get_state((void *)0x20000634) != 1) {
+    if (spi_get_state(AFE_SPI_HANDLE) != 1) {
         log_print(2, s_fedl_proc_busy);
         return;
     }
@@ -51,6 +53,6 @@ void charger_afe_refresh(void)
         } while (attempt < 5 && ((want ^ AFE[2]) & 3) != 0);
     }
 
-    *(volatile uint8_t *)0x2000041A = 0;
+    AFE_SUBSTATE = 0;
     fedl5236_command_write(8, 0x91);
 }
