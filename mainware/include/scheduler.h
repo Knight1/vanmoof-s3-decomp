@@ -47,6 +47,10 @@ _Static_assert(sizeof(struct scheduler) == 0x190, "");
 
 extern struct scheduler g_scheduler;   /* SRAM 0x200004C0 */
 
+/* Clear both slot bitmaps so all 48 slots start free. Called once during
+ * application init (OEM scheduler_init at 0x080306C0); returns 1. */
+int scheduler_init(void);
+
 /* SysTick service: for every armed slot, decrement its counter (floored at 0)
  * and, when the counter lands on 1, invoke its callback once. A slot armed
  * with N ticks therefore fires after N-1 SysTick periods; the login lockout

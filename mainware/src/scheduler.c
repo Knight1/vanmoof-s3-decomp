@@ -12,6 +12,18 @@ struct scheduler g_scheduler;
  * slots (OEM rodata 0x08050CBC). The Muco timer module is "src/time.c". */
 static const char k_sched_src_file[] = "src/time.c";
 
+int scheduler_init(void)
+{
+    /* Mark every slot free. The OEM clears the two 6-byte bitmaps (and the
+     * first callback word, with the same run of stores); we mirror the effect. */
+    for (unsigned i = 0; i < SCHED_BITMAP_BYTES; i++) {
+        g_scheduler.allocated[i] = 0;
+        g_scheduler.armed[i] = 0;
+    }
+    g_scheduler.callbacks[0] = 0;
+    return 1;
+}
+
 void scheduler_tick(void)
 {
     for (uint8_t slot = 0; slot < SCHED_SLOTS; slot = (uint8_t)(slot + 1)) {

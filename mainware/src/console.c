@@ -219,3 +219,57 @@ void console_soc_set(char *input)
      * each iteration, so the no-op call has no observable effect. */
     announce_mark(2);
 }
+
+/* `region` console command (OEM 0x080421CC). Sets the bike's region / speed
+ * mode — 0=EU, 1=US, 2=JP, 3=OFFROAD (OFFROAD lifts the regulated speed cap) —
+ * then echoes the current lock state and region. The lock state at `+0x144` is
+ * read and written back unchanged (only the region is set here); a value < 3 is
+ * required to accept a change. Applying the region re-runs the config-apply
+ * (FUN_08031728) that pushes the `ctx_sub[0xF4..0x103]` block to the drive
+ * subsystem — the same path the volume commands use; the OEM snapshots
+ * `ctx_sub[0x104..0x1C4]` onto the stack first because the apply helper reads
+ * it back from the caller's frame. */
+void console_region_set(char *input)
+{
+    char     snapshot[0xC0];
+    char    *cursor = input;
+    uint8_t  lock = g_app_state.ctx_sub->region_lock;
+
+    if (console_next_token(&cursor)) {
+        unsigned long parsed = (unsigned long)strtol(cursor, NULL, 10);
+
+        if ((parsed & 0xFFFFu) < 4u && lock < 3u) {
+            g_app_state.ctx_sub->region = (uint8_t)parsed;
+            g_app_state.ctx_sub->region_lock = lock;
+
+            memcpy(snapshot,
+                   (void *)((char *)g_app_state.ctx_sub + 0x104),
+                   sizeof snapshot);
+
+            {
+                uint32_t res = FUN_08031728(
+                    g_app_state.ctx_sub->audio_engine_cfg[0],
+                    g_app_state.ctx_sub->audio_engine_cfg[1],
+                    g_app_state.ctx_sub->audio_engine_cfg[2],
+                    g_app_state.ctx_sub->audio_engine_cfg[3]);
+                g_log_func("Set region and lock, res: %d\r\n", res);
+            }
+            (void)snapshot;
+        } else {
+            g_log_func("Parameter 0..3 0..2\r\n");
+        }
+    }
+
+    switch (g_app_state.ctx_sub->region_lock) {
+    case 1:  g_log_func("Region (off road disabled): "); break;
+    case 2:  g_log_func("Region (locked): ");            break;
+    default: g_log_func("Region (unlocked): ");          break;
+    }
+
+    switch (g_app_state.ctx_sub->region) {
+    case 0: g_log_func("0 = REGION_EU\r\n");      break;
+    case 1: g_log_func("1 = REGION_US\r\n");      break;
+    case 2: g_log_func("2 = REGION_JP\r\n");      break;
+    case 3: g_log_func("3 = REGION_OFFROAD\r\n"); break;
+    }
+}

@@ -41,11 +41,20 @@ struct session_ctx {
     uint8_t  volume_low;            /* +0x104  (hypothesis) */
     uint8_t  volume_medium;         /* +0x105  written by set-volume-medium */
     uint8_t  volume_high;           /* +0x106  written by set-volume-high */
-    uint8_t  _pad1[0xBE];           /* +0x107..+0x1C4 — rest of the audio
-                                     *                  block the OEM
-                                     *                  snapshots; not
-                                     *                  individually decoded
-                                     *                  yet. */
+    uint8_t  _pad1a[2];             /* +0x107..+0x108 */
+    uint8_t  region;                /* +0x109 — region / speed mode set by the
+                                     *           `region` console command:
+                                     *           0=EU, 1=US, 2=JP, 3=OFFROAD
+                                     *           (OFFROAD removes the speed cap).
+                                     *           Pushed to the drive subsystem via
+                                     *           the config-apply (FUN_08031728). */
+    uint8_t  _pad1b[0x3A];          /* +0x10A..+0x143 */
+    uint8_t  region_lock;           /* +0x144 — region lock state: 1=off-road
+                                     *           disabled, 2=locked, else unlocked.
+                                     *           Read (not set) by the `region` cmd. */
+    uint8_t  _pad1c[0x80];          /* +0x145..+0x1C4 — rest of the snapshotted
+                                     *                  block; not individually
+                                     *                  decoded yet. */
     uint8_t  _pad2[0x114];          /* +0x1C5..+0x2D8 */
     uint8_t  logged_in;             /* +0x2D9 — non-zero once login succeeded */
     uint8_t  _pad3[0x06];           /* +0x2DA..+0x2DF */
@@ -73,6 +82,8 @@ _Static_assert(__builtin_offsetof(struct session_ctx, audio_engine_cfg) == 0xF4,
 _Static_assert(__builtin_offsetof(struct session_ctx, volume_low)       == 0x104, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, volume_medium)    == 0x105, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, volume_high)      == 0x106, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, region)           == 0x109, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, region_lock)      == 0x144, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, logged_in)        == 0x2D9, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, fail_count)       == 0x2E0, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, user_password)    == 0x398, "");

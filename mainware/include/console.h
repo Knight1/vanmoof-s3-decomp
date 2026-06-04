@@ -43,4 +43,9 @@ void console_start_motor_update(char *input);
  * subsystem subscribes to that channel. */
 void console_soc_set(char *input);
 
+/* `console_region_set` — the `region` command. Sets the bike's region / speed
+ * mode (0=EU, 1=US, 2=JP, 3=OFFROAD; OFFROAD lifts the speed cap) and echoes
+ * the current lock state + region. */
+void console_region_set(char *input);
+
 #endif
