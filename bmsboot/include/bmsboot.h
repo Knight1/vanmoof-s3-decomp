@@ -67,6 +67,8 @@ typedef struct {
 #define CRC_BASE         0x40023000u
 #define GPIOA_BASE       0x50000000u
 #define GPIOB_BASE       0x50000400u
+#define GPIOC_BASE       0x50000800u
+#define GPIOH_BASE       0x50001C00u
 #define SCB_BASE         0xE000ED00u    /* VTOR @ +0x08, AIRCR @ +0x0C        */
 #define VTOR_RAM         0x20000000u    /* relocated vector table             */
 
@@ -103,6 +105,9 @@ typedef struct {
 
 #define USART1_IRQn      27     /* STM32L0 position 27                        */
 
+/* HAL GPIO_InitTypeDef (the subset the loader fills). */
+typedef struct { uint32_t pin, mode, pull, speed, alt; } gpio_cfg_t;
+
 /* ===================================================================== */
 /* MMIO helpers                                                          */
 /* ===================================================================== */
@@ -135,10 +140,13 @@ int  flash_program_verify(uint32_t addr, int16_t nbytes, const uint8_t *src);
 void flash_read(const uint32_t *src, uint16_t nbytes, uint8_t *dst);
 void mem_copy(uint8_t *dst, const uint8_t *src, int16_t n);
 void mem_copy_bytes(uint8_t *dst, const uint8_t *src, int n);
+void mem_set(void *dst, int val, int n);
 
 /* ota.c */
 void ota_process_byte(uint8_t b);
 void ota_send_response(uint8_t code);
+void ota_reset(void);                 /* clear the download state machine       */
+uint32_t ota_addr(void);              /* latched write address (0 == idle)      */
 
 /* uart.c */
 void comms_rx_state_init(void);
@@ -149,18 +157,18 @@ void uart_rx_drain(void);
 void uart_tx_pump(void);
 void uart_tx_flush(void);
 void comms_deinit(void);
+void comms_disable(void);             /* drop the comms-enable flag + states    */
 void USART1_IRQHandler(void);
 
 /* system.c */
 void boot_hw_init(void);
-void clock_periph_init(void);
+void hal_init(void);                  /* FLASH prefetch + 1 ms SysTick          */
+int  systick_config(uint32_t divider);
+void clock_periph_init(void);         /* HSE/PLL/RTC + CRC unit                  */
 void gpio_init(void);
 void led_init(void);
-void download_pin_check(void);
-void iwdg_init(void);
-int  iwdg_config(uint32_t prescaler);
-void iwdg_refresh(void);
-void iwdg_hal_init(void);
+void download_pin_check(void);        /* read PA10; bring up USART1 if asserted  */
+void iwdg_hal_init(void);             /* HAL_IWDG_Init (reload 0x908)            */
 
 /* handlers.c */
 void HardFault_Handler(void);
