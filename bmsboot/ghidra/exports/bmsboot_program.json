@@ -1,0 +1,909 @@
+{
+  "program": "bmsboot_v007.bin",
+  "image_base": "00000000",
+  "language": "ARM:LE:32:Cortex",
+  "compiler": "default",
+  "memory_blocks": [
+    {
+      "name": "ram",
+      "start": "00000000",
+      "end": "00004fff",
+      "size": 20480,
+      "r": true,
+      "w": true,
+      "x": true,
+      "initialized": true
+    }
+  ],
+  "vt_offset": "0x00",
+  "vector_table": [
+    {
+      "index": 0,
+      "addr": "00000000",
+      "value": "0x20005000"
+    },
+    {
+      "index": 1,
+      "addr": "00000004",
+      "value": "0x08001e61"
+    },
+    {
+      "index": 2,
+      "addr": "00000008",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 3,
+      "addr": "0000000c",
+      "value": "0x08000c51"
+    },
+    {
+      "index": 4,
+      "addr": "00000010",
+      "value": "0x00000000"
+    },
+    {
+      "index": 5,
+      "addr": "00000014",
+      "value": "0x00000000"
+    },
+    {
+      "index": 6,
+      "addr": "00000018",
+      "value": "0x00000000"
+    },
+    {
+      "index": 7,
+      "addr": "0000001c",
+      "value": "0x00000000"
+    },
+    {
+      "index": 8,
+      "addr": "00000020",
+      "value": "0x00000000"
+    },
+    {
+      "index": 9,
+      "addr": "00000024",
+      "value": "0x00000000"
+    },
+    {
+      "index": 10,
+      "addr": "00000028",
+      "value": "0x00000000"
+    },
+    {
+      "index": 11,
+      "addr": "0000002c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 12,
+      "addr": "00000030",
+      "value": "0x00000000"
+    },
+    {
+      "index": 13,
+      "addr": "00000034",
+      "value": "0x00000000"
+    },
+    {
+      "index": 14,
+      "addr": "00000038",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 15,
+      "addr": "0000003c",
+      "value": "0x0800169d"
+    },
+    {
+      "index": 16,
+      "addr": "00000040",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 17,
+      "addr": "00000044",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 18,
+      "addr": "00000048",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 19,
+      "addr": "0000004c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 20,
+      "addr": "00000050",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 21,
+      "addr": "00000054",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 22,
+      "addr": "00000058",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 23,
+      "addr": "0000005c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 24,
+      "addr": "00000060",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 25,
+      "addr": "00000064",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 26,
+      "addr": "00000068",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 27,
+      "addr": "0000006c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 28,
+      "addr": "00000070",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 29,
+      "addr": "00000074",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 30,
+      "addr": "00000078",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 31,
+      "addr": "0000007c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 32,
+      "addr": "00000080",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 33,
+      "addr": "00000084",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 34,
+      "addr": "00000088",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 35,
+      "addr": "0000008c",
+      "value": "0x00000000"
+    },
+    {
+      "index": 36,
+      "addr": "00000090",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 37,
+      "addr": "00000094",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 38,
+      "addr": "00000098",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 39,
+      "addr": "0000009c",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 40,
+      "addr": "000000a0",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 41,
+      "addr": "000000a4",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 42,
+      "addr": "000000a8",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 43,
+      "addr": "000000ac",
+      "value": "0x080017e9"
+    },
+    {
+      "index": 44,
+      "addr": "000000b0",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 45,
+      "addr": "000000b4",
+      "value": "0x08001eb1"
+    },
+    {
+      "index": 46,
+      "addr": "000000b8",
+      "value": "0x00000000"
+    },
+    {
+      "index": 47,
+      "addr": "000000bc",
+      "value": "0x08001eb1"
+    }
+  ],
+  "function_count": 70,
+  "functions": [
+    {
+      "addr": "0x00000108",
+      "size": 266,
+      "name": "FUN_00000108",
+      "auto_named": true,
+      "signature": "undefined FUN_00000108(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000021c",
+      "size": 2,
+      "name": "FUN_0000021c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000021c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000220",
+      "size": 56,
+      "name": "FUN_00000220",
+      "auto_named": true,
+      "signature": "undefined FUN_00000220(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000260",
+      "size": 80,
+      "name": "FUN_00000260",
+      "auto_named": true,
+      "signature": "undefined FUN_00000260(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000002b0",
+      "size": 406,
+      "name": "FUN_000002b0",
+      "auto_named": true,
+      "signature": "undefined FUN_000002b0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000448",
+      "size": 22,
+      "name": "FUN_00000448",
+      "auto_named": true,
+      "signature": "undefined FUN_00000448(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000460",
+      "size": 42,
+      "name": "FUN_00000460",
+      "auto_named": true,
+      "signature": "undefined FUN_00000460(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000095c",
+      "size": 26,
+      "name": "FUN_0000095c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000095c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000c5e",
+      "size": 168,
+      "name": "FUN_00000c5e",
+      "auto_named": true,
+      "signature": "undefined FUN_00000c5e(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000ed4",
+      "size": 64,
+      "name": "FUN_00000ed4",
+      "auto_named": true,
+      "signature": "undefined FUN_00000ed4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000f14",
+      "size": 60,
+      "name": "FUN_00000f14",
+      "auto_named": true,
+      "signature": "undefined FUN_00000f14(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00000f58",
+      "size": 430,
+      "name": "FUN_00000f58",
+      "auto_named": true,
+      "signature": "undefined FUN_00000f58(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000112c",
+      "size": 512,
+      "name": "FUN_0000112c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000112c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001348",
+      "size": 114,
+      "name": "FUN_00001348",
+      "auto_named": true,
+      "signature": "undefined FUN_00001348(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000015ce",
+      "size": 108,
+      "name": "FUN_000015ce",
+      "auto_named": true,
+      "signature": "undefined FUN_000015ce(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000163c",
+      "size": 70,
+      "name": "FUN_0000163c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000163c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000017c8",
+      "size": 22,
+      "name": "FUN_000017c8",
+      "auto_named": true,
+      "signature": "undefined FUN_000017c8(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001a90",
+      "size": 354,
+      "name": "FUN_00001a90",
+      "auto_named": true,
+      "signature": "undefined FUN_00001a90(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001c1c",
+      "size": 80,
+      "name": "FUN_00001c1c",
+      "auto_named": true,
+      "signature": "undefined FUN_00001c1c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001c7c",
+      "size": 88,
+      "name": "FUN_00001c7c",
+      "auto_named": true,
+      "signature": "undefined FUN_00001c7c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001ce0",
+      "size": 76,
+      "name": "FUN_00001ce0",
+      "auto_named": true,
+      "signature": "undefined FUN_00001ce0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001f00",
+      "size": 92,
+      "name": "FUN_00001f00",
+      "auto_named": true,
+      "signature": "undefined FUN_00001f00(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001f68",
+      "size": 14,
+      "name": "FUN_00001f68",
+      "auto_named": true,
+      "signature": "undefined FUN_00001f68(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001f7c",
+      "size": 48,
+      "name": "FUN_00001f7c",
+      "auto_named": true,
+      "signature": "undefined FUN_00001f7c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001fb0",
+      "size": 62,
+      "name": "FUN_00001fb0",
+      "auto_named": true,
+      "signature": "undefined FUN_00001fb0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00001ff4",
+      "size": 212,
+      "name": "FUN_00001ff4",
+      "auto_named": true,
+      "signature": "undefined FUN_00001ff4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000020d0",
+      "size": 66,
+      "name": "FUN_000020d0",
+      "auto_named": true,
+      "signature": "undefined FUN_000020d0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002118",
+      "size": 42,
+      "name": "FUN_00002118",
+      "auto_named": true,
+      "signature": "undefined FUN_00002118(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002142",
+      "size": 32,
+      "name": "FUN_00002142",
+      "auto_named": true,
+      "signature": "undefined FUN_00002142(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002162",
+      "size": 32,
+      "name": "FUN_00002162",
+      "auto_named": true,
+      "signature": "undefined FUN_00002162(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002182",
+      "size": 26,
+      "name": "FUN_00002182",
+      "auto_named": true,
+      "signature": "undefined FUN_00002182(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000219c",
+      "size": 200,
+      "name": "FUN_0000219c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000219c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002268",
+      "size": 16,
+      "name": "FUN_00002268",
+      "auto_named": true,
+      "signature": "undefined FUN_00002268(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002278",
+      "size": 142,
+      "name": "FUN_00002278",
+      "auto_named": true,
+      "signature": "undefined FUN_00002278(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002306",
+      "size": 290,
+      "name": "FUN_00002306",
+      "auto_named": true,
+      "signature": "undefined FUN_00002306(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002428",
+      "size": 110,
+      "name": "FUN_00002428",
+      "auto_named": true,
+      "signature": "undefined FUN_00002428(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002496",
+      "size": 218,
+      "name": "FUN_00002496",
+      "auto_named": true,
+      "signature": "undefined FUN_00002496(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002570",
+      "size": 148,
+      "name": "FUN_00002570",
+      "auto_named": true,
+      "signature": "undefined FUN_00002570(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002618",
+      "size": 224,
+      "name": "FUN_00002618",
+      "auto_named": true,
+      "signature": "undefined FUN_00002618(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000026fc",
+      "size": 302,
+      "name": "FUN_000026fc",
+      "auto_named": true,
+      "signature": "undefined FUN_000026fc(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002900",
+      "size": 78,
+      "name": "FUN_00002900",
+      "auto_named": true,
+      "signature": "undefined FUN_00002900(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000295c",
+      "size": 166,
+      "name": "FUN_0000295c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000295c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002a50",
+      "size": 732,
+      "name": "FUN_00002a50",
+      "auto_named": true,
+      "signature": "undefined FUN_00002a50(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002d4c",
+      "size": 424,
+      "name": "FUN_00002d4c",
+      "auto_named": true,
+      "signature": "undefined FUN_00002d4c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002f10",
+      "size": 58,
+      "name": "FUN_00002f10",
+      "auto_named": true,
+      "signature": "undefined FUN_00002f10(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002f4a",
+      "size": 58,
+      "name": "FUN_00002f4a",
+      "auto_named": true,
+      "signature": "undefined FUN_00002f4a(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00002f84",
+      "size": 136,
+      "name": "FUN_00002f84",
+      "auto_named": true,
+      "signature": "undefined FUN_00002f84(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003018",
+      "size": 1864,
+      "name": "FUN_00003018",
+      "auto_named": true,
+      "signature": "undefined FUN_00003018(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000037aa",
+      "size": 8,
+      "name": "FUN_000037aa",
+      "auto_named": true,
+      "signature": "undefined FUN_000037aa(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000037c0",
+      "size": 622,
+      "name": "FUN_000037c0",
+      "auto_named": true,
+      "signature": "undefined FUN_000037c0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003a50",
+      "size": 312,
+      "name": "FUN_00003a50",
+      "auto_named": true,
+      "signature": "undefined FUN_00003a50(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003b9c",
+      "size": 14,
+      "name": "FUN_00003b9c",
+      "auto_named": true,
+      "signature": "undefined FUN_00003b9c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003bb0",
+      "size": 34,
+      "name": "FUN_00003bb0",
+      "auto_named": true,
+      "signature": "undefined FUN_00003bb0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003c08",
+      "size": 640,
+      "name": "FUN_00003c08",
+      "auto_named": true,
+      "signature": "undefined FUN_00003c08(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003eb4",
+      "size": 164,
+      "name": "FUN_00003eb4",
+      "auto_named": true,
+      "signature": "undefined FUN_00003eb4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003f5c",
+      "size": 116,
+      "name": "FUN_00003f5c",
+      "auto_named": true,
+      "signature": "undefined FUN_00003f5c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003fd0",
+      "size": 16,
+      "name": "FUN_00003fd0",
+      "auto_named": true,
+      "signature": "undefined FUN_00003fd0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003fe0",
+      "size": 16,
+      "name": "FUN_00003fe0",
+      "auto_named": true,
+      "signature": "undefined FUN_00003fe0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00003ff0",
+      "size": 1218,
+      "name": "FUN_00003ff0",
+      "auto_named": true,
+      "signature": "undefined FUN_00003ff0(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x0000456c",
+      "size": 324,
+      "name": "FUN_0000456c",
+      "auto_named": true,
+      "signature": "undefined FUN_0000456c(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000046d4",
+      "size": 140,
+      "name": "FUN_000046d4",
+      "auto_named": true,
+      "signature": "undefined FUN_000046d4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004764",
+      "size": 248,
+      "name": "FUN_00004764",
+      "auto_named": true,
+      "signature": "undefined FUN_00004764(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004860",
+      "size": 10,
+      "name": "FUN_00004860",
+      "auto_named": true,
+      "signature": "undefined FUN_00004860(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000048c6",
+      "size": 16,
+      "name": "FUN_000048c6",
+      "auto_named": true,
+      "signature": "undefined FUN_000048c6(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x000048e4",
+      "size": 12,
+      "name": "FUN_000048e4",
+      "auto_named": true,
+      "signature": "undefined FUN_000048e4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004af4",
+      "size": 248,
+      "name": "FUN_00004af4",
+      "auto_named": true,
+      "signature": "undefined FUN_00004af4(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004bfc",
+      "size": 160,
+      "name": "FUN_00004bfc",
+      "auto_named": true,
+      "signature": "undefined FUN_00004bfc(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004ca8",
+      "size": 26,
+      "name": "FUN_00004ca8",
+      "auto_named": true,
+      "signature": "undefined FUN_00004ca8(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004cc8",
+      "size": 206,
+      "name": "FUN_00004cc8",
+      "auto_named": true,
+      "signature": "undefined FUN_00004cc8(void)",
+      "thunk": false,
+      "external": false
+    },
+    {
+      "addr": "0x00004d9c",
+      "size": 304,
+      "name": "FUN_00004d9c",
+      "auto_named": true,
+      "signature": "undefined FUN_00004d9c(void)",
+      "thunk": false,
+      "external": false
+    }
+  ],
+  "string_count": 3,
+  "strings": [
+    {
+      "addr": "000048ff",
+      "value": " \nI am VanMoof BL V006 \r"
+    },
+    {
+      "addr": "00004918",
+      "value": "\nI am VanMoof BL V007 2022-11-04 09:32:30\r"
+    },
+    {
+      "addr": "00004944",
+      "value": "\nI am VanMoof BL V006 \r"
+    }
+  ]
+}
