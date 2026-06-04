@@ -6,6 +6,13 @@
  * line at a time and invokes one of several per-state callbacks
  * (login, set user password, set admin password, set baud, …). */
 
+/* `console_next_token(pp)` — advance `*pp` past the current token and the run
+ * of delimiters after it, leaving it at the start of the next token. Tokens
+ * are separated by space / `.` / `:` (and terminated by NUL). Returns 1 if a
+ * next token exists, 0 if the line is exhausted. Every command handler that
+ * takes an argument calls this first. */
+int console_next_token(char **pp);
+
 /* `login_handler(input)` — called by the console with a NUL-terminated
  * input line while the console is in the "login" state. Matches the
  * line against the user-configurable service password

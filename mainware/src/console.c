@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "app.h"
 #include "app_state.h"
 #include "console.h"
 #include "log.h"
@@ -19,19 +20,11 @@
  * supplied by the vendored upstream sources at link-time. */
 extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 
-/* Console command-line argument tokenizer. Reads `*pp`, scans past the
- * current token (delimiters: `\0`, space, `.`, `:`), then past
- * consecutive delimiters; updates `*pp` to point at the next token.
- * Returns 1 if a next token exists, 0 if the line is exhausted. */
-extern int console_next_token(char **pp);
-
 /* Helpers we have not decoded yet — kept as opaque extern declarations
  * so we can call them at the right addresses for behavioural
  * equivalence without committing to a name we'd have to revise. */
 extern uint32_t FUN_08031728(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
 extern int      FUN_080391B8(uint8_t *p);
-extern void     FUN_080313E4(int mode);
-extern void     FUN_0802F1C0(int channel);
 
 /* Hard-coded fallback password. Reading the OEM rodata at 0x080547EC.
  * Accepted in addition to whatever the user has stored in
@@ -41,6 +34,38 @@ extern void     FUN_0802F1C0(int channel);
  * unconditionally. */
 static const char k_login_fallback_password[] =
     "vEVjGF!paYsM2EBV8SoDT8*T0eB&#T6xevaoxCaO";
+
+/* Console line tokenizer (OEM 0x08040A5C). Delimiters are space / `.` / `:`;
+ * the line terminator is NUL. Leaves `*pp` at the first character of the next
+ * token (or on the terminating NUL when the line runs out). */
+int console_next_token(char **pp)
+{
+    char c;
+
+    if (**pp == '\0') {
+        return 0;
+    }
+
+    /* Skip the current token. */
+    for (;;) {
+        c = **pp;
+        if (c == '\0' || c == ' ' || c == '.' || c == ':') {
+            break;
+        }
+        (*pp)++;
+    }
+
+    /* Skip the run of delimiters to the next token. */
+    for (;;) {
+        c = **pp;
+        if ((c != ' ' && c != '.' && c != ':') || c == '\0') {
+            break;
+        }
+        (*pp)++;
+    }
+
+    return c != '\0';
+}
 
 void login_handler(char *input)
 {
@@ -174,7 +199,7 @@ void console_start_motor_update(char *input)
 {
     (void)input;
     g_log_func("Start motor update..");
-    FUN_080313E4(4);
+    update_mode_request(4);
 }
 
 void console_soc_set(char *input)
@@ -189,5 +214,8 @@ void console_soc_set(char *input)
     parsed = strtol(cursor, NULL, 10);
     g_app_state.ctx_sub->set_soc = (uint8_t)parsed;
     g_log_func("Set SOC %d\r\n", (uint16_t)parsed);
-    FUN_0802F1C0(2);
+    /* OEM passes 2 here, which announce_mark() ignores (it only handles
+     * channels 0/1). The SOC override is picked up directly by the super-loop
+     * each iteration, so the no-op call has no observable effect. */
+    announce_mark(2);
 }
