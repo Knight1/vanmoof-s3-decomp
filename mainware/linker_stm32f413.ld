@@ -2,42 +2,42 @@
  *
  * Memory map for ST STM32F413VGT6 (Cortex-M4F):
  *   FLASH : 1 MB total. Mainware lives in sector 5 + part of sector 6
- *           (0x08020000..~0x080556A0, ≈ 213 KB). The first 512 bytes
- *           of sector 5 are the VanMoof envelope; the STM32 vector
- *           table starts 0x200 in (at 0x08020200).
+ *           (0x08020000..~0x080556A0, ≈ 213 KB). The first 512 bytes of
+ *           sector 5 are the VanMoof envelope; the STM32 vector table starts
+ *           0x200 in (at 0x08020200).
  *   SRAM  : 0x20000000, 320 KB contiguous = SRAM1 (256 K) + SRAM2 (64 K).
  *
- * Mainware's initial SP from the vector table is 0x20037000 — about
- * 220 KB above SRAM base. The upper ~100 KB of SRAM is left to the
- * runtime (BLE rx/tx buffers, modem AT buffers, image staging during
- * subsystem-firmware push).
+ * The linker symbols below mirror the values Reset_Handler (0x08043E54) loads
+ * from its literal pool (see docs/hardware.md): initial SP 0x20037000, .data
+ * at SRAM 0x20000014 (the first word is g_systick_step), .bss after it.
  *
- * The envelope at 0x08020000 contains:
- *   0x08020000..0x0802000F  — 16 B VanMoof container header (magic +
- *                             version + CRC32 + length)
- *   0x08020010..0x08020027  — ASCII build date+time (__DATE__/__TIME__)
- *   0x08020028..0x080201FF  — 0xFF padding to VTOR alignment
- * For now this region is not described — we just leave FLASH starting
- * at 0x08020200 where the vector table goes. The envelope will be
- * synthesised at image-package time by the bin-postprocess step
- * (analogous to shifterware's CRC patcher).
+ * The 512-byte envelope at 0x08020000 (magic + version + CRC32 + length +
+ * __DATE__/__TIME__) is emitted by startup_stm32f413.S's .envelope section so
+ * the produced .bin aligns with the OEM file; the CRC and length are
+ * post-build patches.
  */
 
 ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08020200, LENGTH = 384K  /* through end of sector 6 */
+    FLASH (rx)  : ORIGIN = 0x08020000, LENGTH = 384K  /* slot base, through sector 6 */
     SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 320K
 }
 
-_estack = 0x20037000;
-_Min_Stack_Size = 0x400;       /* refine from OEM */
+_estack = 0x20037000;           /* OEM initial SP (vector slot 0) */
+_Min_Stack_Size = 0x400;        /* refine from OEM */
 _Min_Heap_Size  = 0x0;
 
 SECTIONS
 {
-    .isr_vector :
+    /* VanMoof container envelope — 512 B at the slot base, before the vectors. */
+    .envelope 0x08020000 :
+    {
+        KEEP(*(.envelope))
+    } > FLASH
+
+    .isr_vector 0x08020200 :
     {
         . = ALIGN(4);
         KEEP(*(.isr_vector))
@@ -72,7 +72,10 @@ SECTIONS
     .ARM       : { __exidx_start = .; *(.ARM.exidx*) __exidx_end = .; } > FLASH
 
     _sidata = LOADADDR(.data);
-    .data :
+
+    /* .data — OEM VMA is SRAM 0x20000014 (leaving 0x20000000..0x13 as the
+       retained low-RAM that holds the warm-boot marker). LMA follows .text. */
+    .data 0x20000014 :
     {
         . = ALIGN(4);
         _sdata = .;
@@ -82,7 +85,7 @@ SECTIONS
         _edata = .;
     } > SRAM AT > FLASH
 
-    .bss :
+    .bss (NOLOAD) :
     {
         . = ALIGN(4);
         _sbss = .;
@@ -95,7 +98,7 @@ SECTIONS
         __bss_end__ = _ebss;
     } > SRAM
 
-    ._user_heap_stack :
+    ._user_heap_stack (NOLOAD) :
     {
         . = ALIGN(8);
         PROVIDE(end = .);
