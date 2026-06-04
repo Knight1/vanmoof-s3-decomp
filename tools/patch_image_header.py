@@ -49,8 +49,13 @@ computes; format 3 uses the standard zlib CRC-32. Verified byte-exact against
 the OEM batteryware (1.17.1, 1.14.1) and shifterware (0.237) images and against
 chwdt/vanmoof-tools `crc32.c` (crc32_calculate / ware_crc / the BLE branch).
 
-motorware (TMS320F28054, C2000) has no dedicated handling — it has neither magic
-and would fall into the bootloader path, which is not known to be correct for it.
+motorware (TMS320F28054, C2000) uses format 1: it carries the same 0xAA55AA55
+magic and 40-byte header, with a MAJOR.MINOR.PATCH.TYPE version (TYPE 0xA1) and
+the identical MPEG-2 CRC32 over [0:imageSize) with [8:16) blanked — verified
+byte-exact against motorware_S.0.00.22 and _S.0.00.15. Its *payload* (from
++0x28) is a TI C28x boot-ROM data stream rather than an ARM vector table; that
+only affects how the body is interpreted, not the header/CRC handling here. See
+motorware/tools/bootstream.py and motorware/docs/container.md.
 
 Usage: patch_image_header.py <image.bin> [<image2.bin> ...]
 Exit:  0 if every image patched; 1 if any failed (the rest are still patched).
