@@ -156,6 +156,17 @@ little-endian byte search for `00 A0 05 00` will not find this constant
 anywhere in flash — searches for SPI-flash region addresses need to
 walk MOVW/MOVT pairs and `add.w` immediates.
 
+## External SPI flash — FMNA provisioning (FMI build only)
+
+The FMI image (`bleware_2.4.01.bin`) keeps Apple's Find My Network Accessory
+provisioning data in a 16 KB external-flash region at `0x7B000..0x7EFFF`
+(`0x7C000` = live record + `0x7B000` swap). The live record is a 1328-byte
+AES-128-CBC blob (key derived from the FCFG1 BLE MAC) followed by its SHA-256 at
+`0x7C7E0`; decrypted, it holds the accessory serial, the 1024-byte software-auth
+token, its UUID, and the Apple server public keys (P-224 Q_A, P-256). This
+region is **absent from the 1.4.01 target**. Full layout, key derivation, and
+the function map: see `docs/fmna_storage.md`.
+
 ## Initial state (TBD)
 
 Several pieces still to figure out:

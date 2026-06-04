@@ -9,6 +9,11 @@ See `docs/hardware.md` for the canonical binary identity (size, SHA
 hashes, OAD-NVM1 header layout) and `bleboot/docs/progress.md` for
 the BIM that this image was built to be promoted by.
 
+`docs/fmna_storage.md` documents the Find My (FMNA) provisioning store
+(external flash `0x7C000`) — a reference chapter scoped to the **FMI
+build `bleware_2.4.01.bin`**, which is out of scope for this 1.4.01
+target but shows up in S3 flash dumps.
+
 ## Decomp scope policy
 
 **Decode only VanMoof-custom code.** Functions that are byte-for-byte
