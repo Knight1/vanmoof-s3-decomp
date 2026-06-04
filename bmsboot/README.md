@@ -57,8 +57,7 @@ bmsboot/
 │   ├── handlers.c           # HardFault -> failsafe -> system_reset + SysTick pacer
 │   └── strings.c            # flash banner strings
 ├── include/bmsboot.h        # prototypes, register + memory-map defines
-├── docs/                    # memory-map, hardware, protocol, progress
-└── ghidra/                  # gen_program_json.py + exports/bmsboot_program.json
+├── docs/                    # memory-map, hardware, protocol, progress, changelog-v004-to-v007
 ```
 
 ## Decomp scope
