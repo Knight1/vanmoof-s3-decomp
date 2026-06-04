@@ -35,7 +35,7 @@ DWARF.
 
 | File offset | Size | Field |
 | --- | --- | --- |
-| `0x000` | 4 | Magic `0x55AA55AA` (little-endian; same magic used by every VanMoof firmware image) |
+| `0x000` | 4 | Magic — file bytes `55 AA 55 AA` (i.e. a little-endian `uint32` of `0xAA55AA55`; reproduced exactly by `startup_stm32f413.S`). Same magic across every VanMoof firmware image. |
 | `0x004` | 1 | `0xF4` (unknown — constant across all four mainware versions) |
 | `0x005` | 1 | Patch version (`0x06` for 1.07.06) |
 | `0x006` | 1 | Minor version (`0x07` for 1.07.06) |
@@ -79,11 +79,45 @@ soft float for now.
 | Address | Size | Symbol | Module | Notes |
 | --- | --- | --- | --- | --- |
 | `0x2000010E` | ≥6 | `g_state` | (not yet decoded) | Status/console block. `g_state[5]` (byte at `0x20000113`) is the login state machine: `0xFA` = ready-to-accept password, non-`0xFA` = locked-out / scheduler-slot id. |
+| `0x20000000` | 4 | `g_boot_marker` | `main` | Warm-boot magic. `main` compares it against `0x55AA55CF`; match → `boot_init_warm` (skip cold init), else `boot_init_cold`. Lives in the **retained low-RAM** below `.data` (`0x20000000..0x20000013` — not touched by the `.data` copy or `.bss` zero), so it survives a warm reset. |
 | `0x20000014` | 1 | `g_systick_step` | `systick.c` | Muco-runtime SysTick increment-per-tick (initially 1). **Same SRAM address as in mainboot** — both wares' `.data` starts at +0x14 from SRAM base. |
-| `0x200004C0` | ~400 | `g_scheduler` | (not yet decoded) | Muco 48-slot one-shot scheduler table — `enabled_mask` bitmap at +0x08, callbacks at +0x10, counters at +0xD0. |
-| `0x20009368` | 4 | `g_app_ctx` | (not yet decoded) | pointer-to-application-context. Sub-object at `+0x2DC` holds (among others) `[0x2D9]` logged-in flag, `[0x2E0]` failed-login-attempt counter, `[0x398]` user-configurable service password. |
+| `0x20000076` | 1 | `g_update_mode` | `app.c` | subsystem firmware-update mode (`+1` of a small control block at `0x20000075`); `update_mode_request` only overwrites it from idle (`==2`). |
+| `0x20000288` | ≥7 | `g_announce` | `app.c` | broadcast dirty-flags block; `announce_mark` sets `+5` (channel 0) / `+6` (channel 1). |
+| `0x200004C0` | 0x190 | `g_scheduler` | `scheduler.c` | Muco 48-slot one-shot scheduler table. **Two** 6-byte bitmaps: `allocated` at +0x00 (set by `scheduler_alloc`, cleared by `scheduler_release`) and `armed` at +0x08 (set by `scheduler_start`, cleared by `scheduler_release`, scanned by `scheduler_tick`); `callbacks[48]` at +0x10, `counters[48]` at +0xD0. |
+| `0x200083A8` | ≥0x404 | `g_ctx` | `main` / `console.c` | the application/session context struct (`session_ctx`). `main`'s super-loop addresses it directly at this fixed address; the console reaches the same object through `g_app_state.ctx_sub`. Known fields: audio block `+0xF4..+0x10C`, volume `+0x104/5/6`, `[0x2D9]` logged-in, `[0x2E0]` fail-count, `[0x398]` service password, `[0x3D4]` SOC override; super-loop also touches `[0x34D]`, `[0x402]`, `[0x350-0x354]`, `[0x3B0]`, `[0x3B8]`, `[0x3C0-0x3C6]` (semantics TBD). |
+| `0x20009368` | 4 | `g_app_ctx` | (not yet decoded) | application-state block; `+0x2DC` is `ctx_sub`, the pointer to `g_ctx` (`0x200083A8`). Through it the console reaches `[0x2D9]` logged-in flag, `[0x2E0]` failed-login counter, `[0x398]` service password. |
 | `0x20009704` | 4 | `g_systick_counter` | `systick.c` | free-running SysTick counter |
-| `0x20009D98` | 4 | `g_log_func` | (not yet decoded) | function pointer used by every system-exception handler and the debug console — `(*g_log_func)(const char *fmt, …)`-style logger. |
+| `0x20009D98` | 4 | `g_log_func` | `log.h` (extern) | `(*g_log_func)(const char *fmt, …)`-style logger. Referenced by `exceptions.c`, `panic.c`, `console.c`. Set once during init (initialiser not yet decoded). |
+
+### C runtime (startup) layout
+
+`Reset_Handler` (`0x08043E54`) is the standard CubeF4 reset stub. Its
+literal pool fixes the linker symbols the future `startup_stm32f413.S` +
+linker script must reproduce:
+
+| Symbol | Value | Meaning |
+| --- | --- | --- |
+| `_estack`  | `0x20037000` | initial SP (= vector slot 0) |
+| `_sidata`  | `0x08055534` | `.data` load address (flash, after `.text`/`.rodata`) |
+| `_sdata`   | `0x20000014` | `.data` start (SRAM) — first word is `g_systick_step` |
+| `_edata`   | `0x20000180` | `.data` end (`.data` is 0x16C B) |
+| `_sbss`    | `0x20000180` | `.bss` start (= `_edata`) |
+| `_ebss`    | `0x20009DB0` | `.bss` end (`.bss` is ~40 KB) |
+
+After copying `.data` and zeroing `.bss`, `Reset_Handler` paints the whole
+free-RAM region `[_ebss 0x20009DB0, _estack 0x20037000)` (~180 KB) with the
+word `0x0000000E` — a stack/heap fill pattern (high-water-mark groundwork) —
+then calls, in order:
+
+1. `SystemInit` (`0x08043AA4`) — FPU enable + RCC reset + VTOR (see above).
+2. `__libc_init_array` (`0x08020DF8`) — newlib CRT: preinit array, `_init`,
+   init array.
+3. `main` (`0x0803DEA8`, 613 B) — the application super-loop.
+
+`.data` ending at `0x20000180` and `.bss` running to `0x20009DB0` means the
+statically-initialised + zero-init working set is ~40 KB; the scheduler
+table (`0x200004C0`) and the console/app-state globals all fall inside that
+`.bss` span, consistent with their addresses.
 
 STM32F4 1 MB sector layout: sectors 0..3 = 16 KB each, sector 4 = 64 KB,
 sectors 5..7 = 128 KB each. Mainware's 213 KB image starts at sector
@@ -114,6 +148,28 @@ The 9 system-exception handlers at `0x0803C975..0x0803CA15` sit on
 seen in mainboot. That's consistent with an application built against
 ST's CubeF4 startup template, which gives every exception its own
 named handler (most just `while(1);`-loops).
+
+These are now decoded into `src/exceptions.c`. Each logs its own name
+through `g_log_func`: `NMI`/`SVC`/`DebugMon`/`PendSV` log and return;
+`MemManage`/`BusFault`/`UsageFault` log and spin. `HardFault` is a naked
+tail-call (`tst lr,#4; ite eq; mrs r0,msp/psp; b.w fault_dump`) into the
+frame dumper at `0x0803CB6C`, which prints the 8-word stacked frame and
+the SCB fault-status/fault-address registers before spinning:
+
+| Register | Address | Label in dump |
+| --- | --- | --- |
+| CFSR  (Configurable Fault Status) | `0xE000ED28` | `CFSR = %x` |
+| HFSR  (HardFault Status)          | `0xE000ED2C` | `HFSR = %x` |
+| DFSR  (Debug Fault Status)        | `0xE000ED30` | `DFSR = %x` |
+| MMFAR (MemManage Fault Address)   | `0xE000ED34` | `MMAR = %x` (OEM drops the F) |
+| BFAR  (BusFault Address)          | `0xE000ED38` | `BFAR = %x` |
+| AFSR  (Auxiliary Fault Status)    | `0xE000ED3C` | `AFSR = %x` |
+
+`SysTick_Handler` (`0x0803CA14`) is the Muco tick wrapper:
+`scheduler_tick()` then `systick_tick()`. The Muco runtime's fatal-assert
+path `muco_assert_fail` (`0x0803DAC4`, `src/panic.c`) shares the same
+`g_log_func` slot — it prints `"FATAL error File [%s] line [%d]"` and
+spins; the independent IWDG reboots the board.
 
 ## Banner strings of interest (first pass)
 
@@ -150,8 +206,18 @@ gets marked `vendor-stock` when recognised, same as in `mainboot`.
 
 - Exact flash slot layout (where do shifter/motor/battery blobs live,
   in what order, with what envelopes?).
-- VTOR value mainboot writes before jumping — confirms `0x08020200`.
-- FPU usage — does any function emit `vpush`/`vpop`?
+- VTOR — **resolved.** `SystemInit` (`0x08043AA4`) writes the stock
+  `VTOR = 0x08000000`, but `main` (`0x0803DEA8`) **re-points it on its
+  very first instruction**: `SCB->VTOR = 0x08020200`. So the live vector
+  table is mainware's own at `0x08020200`, as documented; there's just a
+  brief window during early init (before `main`) where VTOR still points
+  at mainboot's table.
+- FPU usage — **answered: yes.** `SystemInit` sets `SCB->CPACR |=
+  0xF00000` (CP10/CP11 full access), enabling the FPU. None of the
+  *currently decoded* functions emit `vpush`/`vpop`, so they build fine
+  under soft-float, but the materialised image will need
+  `-mfloat-abi=hard -mfpu=fpv4-sp-d16` once an FP-using function is
+  decoded.
 - Modem AT command flow — is there a YMODEM-over-AT path, or only
   HTTP POSTs?
 - BLE protocol with the CC2642 (which is itself running bleware) —
