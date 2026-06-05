@@ -17,6 +17,7 @@ behaviour-equivalent) images.
 | [`batteryware/`](batteryware/) | `batteryware 1.17.1` | STM32L072CZT6 (Cortex-M0+) | ~88 KB | all functions `decomp-c` — builds (40 KB) + self-CRCs; behaviour-faithful (byte-eq out of reach: toolchain) |
 | [`powerbankware/`](powerbankware/) | `powerbank_firmware 1.11.05` | STM32F091xC (Cortex-M0) | ~92 KB | early — scaffold + `main`/state-loop decompiled (compiles; not yet linking) |
 | [`powerbankboot/`](powerbankboot/) | `powerbank_bootloader 1.00` | STM32F091xC (Cortex-M0) | 32 KB | `~35 decomp / ~26 named / 164 total` — A/B loader + X-CUBE-STL self-test |
+| [`motorware/`](motorware/) | `motorware S.0.00.22` | TI TMS320F28054F (C2000/C28x DSP — **not ARM**) | ~58 KB flash | foundation verified (container byte-exact, boot flow + map proven, `.cinit` decoded), **356 functions disassembled** (IDA C28x), **protocol + register map decompiled** (SLIP + CRC-16 over SCI-A; read/write regs), **control loop mapped** (InstaSPIN-FOC ROM, HAL, ePWM phases, 8 ISRs); per-function C ongoing |
 
 ## Per-firmware MCU mapping
 
