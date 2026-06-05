@@ -69,6 +69,58 @@ Initial SP from vector slot 0: `0x20005000` (top of SRAM).
 > 0x0287, 0)` drives PB0/1/2/7/9 LOW, then `gpio_bit_write(GPIOB, 0xF104, 1)`
 > drives PB2/8/12/13/14/15 HIGH.
 
+## Secondary protection & the pyro fuse
+
+The pack's irreversible disconnect is a **3-terminal fuse with an integral
+heater** (**SCF9550** — `F1001`/`F1002` are the two series fuse links in the
+pack positive line `VP → BATT_a`, `R1074` ≈ 40 Ω is the heater tapped at their
+midpoint). The Part Name is SFK-4045 45AK10. Energizing the heater melts the link and **permanently** opens the
+pack — there is no firmware or hardware reset.
+
+The heater is switched by a discrete gate chain with **two fully independent
+trigger inputs**, both pulling the same gate node (**JN2**):
+
+**Heater drive** (fires when JN2 is pulled toward GND):
+
+- `Q1016` `BSZ340N08NS3` — power N-MOSFET, sinks the heater current to GND → melts the fuse.
+- `Q1015` `BSS84`/`BSR315P` — P-MOSFET gating Q1016: when its gate (node **JN2**) is pulled below `+BATT`, Q1015 conducts `+BATT → R1072 (47 k) → Q1016` gate.
+- JN2 idles at `+BATT` via `R1071` (100 k) and is clamped by `D1021` (`BZT52C20`, 20 V).
+
+**Trigger A — MCU firmware, over-current** (the path in
+[`compare-1.14.1/fuse.md`](compare-1.14.1/fuse.md)):
+
+- `PB7 → R1070 (100 R) / R1077 (10 k) → Q1017 (2N7002, R1078 100 k pulldown) → R1076 (330 k) → JN2`.
+- `PB7` HIGH turns `Q1017` on, pulling JN2 low. Firmware asserts PB7 **only** on a
+  latched discharge-/charge-over-current (the "MOS-failure" backstop) — it does
+  **not** assert it on over-voltage.
+
+**Trigger B — secondary over-voltage, autonomous hardware** (no MCU involvement):
+
+- Two **`S-8215AAD-K8T2U`** ICs — **`U1005`** and **`U1006`** — are ABLIC
+  secondary-protection cell-overcharge monitors. Each watches up to 5 series cells: **U1005 covers
+  cells 1–5** (taps `−BATT … V5`), **U1006 covers cells 6–10** (taps `V5 … +BATT`),
+  so the full **10S** pack is monitored. Each cell tap is RC-filtered (1 kΩ +
+  150 nF) and the IC supply clamped by a 33 V zener (`D1035`/`D1037`).
+- For the `-AAD` option the datasheet gives **overcharge detection = 4.350 V/cell**,
+  **hysteresis −0.250 V** (release 4.100 V), **detection delay 2.0 s**, **CMOS,
+  active-HIGH** `CO` output (pin 8).
+- Each `CO → 100 k → 2N7002` (`Q1020` for U1005, `Q1021` for U1006) →
+  `330 k`/`200 k` → **JN2** (OR-combined via `D1036`). If **any** monitored cell
+  stays above 4.35 V for 2 s, that IC drives its 2N7002 on, pulling JN2 low →
+  the fuse blows.
+
+So **over-voltage does blow the fuse** — through this dedicated hardware layer,
+independent of the FEDL5236 AFE and of the MCU. Protection hierarchy:
+
+| Layer | Detector | Over-voltage action | Over-current action | Reversible? |
+| --- | --- | --- | --- | --- |
+| Primary | FEDL5236 AFE + MCU firmware | open charge FET → recoverable state (`state_handler_14`/`15`) | open FETs; blow fuse if persistent (`state_handler_17_19`) | OV: yes / OC-fuse: no |
+| Secondary | `U1005`/`U1006` (`S-8215AAD`) | **blow fuse** @ 4.35 V/cell, 2 s | — | no |
+
+This closes the open item from the firmware-only fuse audit: the **MCU blows the
+fuse on over-current only**, but the pack still has a hardware
+**over-voltage → fuse** path via U1005/U1006. Both feed the one SCF9550 heater.
+
 ## SRAM globals
 
 Addresses resolved from literal pool entries in the flash image.
@@ -95,7 +147,7 @@ Addresses resolved from literal pool entries in the flash image.
 | `0x20002820` | — | 2 | FEDL5236 status word — written byte-wise from the reg-10 read in `bms_set_state`, mirrored into the telemetry packet (`+0x2e`). |
 | `0x20002870` | `mode_flag` | 1 | Idle BMS config selector. When not discharging hard, set to 1 (cfg bit12 clear) or 3 and passed to `bms_configure`; bit 1 gates whether the idle-relax branch runs. |
 | `0x200028A0` | — | 4 | Pre-charge lower-window threshold (`thr1`) compared against `cfg_blk[0x16]`. |
-| `0x200028D0` | `cfg_blk` | — | BMS configuration block. Byte/halfword fields: `+0x05` "ready" flag (set by `bms_set_state`), `+0x16` upper-window voltage (u16), `+0x6e/0x72/0x76/0x7a` cell-voltage trip/recover thresholds (u8), `+0x70/0x74/0x78/0x7c` debounce counts (u16, ÷100). |
+| `0x200028D0` | `cfg_blk` (`s_ctx`) | 0xb8 | **BMS protection-threshold block** (distinct from `bms_ctx` @ `0x200029A8`). Built by `config_init` (`FUN_08007368`) from firmware defaults + a few EEPROM-validated fields. Holds the 5 cell-voltage window comparators (`+0x6e/0x76/0x7e/0x86/0x8e` trip, `+0x72/0x7a/0x82/0x8a/0x92` recover, u8; `+0x70/…` trip-delay & `+0x74/…` recover-delay, u16 ÷100), the 2 over-current thresholds (`+0x98` discharge, `+0x9a` charge, u16; shared delay `+0x96`), the precharge window (`+0x16`), and the boot OVP/UVP detect set (`+0x2a…+0x46`, u16 mV). **Full map + default values: [`protection-config.md`](protection-config.md).** |
 | `0x200029A8` | `bms_ctx` | 0x40 | **BMS telemetry/EEPROM context.** Per-state transition counters at `+0x04..+0x22` (u16), housekeeping words at `+0x24/0x28/0x2c/0x34/0x36/0x37`, and the rolling sequence counter at `+0x3e` (u16, wraps at 64999). Persisted field-by-field to ext-flash 0x08080C00+ by `bms_set_state`. |
 | `0x20002AD0` | — | 0x38 | Telemetry record scratch buffer assembled by `bms_set_state` before it is written to the two 50-entry ext-flash ring buffers (0x08080200 / 0x08080E00). |
 | `0x20002B58` | `s_state` | 1 | **Live BMS state byte.** Set by `bms_set_state` to the requested state (previous saved to 0x2000299C); `bms_state_machine` then force-writes 3 after each protection transition. |

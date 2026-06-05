@@ -39,6 +39,65 @@ same value. The globals relocated (`s_bms_cfg` `0x20000a84`→`0x20002c00`,
 `s_prot_status` `0x20000740`→`0x2000286c`, `g_fault_flags` `0x20000ac8`→`0x20002c44`)
 but the logic is identical.
 
+## What arms the fuse: over-current only — **not** over/under-voltage or threshold
+
+Condition (2) reads **only `g_fault_flags` bit 6 / bit 7**. That word is the unified
+protection-fault register; each protection check latches a *distinct* bit (all six
+`fg_*_check` functions are byte-identical in both versions, and all OR into the same
+word `0x20002c44`):
+
+| `g_fault_flags` bit | set by | fault |
+| --- | --- | --- |
+| 0 (`0x01`) | `fg_uvp1_check` | cell under-voltage 1 |
+| 1 (`0x02`) | `fg_uvp2_check` | cell under-voltage 2 |
+| 2 (`0x04`) | `fg_ovp1_check` | **cell over-voltage 1** |
+| 3 (`0x08`) | `fg_ovp2_check` | **cell over-voltage 2** |
+| 4 (`0x10`) | `fg_threshold_check` | threshold guard |
+| 6 (`0x40`) | `fg_discharge_oc_check` | discharge over-current |
+| 7 (`0x80`) | `fg_charge_oc_check` | charge over-current |
+
+So the heater fires **only** on a latched **discharge-OC (bit 6) or charge-OC
+(bit 7)**. Over-voltage sets bits 2/3, under-voltage sets bits 0/1, threshold sets
+bit 4 — the fuse handler reads **none** of them. Only the two OC checks additionally
+stamp a trip-reason byte at `0x200029e0` (1 = dischg-OC, 2 = chg-OC); the
+voltage/threshold checks don't.
+
+**Where over/under-voltage actually go.** Both per-state dispatchers and
+`bms_state_machine` route the non-OC bits to *recoverable* handlers, never to the
+heater branch:
+
+| fault | routed to | what that handler does |
+| --- | --- | --- |
+| OVP1 (`g_fault_flags` bit 2) | `state_handler_14` | `charge_mosfet_off()` + `bms_configure(0)` + recoverable state `0x14` |
+| OVP2 (`g_fault_flags` bit 3) | `state_handler_15` | same → state `0x15` |
+| threshold (`g_fault_flags` bit 4) | `state_handler_16` | same → state `0x16` |
+| OVP via `s_prot_status` bit 2/3 | `state_handler_09` / `0a` | `charge_mosfet_off()` + `bms_configure(2)` + recoverable state `9`/`10` |
+| OC region (`g_fault_flags` bit 5/6/7) | `state_handler_17_19` | the fuse handler — fires PB7 **only** if bit 6/7 |
+
+`state_handler_09`/`0a`/`14`/`15`/`16` write only **PB0** (`0x1`) and **PB9**
+(`0x200`) — **never PB7** (`0x80`). Over-voltage's firmware response is to **open the
+charge FET and re-arm the AFE** (`bms_configure` re-pushes SMBus protection regs 3–9),
+then sit in a recoverable state. No pyro fuse.
+
+**Can over-voltage reach the fuse at all? Only indirectly.** Nothing other than the
+two OC checks ever *sets* `g_fault_flags` bit 6/7 — verified: `bms_state_machine`'s
+only `orrs` into that word touch bits 0/1/8/9, never 6/7. An over-voltage event where
+the charge FET successfully opens stays recoverable. The fuse becomes reachable only
+if the charge FET **fails shorted** — then charge current keeps flowing, the
+**charge-OC** debounce trips bit 7, and *that* arms the heater. This is the design
+intent: **the pyro fuse is the "FET welded / current can't be interrupted normally"
+last resort, detected as a persistent over-current — not a direct over-voltage trip.**
+
+**Hardware layer — over-voltage *does* blow the fuse, in hardware.** This is only the
+*MCU firmware's* fuse logic; PB7 is an MCU GPIO. The board pairs it with a dedicated
+**secondary over-voltage protection** stage: two **`S-8215AAD-K8T2U`** cell-overcharge
+ICs (`U1005` = cells 1–5, `U1006` = cells 6–10) that, on **any cell > 4.35 V for 2 s**,
+autonomously drive the **same** SCF9550 fuse heater via a shared gate node (JN2) —
+independent of the FEDL5236 AFE and the MCU. So the complete picture is: **MCU/PB7
+blows the fuse on persistent over-current; the S-8215AAD ICs blow it on over-voltage.**
+The firmware half (this document) is unchanged between 1.14.1 and 1.17.1. Full
+circuit: [`../hardware.md` → "Secondary protection & the pyro fuse"](../hardware.md#secondary-protection--the-pyro-fuse).
+
 ## 2. The one body edit is downstream of the decision (harmless to the fuse)
 
 After the trigger decision, the handler force-opens everything on **every** entry.
