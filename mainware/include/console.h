@@ -61,5 +61,34 @@ void console_cmd_bwritereg(char *args);        /* `bwritereg` 0x08041C84 */
 void console_cmd_breadreg(char *args);         /* `breadreg`  0x08041B30 */
 void console_cmd_swritedata(char *args);       /* `swritedata` 0x0804168C */
 void console_cmd_sreadreg(char *args);         /* `sreadreg`  0x080414A4 */
+void console_cmd_battery(char *args);          /* `battery`   0x08042F28 */
+void console_cmd_shifterstatus(char *args);    /* `shifterstatus` 0x08042F74 */
+void console_cmd_motorstatus(char *args);      /* `motorstatus` 0x08042E54 */
+void console_cmd_adc(char *args);              /* `adc`       0x08043028 */
+void console_cmd_stc(char *args);              /* `stc`       0x08041614 */
+void console_cmd_batware(char *args);          /* `batware`   0x08041E50 */
+void console_cmd_logprn(char *args);           /* `logprn`    0x08041F88 */
+void console_cmd_logclr(char *args);           /* `logclr`    0x08041F34 */
+void console_cmd_factory(char *args);          /* `factory`   0x08041E70 */
+void console_cmd_reboot(char *args);           /* `reboot`    0x08041DA4 */
+void console_cmd_sound(char *args);            /* `sound`     0x08041D10 */
+void console_cmd_bwritedata(char *args);       /* `bwritedata` 0x08041BB4 */
+void console_cmd_swritereg(char *args);        /* `swritereg` 0x08041528 */
+void console_cmd_help(char *args);             /* `help`      0x08040AA0 */
+void console_cmd_logout(char *args);           /* `logout`    0x08040A4C */
+void console_cmd_blereset(char *args);         /* `blereset`  0x08041FB8 */
+void console_cmd_bledebug(char *args);         /* `bledebug`  0x08040C6C (→UART8) */
+void console_cmd_loop(char *args);             /* `loop`      0x08040C28 */
+void console_cmd_logapp(char *args);           /* `logapp`    0x08041E94 */
+void console_cmd_powerchange(char *args);      /* `powerchange` 0x080412BC */
+void console_cmd_batreset(char *args);         /* `batreset`  0x08041DD8 */
+void console_cmd_shiftware(char *args);        /* `shiftware` 0x08041DBC */
+void console_cmd_shiftdebug(char *args);       /* `shiftdebug` 0x08041D50 */
+void console_cmd_shiftresetcounter(char *args);/* `shiftresetcounter` 0x08040CB4 */
+void console_cmd_gsmdebug(char *args);         /* `gsmdebug`  0x08040C90 (→UART2) */
+void console_cmd_bmsdebug(char *args);         /* `bmsdebug`  0x08040CD8 */
+void console_cmd_stcreset(char *args);         /* `stcreset`  0x080415EC */
+void console_cmd_setoad(char *args);           /* `setoad`    0x080415B4 */
+void console_cmd_setgear(char *args);          /* `setgear`   0x080413B4 */
 
 #endif

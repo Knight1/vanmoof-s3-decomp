@@ -8,6 +8,7 @@
 #include "console.h"
 #include "log.h"
 #include "scheduler.h"
+#include "sensor.h"
 #include "ssp.h"
 #include "stm32f413_gpio.h"
 #include "systick.h"
@@ -559,4 +560,517 @@ void console_cmd_factory_shipping(char *args)
     FUN_080314a4();
     systick_delay(1000);
     shipping_powerdown_deinit(6);   /* does not return */
+}
+
+/* ===================================================================
+ * Console status / log / mode handlers (batch 9). HAL read helper + the
+ * still-undecoded subsystem workers are kept as externs by OEM address. */
+extern int  HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);     /* 0x08026AB8 */
+
+/* `battery` — refresh the BMS telemetry shadow (ctx+0x3F2, 300 B) + sentinel
+ * ctx+0x3FC=0xFFFF, issue two BMS Modbus reads (slave 0xAA func 3, regs
+ * 0x00..0x30 and 0x47..0x56), and arm a one-shot 1 s scheduler task that dumps
+ * the populated telemetry to the console (OEM 0x08042F28). */
+extern void battery_request_telemetry(void);   /* 0x0803EA74 — the two BMS reads */
+extern void console_battery_dump(void);        /* 0x0804175C — periodic telemetry printer */
+
+void console_cmd_battery(char *args)
+{
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    (void)args;
+
+    memset(ctx + 0x3F2, 0, 300);                    /* wipe BMS telemetry shadow */
+    *(uint16_t *)(ctx + 0x3FC) = 0xFFFF;            /* mark invalid until BMS replies */
+    battery_request_telemetry();
+
+    if (*(uint8_t *)0x20000110u == SCHED_SLOT_NONE) {   /* 0xFA = no task yet */
+        uint8_t slot = scheduler_alloc();
+        *(uint8_t *)0x20000110u = slot;
+        scheduler_start(slot, 1000, console_battery_dump);
+    }
+}
+
+/* `shifterstatus` — report the eShifter 24 V rail (GPIOB pin14), clear the
+ * shifter scratch buffer (ctx+0x51E, 300 B), and (per HW version word at
+ * ctx+0x520) arm a status-poll scheduler task (OEM 0x08042F74). */
+extern void FUN_0802954c(void);   /* arm/refresh a related timer field (=3) */
+
+void console_cmd_shifterstatus(char *args)
+{
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    (void)args;
+
+    short hw_ver = *(short *)(ctx + 0x520);
+    memset(ctx + 0x51E, 0, 300);
+
+    g_log_func("Power is: %s\r\n",
+               HAL_GPIO_ReadPin((void *)0x40020400u, 0x4000) ? "ON" : "OFF");
+
+    uint8_t *slot_rec = (uint8_t *)0x2000010Eu;   /* this cmd's slot id at +1 */
+    scheduler_release(&slot_rec[1]);
+    FUN_0802954c();
+    g_log_func("Wait 3 seconds..\r\n");
+
+    if (slot_rec[1] == SCHED_SLOT_NONE) {
+        uint8_t slot = scheduler_alloc();
+        slot_rec[1] = slot;
+        if (hw_ver == 0x200) {
+            scheduler_start(slot, 3000, (sched_cb_t)0x080410C5u);
+        } else if (hw_ver == 0x201) {
+            scheduler_start(slot, 3500, (sched_cb_t)0x08040EEDu);
+        } else {
+            g_log_func("No shifter found\r\n");
+        }
+    }
+}
+
+/* `motorstatus` — arm a 500 ms "motor_get_tmr" poll task, clear the motor-status
+ * accumulators (ctx+0x364..0x376), and enqueue four motor Modbus requests
+ * (cmd 0x0C/0x0A/0x0B/0x0D) (OEM 0x08042E54). */
+extern void motor_get_timer_cb(void);   /* 0x08040DE0 */
+
+void console_cmd_motorstatus(char *args)
+{
+    uint8_t *slot = (uint8_t *)0x20000110u;
+    (void)args;
+
+    if (*slot == SCHED_SLOT_NONE) {
+        uint8_t s = scheduler_alloc();
+        *slot = s;
+        scheduler_set_timer_name(s, 500, "motor_get_tmr");
+    }
+
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    *(uint32_t *)(ctx + 0x364) = 0;
+    *(uint32_t *)(ctx + 0x368) = 0;
+    *(uint32_t *)(ctx + 0x36C) = 0;
+    *(uint16_t *)(ctx + 0x370) = 0;
+    *(uint16_t *)(ctx + 0x376) = 0;
+
+    scheduler_start(*slot, 500, motor_get_timer_cb);
+    g_log_func("Send request..\r\n");
+
+    if (maybe_enqueue_tx_message(0x0C, 0, 0, 1) > 0x10) g_log_func("  ERROR SSP place\r\n");
+    if (maybe_enqueue_tx_message(0x0A, 0, 0, 1) > 0x10) g_log_func("  ERROR SSP place\r\n");
+    if (maybe_enqueue_tx_message(0x0B, 0, 0, 1) > 0x10) g_log_func("  ERROR SSP place\r\n");
+    if (maybe_enqueue_tx_message(0x0D, 0, 0, 1) > 0x10) g_log_func("  ERROR SSPB place\r\n");
+}
+
+/* `adc` — print the HW-version index and the scaled ADC rail voltages: Vbat
+ * (supply_voltage_read), Vgsm, and 5Vsw (only on HW index > 5). ADC sample
+ * buffer base 0x20000914; each reader scales raw*3300/4096 mV (OEM 0x08043028). */
+extern int      hw_version_lookup(uint8_t *out_idx);  /* 0x08032CE4 */
+extern uint32_t adc_read_vgsm(void);                  /* 0x08032DA4 */
+extern uint32_t adc_read_5vsw(void);                  /* 0x08032DC0 */
+
+void console_cmd_adc(char *args)
+{
+    uint8_t hw_idx[5];
+    (void)args;
+
+    if (hw_version_lookup(hw_idx) == 0) {
+        g_log_func("  ERR HWversion\r\n");
+    } else {
+        g_log_func("HW version %d\r\n", hw_idx[0]);
+    }
+    g_log_func("Vbat %d mV\r\n", supply_voltage_read());
+    g_log_func("Vgsm %d mV\r\n", adc_read_vgsm());
+    if (hw_idx[0] > 5) {
+        g_log_func("5Vsw %d mV\r\n", adc_read_5vsw());
+    }
+}
+
+/* `stc` — read the battery STC fuel-gauge and print V/I/temp/percent
+ * ("%d mV, %d mA %d%dC %d.%d%%") (OEM 0x08041614). */
+extern uint32_t FUN_080396e4(void *ctx, uint32_t *out);   /* STC read; 1 = valid */
+
+void console_cmd_stc(char *args)
+{
+    uint8_t  ctx[52];
+    uint32_t out[12];
+    (void)args;
+
+    g_log_func("Read STC\r\n");
+    if (FUN_080396e4(ctx, out) == 1) {
+        int pct = (int)out[2], voltage = (int)out[3], current = (int)out[4], temp = (int)out[5];
+        int temp_tens = temp / 10, pct_int = pct / 10;
+        g_log_func("%d mV, %d mA %d%dC %d.%d%%\r\n",
+                   voltage, current, temp_tens, temp - temp_tens * 10,
+                   pct_int, pct - pct_int * 10);
+    } else {
+        g_log_func(" ERR Read STC\r\n");
+    }
+}
+
+/* `batware` — start a batteryware (battery-module) firmware update: request bike
+ * state 0x19 (if unlocked), log, and arm the update mode byte (OEM 0x08041E50). */
+extern void batteryware_update_arm(void);   /* 0x0803F450 — sets *(0x20008A00+6)=4 */
+
+void console_cmd_batware(char *args)
+{
+    (void)args;
+    maybe_set_state_if_unlocked(0x19);
+    g_log_func("Start batteryware update\r\n");
+    batteryware_update_arm();
+}
+
+/* `logprn` — dump the whole circular log buffer between "LOG:"/"<EOF>" markers,
+ * suppressing live logging during the dump via the state flag (OEM 0x08041F88). */
+extern void log_buffer_dump(void);   /* 0x080296B8 */
+
+void console_cmd_logprn(char *args)
+{
+    (void)args;
+    state_flag_set(0);              /* suppress live logging (flag @ 0x20000083) */
+    g_log_func("LOG:\r\n");
+    log_buffer_dump();
+    g_log_func("<EOF>\r\n");
+    state_flag_set(1);             /* resume */
+}
+
+/* `logclr` — clear the circular log buffer, but only when given the confirmation
+ * key `6` (guard against accidental wipes) (OEM 0x08041F34). */
+void console_cmd_logclr(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) == 0) {
+        g_log_func("Clear: logclr key\r\n");
+        return;
+    }
+    if ((strtol(p, NULL, 10) & 0xFFFF) == 6) {
+        g_log_func("Clear log\r\n");
+        log_buffer_reset();
+    } else {
+        g_log_func("Clear: wrong key\r\n");
+    }
+}
+
+/* `factory` — load factory defaults: reset the settings/config object
+ * (OEM 0x08041E70). */
+extern void settings_factory_reset(void *cfg, int mode);   /* 0x0803FAD8 */
+
+void console_cmd_factory(char *args)
+{
+    (void)args;
+    g_log_func("Load factory defaults\r\n");
+    settings_factory_reset(*(void **)(0x20009368u + 0x2DC), 1);
+}
+
+/* `reboot` — defer a restart so the console reply can flush, then run the
+ * restart task after 600 ticks (OEM 0x08041DA4). */
+extern void reboot_restart_task(void);   /* 0x08038A68 */
+
+void console_cmd_reboot(char *args)
+{
+    (void)args;
+    scheduler_start(scheduler_alloc(), 600, reboot_restart_task);
+}
+
+/* `sound` — play a sound: parse a decimal channel/sample index and trigger the
+ * channel notify (OEM 0x08041D10). */
+void console_cmd_sound(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) != 0) {
+        uint32_t v = (uint32_t)strtol(p, NULL, 10);
+        channel_notify_with_status(v & 0xFF);
+    }
+}
+
+/* `bwritedata` — inject a Modbus "write multiple registers" (func 0x10) to the
+ * battery (slave 0xAA): bwritedata [register] [data] [length] (OEM 0x08041BB4). */
+void console_cmd_bwritedata(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) == 0) {
+        g_log_func("usage: writedata [register] [data] [length]\r\n");
+        return;
+    }
+    uint32_t reg    = (uint32_t)strtol(p, NULL, 10);
+    uint32_t data   = (console_next_token(&p) == 0) ? 0
+                      : ((uint32_t)strtol(p, NULL, 10) & 0xFFFF);
+    uint32_t length = (console_next_token(&p) == 0) ? 0
+                      : ((uint32_t)strtol(p, NULL, 10) & 0xFFFF);
+    g_log_func("Register %d data %d length %d\r\n", reg & 0xFFFF, data, length);
+
+    uint8_t frame[0x86];
+    frame[0] = 0xAA;                            /* battery slave */
+    frame[1] = 0x10;                            /* write multiple registers */
+    *(uint16_t *)&frame[2] = (uint16_t)reg;
+    frame[0x84] = (uint8_t)(length << 1);
+    memset(&frame[4], 0, 0x80);
+    for (uint32_t i = 0; i < length * 2u; i += 2) {
+        frame[4 + i]     = (uint8_t)(data >> 8);
+        frame[4 + i + 1] = (uint8_t)data;
+    }
+    if (modbus_bat_submit(frame) != 0) {
+        g_log_func("  Error\r\n");
+    }
+}
+
+/* `swritereg` — inject a Modbus "write single register" (func 0x06) to the
+ * shifter (slave 0x20): swritereg [register] [data] (OEM 0x08041528). */
+void console_cmd_swritereg(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) == 0) {
+        g_log_func("usage: writereg [register] [data]\r\n ");
+        return;
+    }
+    uint32_t reg  = (uint32_t)strtol(p, NULL, 10);
+    uint32_t data = (console_next_token(&p) == 0) ? 0
+                    : ((uint32_t)strtol(p, NULL, 10) & 0xFFFF);
+    g_log_func("Register %d data %d\r\n", reg & 0xFFFF, data);
+
+    uint8_t pdu[6];
+    pdu[0] = 0x20;                              /* shifter slave */
+    pdu[1] = 0x06;                              /* write single register */
+    *(uint16_t *)&pdu[2] = (uint16_t)reg;
+    pdu[4] = (uint8_t)data;
+    pdu[5] = (uint8_t)(data >> 8);
+    if (modbus_shift_submit(pdu) != 0) {
+        g_log_func("  Error\r\n");
+    }
+}
+
+/* ===================================================================
+ * Remaining console handlers (batch 10) — completes the 49-command surface.
+ * ctx = *(uint8_t**)(0x20009368+0x2DC) (session_ctx). */
+
+/* The console command dispatch table (OEM @ flash 0x0804F5C4): 49 entries. */
+typedef struct {
+    const char *name;
+    const char *help;
+    void      (*handler)(char *args);
+} console_cmd_t;
+#define G_CONSOLE_CMD_TABLE  ((const console_cmd_t *)0x0804F5C4u)
+#define CONSOLE_CMD_COUNT    49u
+
+/* `help` — list every command name + one-line help from the dispatch table. */
+void console_cmd_help(char *args)
+{
+    (void)args;
+    g_log_func("Available commands:\r\n");
+    for (uint8_t i = 0; i < CONSOLE_CMD_COUNT; i++) {
+        g_log_func("%-15s   %s\r\n", G_CONSOLE_CMD_TABLE[i].name, G_CONSOLE_CMD_TABLE[i].help);
+    }
+}
+
+/* `logout` — clear the console session authenticated flag (ctx_sub +0x2D9 =
+ * logged_in) directly at the app-context base (OEM 0x08040A4C). */
+void console_cmd_logout(char *args)
+{
+    (void)args;
+    *(volatile uint8_t *)(0x20009368u + 0x2D9) = 0;   /* g_app_state.ctx_sub->logged_in */
+}
+
+/* `blereset` — pulse the BLE module reset line (GPIOE PE5) high 10 ms then low
+ * (OEM 0x08041FB8). */
+void console_cmd_blereset(char *args)
+{
+    (void)args;
+    HAL_GPIO_WritePin((void *)0x40021000u, 0x20, 1);   /* PE5 high (assert) */
+    systick_delay(10);
+    HAL_GPIO_WritePin((void *)0x40021000u, 0x20, 0);   /* PE5 low (release) */
+}
+
+/* `bledebug` — open the CC2642 BLE-chip sub-shell: log "Connect to UART8" and
+ * arm the console UART-redirect selector (ctx+0x34C = 1) (OEM 0x08040C6C). */
+void console_cmd_bledebug(char *args)
+{
+    (void)args;
+    g_log_func("Connect to UART8\r\n");
+    ((uint8_t *)*(void **)(0x20009368u + 0x2DC))[0x34C] = 1;
+}
+
+/* `loop` — print super-loop timing (period/peak us + ms field) and reset the
+ * ms + peak accumulators (ctx+0x358/0x35C/0x360) (OEM 0x08040C28). */
+void console_cmd_loop(char *args)
+{
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    (void)args;
+    g_log_func("actual %d us (%d us - %d ms)\r\n",
+               1000u / *(uint32_t *)(ctx + 0x358),
+               1000u / *(uint32_t *)(ctx + 0x360),
+               *(uint32_t *)(ctx + 0x35C));
+    ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    *(uint32_t *)(ctx + 0x35C) = 0;
+    *(uint32_t *)(ctx + 0x360) = 0;
+}
+
+/* `logapp` — set the "log to APP vs Serial" flag (ctx+0x313) from the arg,
+ * persist the state record to EEPROM, and echo (OEM 0x08041E94). */
+extern int  save_state_record_to_eeprom(uint32_t f0, uint32_t f1, uint32_t f2, uint32_t f3,
+                                         uint32_t f4, uint32_t f5, uint32_t f6, uint32_t f7,
+                                         uint32_t f8, uint32_t f9, uint32_t f10, uint32_t f11,
+                                         uint32_t f12, uint32_t f13, uint32_t f14); /* 0x0803E2CC */
+extern void FUN_080298dc(void);   /* enable the APP-log sink */
+
+void console_cmd_logapp(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) != 0) {
+        uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+        ctx[0x313] = ((uint32_t)strtol(p, NULL, 10) & 0xFFFF) != 0;
+        if (save_state_record_to_eeprom(
+                *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314), *(uint32_t *)(ctx + 0x318),
+                *(uint32_t *)(ctx + 0x31C), *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+                *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32C), *(uint32_t *)(ctx + 0x330),
+                *(uint32_t *)(ctx + 0x334), *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33C),
+                *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344), *(uint32_t *)(ctx + 0x348)) != 0) {
+            g_log_func(" ERROR Save values\r\n");
+        }
+        if (ctx[0x313]) {
+            FUN_080298dc();
+        }
+    }
+    g_log_func("Logging %s\r\n",
+               (*(uint8_t **)(0x20009368u + 0x2DC))[0x313] ? "APP" : "Serial");
+}
+
+/* `powerchange` — set/report the "ride change" enable flag (ctx+0x3CB)
+ * (OEM 0x080412BC). */
+void console_cmd_powerchange(char *args)
+{
+    char *p = args;
+    if (console_next_token(&p) != 0) {
+        (*(uint8_t **)(0x20009368u + 0x2DC))[0x3CB] = (strtol(p, NULL, 10) != 0);
+    }
+    g_log_func("ride change: %s\r\n",
+               (*(uint8_t **)(0x20009368u + 0x2DC))[0x3CB] ? "Yes" : "No");
+}
+
+/* `batreset` — pulse the BMS hardware reset (GPIOB PB5); a 5 s scheduled task
+ * then releases the line + frees its slot (OEM 0x08041DD8). Slot byte @ 0x20000112. */
+static void bat_reset_release_cb(void)
+{
+    scheduler_release((uint8_t *)0x20000112u);          /* free this one-shot slot */
+    g_log_func("BMS release reset\r\n");
+    HAL_GPIO_WritePin((void *)0x40020400u, 0x20, 0);    /* PB5 low (deassert) */
+}
+
+void console_cmd_batreset(char *args)
+{
+    uint8_t *slot = (uint8_t *)0x20000112u;
+    (void)args;
+    g_log_func("BMS reset\r\n");
+    HAL_GPIO_WritePin((void *)0x40020400u, 0x20, 1);    /* PB5 high (assert) */
+    if (*slot == SCHED_SLOT_NONE) {
+        *slot = scheduler_alloc();
+    }
+    scheduler_start(*slot, 5000, bat_reset_release_cb);
+}
+
+/* `shiftware` — start a shiftware (eShifter) firmware update: log + arm the
+ * console redirect selector (global 0x2000019C = 2) (OEM 0x08041DBC). */
+void console_cmd_shiftware(char *args)
+{
+    (void)args;
+    g_log_func("Start shiftware update\r\n");
+    *(volatile uint8_t *)0x2000019Cu = 2;   /* console redirect: shiftware */
+}
+
+/* `shiftdebug` — toggle the "stream Modbus-shifter debug" flag (ctx+0x34E) and
+ * arm an 0x50-tick pump task (OEM 0x08041D50). */
+extern void shiftdebug_pump_task(void);   /* 0x08041FDC */
+
+void console_cmd_shiftdebug(char *args)
+{
+    (void)args;
+    *(volatile uint8_t *)0x20000111u = scheduler_alloc();
+    scheduler_start(*(volatile uint8_t *)0x20000111u, 0x50, (sched_cb_t)shiftdebug_pump_task);
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    ctx[0x34E] ^= 1;
+    g_log_func("Show Modbus shifter %s\r\n", ctx[0x34E] ? "ON" : "OFF");
+}
+
+/* `shiftresetcounter` — zero the eShifter operation counter (ctx+0x338)
+ * (OEM 0x08040CB4). */
+void console_cmd_shiftresetcounter(char *args)
+{
+    (void)args;
+    *(uint32_t *)(*(uint8_t **)(0x20009368u + 0x2DC) + 0x338) = 0;
+    g_log_func("Shifter counter reset\r\n");
+}
+
+/* `gsmdebug` — open the u-blox modem AT sub-shell: log "Connect to UART2" and
+ * set the GSM redirect-enable flag (ctx+0x34D = 1) (OEM 0x08040C90). */
+void console_cmd_gsmdebug(char *args)
+{
+    (void)args;
+    g_log_func("Connect to UART2\r\n");
+    ((uint8_t *)*(void **)(0x20009368u + 0x2DC))[0x34D] = 1;
+}
+
+/* `bmsdebug` — toggle the Modbus-BMS debug-print flag (ctx+0x34F) (OEM 0x08040CD8). */
+void console_cmd_bmsdebug(char *args)
+{
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    (void)args;
+    ctx[0x34F] ^= 1;
+    g_log_func("Show Modbus BMS %s\r\n", ctx[0x34F] ? "ON" : "OFF");
+}
+
+/* `stcreset` — reset the battery STC gas-gauge / coulomb counter (OEM 0x080415EC). */
+extern int gas_gauge_reset(void);   /* 0x080396C4 */
+
+void console_cmd_stcreset(char *args)
+{
+    (void)args;
+    if (gas_gauge_reset() == 0) {
+        g_log_func("GasGauge_Reset\r\n");
+    } else {
+        g_log_func("ERROR GasGauge_Reset\r\n");
+    }
+}
+
+/* `setoad` — request OAD (over-the-air firmware-update) mode: bike state 0x19
+ * (if unlocked), then log (OEM 0x080415B4). */
+void console_cmd_setoad(char *args)
+{
+    (void)args;
+    maybe_set_state_if_unlocked(0x19);
+    g_log_func("Set OAD mode\r\n");
+}
+
+/* `setgear` — store a gear-encoder position to the MT shifter via a Modbus
+ * write-multiple (func 0x10): setgear <gear> <position>. Requires the MT
+ * shifter present (ctx+0x520 == 0x201) and gear in 1..ctx+0x59C (OEM 0x080413B4). */
+void console_cmd_setgear(char *args)
+{
+    char    *p   = args;
+    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+
+    if (*(short *)(ctx + 0x520) != 0x201) {
+        g_log_func("MT shifter not detected\r\n");
+        return;
+    }
+    if (console_next_token(&p) == 0) {
+        g_log_func("use 'shifterstatus' to get positions\r\n");
+        return;
+    }
+    uint32_t gear = (uint32_t)strtol(p, NULL, 10) & 0xFF;
+    if (gear == 0 || (int)*(short *)(ctx + 0x59C) < (int)gear) {
+        g_log_func("invalid gear number\r\n");
+        return;
+    }
+    if (console_next_token(&p) == 0) {
+        g_log_func("Enter position\r\n");
+        return;
+    }
+    long pos = strtol(p, NULL, 10);
+    g_log_func("Save gear %d position %d\r\n", gear, pos);
+
+    uint8_t frame[0x86];
+    frame[0] = 0x20;                                   /* shifter slave */
+    frame[1] = 0x10;                                   /* write multiple registers */
+    *(short *)&frame[2] = (short)((gear + 0x1F) * 2);  /* register address */
+    frame[4] = (uint8_t)((uint32_t)pos >> 24);         /* position, big-endian u32 */
+    frame[5] = (uint8_t)((uint32_t)pos >> 16);
+    frame[6] = (uint8_t)((uint32_t)pos >> 8);
+    frame[7] = (uint8_t)pos;
+    frame[0x84] = 4;                                   /* byte count */
+    if (modbus_shift_submit(frame) != 0) {
+        g_log_func("  Error\r\n");
+    }
 }
