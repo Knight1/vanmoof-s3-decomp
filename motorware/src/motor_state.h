@@ -47,17 +47,17 @@
 #define L3_CTRL_91A0      0x91A0  /* [~] control variable (27 refs) */
 #define L3_MEAS_91D6      0x91D6  /* [V] read-reg 12 measurement */
 
-/* ---- FOC measurement struct (0x9580-0x95Bx) ---------------------------- */
-#define L3_FOC_MEAS       0x9580  /* [V] FOC measurement struct, written by the fast ISR
-                                          (0x3F252C): phase currents/voltages, bus V */
-#define L3_SETPOINT_95A0  0x95A0  /* [~] drive setpoint (12 refs) */
-#define L3_SETPOINT_95A4  0x95A4  /* [V] setpoint written by write-reg 25 (x1/10) */
+/* ---- control timebase --------------------------------------------------- */
+#define L3_PWM_TICK       0x9009  /* [V] ePWM4-ISR tick counter (0x3F2826) — the
+                                          background-FOC timebase */
 
 /* ---- comm state -------------------------------------------------------- */
 #define L3_RESP_QUEUE     0x9440  /* [V] 8 x 13-word response ring (reliable delivery) */
 #define L3_TX_RING_HEAD   0x94BB  /* [V] SCI-A TX ring write index */
 #define L3_TX_RING_COUNT  0x94BD  /* [V] SCI-A TX ring fill (0..64) */
 #define L3_TX_RING_BUF    0x94C0  /* [V] SCI-A TX ring (64 words) */
+#define L3_DBG_RX_STATE   0x9580  /* [V] SCI-C debug-console RX buffer/state (ISR 0x3F252C) */
+#define L3_SETPOINT_95A4  0x95A4  /* [V] setpoint written by write-reg 25 (x1/10) */
 #define L3_RX_SLIP_STATE  0x95B8  /* [V] SLIP RX state (0 idle / 1 in-frame / 2 after-ESC) */
 #define L3_RESP_SEQ       0x95B9  /* [V] response queue sequence counter */
 #define L3_RX_FRAME_PTR   0x95BA  /* [V] completed RX frame pointer */
