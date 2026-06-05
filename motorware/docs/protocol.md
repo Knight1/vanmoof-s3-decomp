@@ -76,6 +76,41 @@ byte 2.. operands  (register id, address, value …)
 Read/write build a response `{0x02, 0x05, value…}` and send it via
 `slip_tx_frame`. An RX return code of 2 sets a status bit: `*(0x9017) |= 2`.
 
+### Status/fault word `0x9017` (the "errors" mainware reads)
+
+Register 12's first word is the L3 fault/status word at `0x9017`; reading it
+clears the two acked low bits. Each bit is set at a verified detection point
+(the test preceding `0x9017 |= bit`) — see `src/motor_state.h`:
+
+Cross-referenced to the mainware user-facing motor error codes
+(Knight1/VanMooof-Module `ERRORS.md`, errors 45–53) — the descriptions confirm
+the detection mechanisms found in the image:
+
+| bit | name | set when | → mainware error |
+| --- | --- | --- | --- |
+| `0x0001` | FAULT_INIT_CFG_A | startup HAL/config check fails | — |
+| `0x0002` | FAULT_RX_ERR | SLIP receive error | 22 MOTOR_COMMUNICATION |
+| `0x0004` | STATUS_TOGGLE | recurring status (mirrored to byte `0x9019`) | — |
+| `0x0008` | FAULT_MEAS_0008 | ISR: computed value on `0x9068` > 0 | — |
+| `0x0010` | FAULT_THRESH_0010 | ISR: value ≤ 100 | — |
+| `0x0020` | FAULT_DRV_FAULT | **DRV8301** status pin == 0 | 46 MOTOR_OVER_CURRENT / 45 CABLE |
+| `0x0040` | FAULT_DRV_OCTW | DRV8301 status pin == 0 | 46 / 52 TORQUE_SENSOR_FAIL |
+| `0x0100` | FAULT_INIT_CFG_B | cfg invalid (`0x95A4`==0 && `0x901E`<5) | 53 MOTOR_NOT_READY [~] |
+| `0x0200` | FAULT_CURRENT_OFFSET | current-sense **offset** outside window | **49 MOTOR_CURRENT_ERR** |
+| `0x0400` | FAULT_VOLTAGE_OFFSET | voltage **offset** outside window | **50 MOTOR_VOLTAGE_ERR** |
+| `0x0800` | FAULT_THRESH_0800 | ISR: value ≤ a limit | — |
+| `0x1000` | FAULT_OVERTEMP | 3-threshold range check | **51 MOTOR_DERATING** (high temp) |
+| `0x2000` | STATUS_TIMEOUT | periodic/timeout (ePWM4 tick reset) | — |
+| `0x8000` | STATUS_RUN_REQ | run requested (write-reg 20) | — |
+
+The match is tight: the image checks the **current/voltage sense offsets** against
+windows (`sub_3EE2FD`) — exactly errors 49 ("current offset … deviated") and 50
+("voltage offset … incorrect"); the 3-threshold check (`sub_3EE842`) is the
+temperature **derating** (51); and error 46 names the **DRV8301** gate driver,
+confirming the `0x0020`/`0x0040` digital-input faults are its status pins. Errors
+48 (CONTROLLER_ERROR) / 53 (NOT_READY) come from the estimator-state checks
+(`EST_getState`/`EST_isMotorIdentified`).
+
 ### Reliable delivery (verified)
 
 Responses aren't sent inline — they're **enqueued** by `sub_3F32C9` into an
@@ -94,7 +129,7 @@ request channel.
 | --- | --- | --- | --- |
 | **10** | 2 | `0x90A2`–`0x90A5` | firmware version / identity (the `DEADBEEF`+version region; returns patch `0x16`=22) |
 | **11** | 1 | digital inputs 37 & 32 via `sub_3F3B0C` | status bits (bit0 ← in 37, bit1 ← in 32) |
-| **12** | 7 | `0x9017` flags, mode, `0x9018`/`0x9019`/`0x901A`, scaled `0x9066`(×625), scaled `0x91D6` | main status/telemetry block; **reading clears** flags `0x9017 &= 0xFFFC` |
+| **12** | 7 | `0x9017` flags, mode (calls **`EST_getSpeed_krpm`** = FAST motor speed), `0x9018`/`0x9019`/`0x901A`, scaled `0x9066`(×625), scaled `0x91D6` | main status/telemetry block; **reading clears** flags `0x9017 &= 0xFFFC` |
 | **13** | 2 | scaled `0x906A`, scaled `0x905C` | two IQ measurements (×125 ≫17 / ×… — engineering-unit conversion) |
 
 **Write — opcode 7** (`sub_3EE50E(id)`; value = `frame[0..1]` big-endian, then

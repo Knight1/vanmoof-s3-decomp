@@ -3,7 +3,11 @@
 **Target:** `motorware_S.0.00.22` (VanMoof S3 motor controller),
 TI **TMS320F28054F** (C2000/C28x DSP). Older `S.0.00.15` also on hand.
 
-**Status:** `foundation + 356 disassembled + protocol & control-loop mapped` —
+**Status:** `behaviour decompiled to C: link + register protocol + FOC loop` —
+`src/` now holds the actual behaviour: `comm.c` (SLIP+CRC link), `registers.c`
+(read speed/status/version, write motor setpoints, dispatch), `foc.c` (the
+per-cycle FOC current loop), `motor_state.h` (L3 map + fault-bit definitions),
+`params.c` (.cinit defaults). All compile clean. Underneath: —
 container byte-exact, memory map and boot flow verified, image in IDA at true
 word-addresses; the **mainware serial-link stack reconstructed to C**
 (`src/comm.c`) with the full **command/register map** (`protocol.md`); and the
@@ -56,14 +60,17 @@ Full data: `build/ida/funcmap.json`.
 | `0x3F4294` | ~25 | 4 | 1 | 3 | `sci_tx_byte` (SCI-A TX ring) ✅ **decomp-c** |
 | `0x3F3310` | 61 | 2 | 2 | 0 | `slip_tx_frame` (SLIP+CRC encode) ✅ **decomp-c** |
 | `0x3F33E6` | 104 | 1 | 3 | 8 | SLIP RX state machine — partial (front half) |
-| `0x3F3472` | 46 | 4 | — | 4 | link service / **command dispatch** (opcode 5/6/7) ✅ mapped |
-| `0x3EE47C` | 117 | 1 | 3 | — | **read registers** 10–13 ✅ mapped (`protocol.md`) |
-| `0x3EE50E` | 364 | 1 | 11 | — | **write registers** 20–25 ✅ mapped |
+| `0x3F3472` | 46 | 4 | — | 4 | `link_service` — command dispatch (opcode 5/6/7) ✅ **decomp-c** (`src/registers.c`) |
+| `0x3EE47C` | 117 | 1 | 3 | — | `read_register` 10–13 (speed/status/version) ✅ **decomp-c** |
+| `0x3EE50E` | 364 | 1 | 11 | — | `write_register` 20–25 (motor command/setpoints) ✅ **decomp-c** |
+| FOC loop @`0x3F1376` | ~250 | (ptr) | — | — | `foc_run` — per-cycle FOC (ADC→FAST→Park/PI/SVGEN→ePWM) ✅ **decomp-c** (`src/foc.c`) |
 | `0x3F32C9` | — | 2 | 1 | — | enqueue response (8×13 ring @`0x9440`) ✅ |
 | `0x3F345C` | 21 | 1 | 0 | — | opcode-5 ack (clear queue entry) ✅ |
 | `0x3F0675` | 184 | 1 | many | — | **`HAL_init`** ✅ mapped (ePWM1-4/ADC/PIE/SPI/SCI/timer) |
 | `0x3F3228` | — | 4 | — | — | `EPWM_setup(base)` — per phase (1/2/3) + ePWM4 |
-| `0x3F2444` | 139 | 1 | 5 | 32 | **8 PIE ISRs** (`0x3F2507`…`0x3F2845`) — control/comm/fault |
+| `0x3F2444` | 139 | 1 | 5 | 32 | **8 PIE ISRs** mapped: SCI-A RX `0x3F261C`/TX `0x3F25F7`, SCI-C RX `0x3F252C`/TX `0x3F2507`, ePWM4 timebase `0x3F2826` ✅ |
+| `0x3F0A5F` | 1618 | 1 | 8 | 0 | **InstaSPIN init** ✅ — 43 ROM setters; loads float USER params (100A/60V/20kHz/2π…) → IQ24 (`hardware.md`) |
+| `0x3EF57E` | 1525 | 1 | 8 | 0 | FOC compute (38 ROM calls) |
 | `0x3F1CE0` | 414 | 1 | 5 | — | eCAN setup |
 | `0x3EE894` | 1190 | 1 | 68 | 287 | top control orchestrator (main-init / control build) |
 | `0x3F1FCE` | 692 | 2 | 8 | 231 | control/estimator state update |
@@ -80,10 +87,24 @@ Full data: `build/ida/funcmap.json`.
    register map** done: opcodes 5(ack)/6(read 10–13)/7(write 20–25), reliable
    response queue @`0x9440` (`protocol.md`). Remaining: name the `0x9000`+ L3
    fields the registers touch, and classify SCI-C / eCAN.
-2. **Control loop** — ✅ architecture mapped: `HAL_init` (`0x3F0675`), ePWM1-3
-   phases, **InstaSPIN-FOC ROM** (60+ calls to `0x3F8xxx`–`0x3FBxxx`), 8 PIE
-   ISRs (`hardware.md`). Remaining: which ISR is the fast current loop, the
-   exact Clarke→Park→PI→SVGEN steps, and the ADC channel→signal map.
+2. **Control loop** — ✅ mapped: `HAL_init` (`0x3F0675`), ePWM1-3 phases,
+   **InstaSPIN-FOC ROM** (229 calls), background FOC from `sub_3EE894` paced by
+   the **ePWM4 timebase ISR `0x3F2826`** (tick `0x9009`); all **8 ISRs
+   identified** (SCI-A/C RX-TX, ePWM4, housekeeping); **L3 field map**
+   `src/motor_state.h` (33 fields); **InstaSPIN init `sub_3F0A5F`** characterized
+   (43 ROM setters; float USER params 100A/60V/20kHz/2π → IQ24). **F2805x ROM
+   symbols applied** (346 names, `build/ida/rom_symbols.txt`) — all `lcr 3Fxxxxh`
+   now read as InstaSPIN names. **Per-cycle FOC run mapped** (`EST_run` @`0x3F16C1`:
+   ADC→Iab → FAST observer → Park/PI/SVGEN inline IQ24 → ePWM; open-source style,
+   no `CTRL_run`). **EST setup labeled** (`sub_3F0A5F` = 44 `EST_*_setParams` +
+   full-scales 100A/60V/1000Hz + `EST_setMotorParams`/`Rs`/`Ls_d`/`_q`/`Flux`(0.7)
+   + online-Rs flags). **Errors decompiled** (`0x9017` fault word, `src/motor_state.h`)
+   and cross-referenced to mainware error codes (`ERRORS.md`): current/voltage
+   offset → 49/50, over-temp → 51 derating, DRV8301 status pins → 46; **gate
+   driver = DRV8301** confirmed (explains SPI-A + current-sense → ADC). Remaining
+   (fine): exact Rs/Ls/flux numerics (params struct down the call chain), the
+   literal **ADCINx-pin→signal map** (in the pointer-reached `SOCxCTL` config —
+   needs emulation or the schematic), and a clean IDA name for the FOC function.
 3. **L3 struct typing** — name the `0x9000`+ globals from `.cinit` + usage, and
    emit `src/params.*` (defaults already extracted, see `src/`).
 4. **Secondary regions** — give IDA entry-point hints for the function-pointer

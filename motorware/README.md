@@ -28,10 +28,15 @@ backend exists for C28x); the target is behaviour-faithful C, like batteryware.
 
 ```
 motorware/
-├── docs/        container.md, memory-map.md, hardware.md, protocol.md, progress.md
-├── tools/       bootstream.py   — container/boot-stream codec (unwrap/verify/extract/cinit)
+├── docs/        container.md, memory-map.md, hardware.md, protocol.md,
+│                wire-protocol.md (talk to mainware as the motor), progress.md
+├── tools/       bootstream.py (container/boot-stream codec), motor_sim.py
+│                (build/decode SCI-A frames — forge motor telemetry),
+│                c28emu.py (C28x interpreter — analysis aid)
 ├── ida/         build_db.py, probe.py, README.md — C28x disassembly pipeline
-├── src/         reconstructed C (params + boot notes; grows as functions are translated)
+├── src/         reconstructed C: comm.c (SLIP+CRC link), registers.c (telemetry
+│                read + motor-command write + dispatch), foc.c (FOC current loop),
+│                motor_state.h (L3 map + fault bits), params.c (.cinit defaults)
 └── build/       generated: image/ (regions), ida/ (db, listing, call graph)  [git-ignored]
 ```
 
