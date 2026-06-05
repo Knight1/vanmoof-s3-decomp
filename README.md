@@ -16,7 +16,7 @@ behaviour-equivalent) images.
 | [`bleware/`](bleware/) | `bleware 1.4.01` | TI CC2642R1F (Cortex-M4F) | 178 KB | **159 decompiled** — OAD header byte-equivalent, full VanMoof code compiles |
 | [`batteryware/`](batteryware/) | `batteryware 1.17.1` | STM32L072CZT6 (Cortex-M0+) | ~88 KB | all functions `decomp-c` — builds (40 KB) + self-CRCs; behaviour-faithful (byte-eq out of reach: toolchain) |
 | [`powerbankware/`](powerbankware/) | `powerbank_firmware 1.11.05` | STM32F091xC (Cortex-M0) | ~92 KB | early — scaffold + `main`/state-loop decompiled (compiles; not yet linking) |
-| [`motorware/`](motorware/) | `motorware S.0.00.22` | TI TMS320F28054F (C2000/C28x DSP — **not ARM**) | ~58 KB flash | foundation verified — container byte-exact round-trip, boot flow + memory map proven, `.cinit` decoded, **356 functions disassembled** (IDA C28x); per-function C is open |
+| [`powerbankboot/`](powerbankboot/) | `powerbank_bootloader 1.00` | STM32F091xC (Cortex-M0) | 32 KB | `~35 decomp / ~26 named / 164 total` — A/B loader + X-CUBE-STL self-test |
 
 ## Per-firmware MCU mapping
 
@@ -50,6 +50,7 @@ vanmoof-s3-decomp/
 │   └── linker_cc2642r1.ld
 ├── batteryware/            ← in-frame battery BMS (STM32L072, all functions decomp-c)
 ├── powerbankware/          ← PowerBank BMS application (STM32F091, active — early)
+├── powerbankboot/          ← PowerBank A/B bootloader (STM32F091, "I am VM-BATT BL")
 ├── tools/                  ← cross-ware tools (patch_image_header.py, emulator, modbus)
 └── reference/              ← shared datasheets, pin maps
 ```
