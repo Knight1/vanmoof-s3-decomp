@@ -290,17 +290,60 @@ void console_region_set(char *input)
 /* ===================================================================
  * Additional debug-console command handlers (dispatch table @ flash
  * 0x0804F5C4 — see docs/console.md for the full 49-command map). Each is a
- * void handler(char *args). Session-context fields reached by raw offset use
- * a byte view of g_app_state.ctx_sub (== *(0x20009368 + 0x2DC), session_ctx
- * @ 0x200083A8). The logger g_log_func is the shared printf-style fn ptr. */
-#define CTXB  ((uint8_t *)g_app_state.ctx_sub)
+ * void handler(char *args). The logger g_log_func is the shared printf-style
+ * fn ptr. The OEM reaches session-context fields by raw byte offset off the
+ * ctx_sub pointer; CTXB is that byte view (== *(g_app_state + 0x2DC),
+ * session_ctx @ 0x200083A8) and the CTX_* macros name the offsets used here. */
+#define APP_CTX_BASE  0x20009368u                      /* g_app_state base */
+#define CTXB          ((uint8_t *)g_app_state.ctx_sub) /* the session_ctx byte view */
+
+/* session_ctx (ctx_sub) field offsets touched by the console handlers. */
+#define CTX_AUDIO_GROUP_LOW   0x0F4   /* audio config words (persisted to flash) */
+#define CTX_AUDIO_GROUP_MED   0x0F8
+#define CTX_AUDIO_GROUP_HIGH  0x0FC
+#define CTX_AUDIO_GROUP3      0x100
+#define CTX_AUDIO_CFG_BLOCK   0x104   /* start of the 0xC0-byte audio config block */
+#define CTX_WHEELSIZE         0x10B   /* wheel diameter: 0 = 24 inch, 1 = 28 inch */
+#define CTX_LOGGED_IN         0x2D9   /* console session authenticated flag */
+#define CTX_LOG_TO_APP        0x313   /* log sink: APP (1) vs Serial (0) */
+#define CTX_DISTANCE          0x31C   /* manual trip distance, tenths of a km (u32) */
+#define CTX_SHIFT_COUNTER     0x338   /* eShifter operation counter (u32) */
+#define CTX_REDIRECT_BLE      0x34C   /* console→UART8 (CC2642 BLE chip) redirect */
+#define CTX_REDIRECT_GSM      0x34D   /* console→UART2 (u-blox modem) redirect */
+#define CTX_DBG_SHIFTER       0x34E   /* stream Modbus-shifter debug */
+#define CTX_DBG_BMS           0x34F   /* stream Modbus-BMS debug */
+#define CTX_LOOP_LAST_US      0x358   /* super-loop last period */
+#define CTX_LOOP_MS           0x35C
+#define CTX_LOOP_PEAK_US      0x360   /* super-loop peak period */
+#define CTX_SPEED_OVR_A       0x3C4   /* speed-override fields (two adjacent u16) */
+#define CTX_SPEED_OVR_B       0x3C6
+#define CTX_RIDE_CHANGE       0x3CB   /* powerchange / "ride change" enable */
+#define CTX_MODEM_INFO        0x3E8   /* pointer to the u-blox modem-info block */
+#define CTX_SHIFTER_HW        0x520   /* shifter HW-version word (0x201 = MT shifter) */
+#define CTX_GEAR_COUNT        0x59C   /* number of valid gear positions */
+
+/* Inter-module Modbus injection (the b... / s... diagnostic console commands). */
+#define MB_SLAVE_BAT          0xAA    /* battery / BMS module */
+#define MB_SLAVE_SHIFT        0x20    /* eShifter module */
+#define MB_FUNC_READ          0x03    /* read holding registers */
+#define MB_FUNC_WRITE_SINGLE  0x06    /* write single register */
+#define MB_FUNC_WRITE_MULTI   0x10    /* write multiple registers */
+#define MB_FRAME_COUNT_OFF    0x84    /* register/byte-count position in the staging buffer */
+
+/* Named SRAM scheduler-slot bytes + console redirect / SMS-restart selectors. */
+#define SCHED_SLOT_REC        0x2000010Eu   /* base of the console scheduler-slot record block */
+#define SCHED_SLOT_TELEMETRY  0x20000110u   /* shared battery/motor status poll slot (REC+2) */
+#define SCHED_SLOT_SHIFTDEBUG 0x20000111u
+#define SCHED_SLOT_BATRESET   0x20000112u
+#define CONSOLE_REDIRECT_SEL  0x2000019Cu   /* console UART redirect: 2 = shiftware */
+#define SMS_INFO_STEP         0x200000E5u   /* sms_info_tracking_state_machine step */
 
 /* Battery- and shifter-side Modbus injectors (the `b*`/`s*` console commands
  * push a raw frame onto the corresponding inter-module bus). Not yet sourced. */
 extern int modbus_bat_submit(void *frame);    /* 0x08039DDC — battery slave 0xAA */
 extern int modbus_shift_submit(void *frame);  /* 0x080378A0 — shifter slave 0x20 */
 
-/* `distance` — manually set the trip distance (tenths of a km) at ctx+0x31C and
+/* `distance` — manually set the trip distance (tenths of a km) at ctx+CTX_DISTANCE and
  * echo it as whole.fraction km (OEM 0x08041360). No-arg path is silent. */
 void console_cmd_distance(char *args)
 {
@@ -309,11 +352,11 @@ void console_cmd_distance(char *args)
         return;
     }
     uint32_t v = (uint32_t)strtol(p, NULL, 10);
-    *(uint32_t *)(CTXB + 0x31C) = v;
+    *(uint32_t *)(CTXB + CTX_DISTANCE) = v;
     g_log_func("Set %u.%u Km\r\n", v / 10u, v % 10u);
 }
 
-/* `wheelsize` — set the wheel-diameter flag at ctx+0x10B (24->0, 28->1),
+/* `wheelsize` — set the wheel-diameter flag at ctx+CTX_WHEELSIZE (24->0, 28->1),
  * persist the config to both flash banks, then echo (OEM 0x08042120). */
 void console_cmd_wheelsize(char *args)
 {
@@ -322,23 +365,23 @@ void console_cmd_wheelsize(char *args)
         uint8_t  snapshot[0xC0];
         uint32_t val = (uint32_t)strtol(p, NULL, 10) & 0xFFFF;
         if (val == 24) {
-            CTXB[0x10B] = 0;
+            CTXB[CTX_WHEELSIZE] = 0;
         } else if (val == 28) {
-            CTXB[0x10B] = 1;
+            CTXB[CTX_WHEELSIZE] = 1;
         } else {
             g_log_func("wheel 24..28 for 24/28 inch\r\n");
         }
-        memcpy(snapshot, CTXB + 0x104, sizeof snapshot);
-        uint32_t res = FUN_08031728(*(uint32_t *)(CTXB + 0xF4), *(uint32_t *)(CTXB + 0xF8),
-                                    *(uint32_t *)(CTXB + 0xFC), *(uint32_t *)(CTXB + 0x100));
+        memcpy(snapshot, CTXB + CTX_AUDIO_CFG_BLOCK, sizeof snapshot);
+        uint32_t res = FUN_08031728(*(uint32_t *)(CTXB + CTX_AUDIO_GROUP_LOW), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_MED),
+                                    *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_HIGH), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP3));
         g_log_func("res: %d\r\n", res);
         (void)snapshot;
     }
-    g_log_func("Wheel: %s\r\n", CTXB[0x10B] == 0 ? "24 inch" : "28 inch");
+    g_log_func("Wheel: %s\r\n", CTXB[CTX_WHEELSIZE] == 0 ? "24 inch" : "28 inch");
 }
 
 /* `speed` — override the speed setpoint, writing the value into two adjacent
- * u16 fields at ctx+0x3C4/+0x3C6 (OEM 0x0804131C). No-arg path is silent. */
+ * u16 fields at ctx+CTX_SPEED_OVR_A/+0x3C6 (OEM 0x0804131C). No-arg path is silent. */
 void console_cmd_speed(char *args)
 {
     char *p = args;
@@ -346,8 +389,8 @@ void console_cmd_speed(char *args)
         return;
     }
     long v = strtol(p, NULL, 10);
-    *(uint16_t *)(CTXB + 0x3C4) = (uint16_t)v;
-    *(uint16_t *)(CTXB + 0x3C6) = (uint16_t)v;
+    *(uint16_t *)(CTXB + CTX_SPEED_OVR_A) = (uint16_t)v;
+    *(uint16_t *)(CTXB + CTX_SPEED_OVR_B) = (uint16_t)v;
     g_log_func("Speed %d\r\n", (uint16_t)v);
 }
 
@@ -361,12 +404,12 @@ void console_cmd_shipping(char *args)
 }
 
 /* `gsminfo` — dump the cached u-blox modem identity from the modem-info block
- * at *(ctx+0x3E8) (16-byte text fields), plus the BLE MAC (ctx+0x390..0x395).
+ * at *(ctx+CTX_MODEM_INFO) (16-byte text fields), plus the BLE MAC (ctx+0x390..0x395).
  * OEM 0x08040D14. */
 void console_cmd_gsminfo(char *args)
 {
     (void)args;
-    char *m = *(char **)(CTXB + 0x3E8);
+    char *m = *(char **)(CTXB + CTX_MODEM_INFO);
     g_log_func("manufacturer %s\r\n", m + 0x00);
     g_log_func("model        %s\r\n", m + 0x10);
     g_log_func("fw version   %s\r\n", m + 0x20);
@@ -384,7 +427,7 @@ void console_cmd_gsmstart(char *args)
 {
     (void)args;
     g_log_func("Start GSM\r\n");
-    *(volatile uint8_t *)0x200000E5u = 0;   /* sms_info_tracking_state_machine step */
+    *(volatile uint8_t *)SMS_INFO_STEP = 0;   /* sms_info_tracking_state_machine step */
 }
 
 /* `bwritereg` — inject a Modbus "write single register" (func 0x06) to the
@@ -402,8 +445,8 @@ void console_cmd_bwritereg(char *args)
     g_log_func("Register %d data %d\r\n", reg & 0xFFFF, data);
 
     uint8_t frame[6];
-    frame[0] = 0xAA;                            /* battery/BMS slave */
-    frame[1] = 0x06;                            /* write single register */
+    frame[0] = MB_SLAVE_BAT;                            /* battery/BMS slave */
+    frame[1] = MB_FUNC_WRITE_SINGLE;                            /* write single register */
     *(uint16_t *)&frame[2] = (uint16_t)reg;
     frame[4] = (uint8_t)data;
     frame[5] = (uint8_t)(data >> 8);
@@ -427,10 +470,10 @@ void console_cmd_breadreg(char *args)
     g_log_func("Read Register %d  length %d\r\n", reg & 0xFFFF, len);
 
     uint8_t req[0x110];
-    req[0] = 0xAA;                              /* battery slave */
-    req[1] = 0x03;                              /* read holding registers */
+    req[0] = MB_SLAVE_BAT;                              /* battery slave */
+    req[1] = MB_FUNC_READ;                              /* read holding registers */
     *(uint16_t *)&req[2] = (uint16_t)reg;
-    req[0x84] = (uint8_t)len;                   /* register count */
+    req[MB_FRAME_COUNT_OFF] = (uint8_t)len;                   /* register count */
     if (modbus_bat_submit(req) != 0) {
         g_log_func("  MB Error\r\n");
     }
@@ -455,10 +498,10 @@ void console_cmd_swritedata(char *args)
     g_log_func("Register %d data %d length %d\r\n", reg & 0xFFFF, data, length);
 
     uint8_t frame[0x86];
-    frame[0] = 0x20;                            /* shifter slave */
-    frame[1] = 0x10;                            /* write multiple registers */
+    frame[0] = MB_SLAVE_SHIFT;                            /* shifter slave */
+    frame[1] = MB_FUNC_WRITE_MULTI;                            /* write multiple registers */
     *(uint16_t *)&frame[2] = (uint16_t)reg;
-    frame[0x84] = (uint8_t)(length << 1);       /* byte count */
+    frame[MB_FRAME_COUNT_OFF] = (uint8_t)(length << 1);       /* byte count */
     memset(&frame[4], 0, 0x80);
     for (uint32_t i = 0; i < length * 2u; i += 2) {
         frame[4 + i]     = (uint8_t)(data >> 8);
@@ -484,10 +527,10 @@ void console_cmd_sreadreg(char *args)
     g_log_func("Read Register %d  length %d\r\n", reg & 0xFFFF, count);
 
     uint8_t req[0x110];
-    req[0] = 0x20;                              /* shifter slave */
-    req[1] = 0x03;                              /* read holding registers */
+    req[0] = MB_SLAVE_SHIFT;                              /* shifter slave */
+    req[1] = MB_FUNC_READ;                              /* read holding registers */
     *(uint16_t *)&req[2] = (uint16_t)reg;
-    req[0x84] = (uint8_t)count;
+    req[MB_FRAME_COUNT_OFF] = (uint8_t)count;
     if (modbus_shift_submit(req) != 0) {
         g_log_func("  MB Error\r\n");
     }
@@ -521,12 +564,12 @@ void console_cmd_factory_shipping(char *args)
 
     g_log_func("Set factory shipping mode\r\n");
 
-    HAL_GPIO_WritePin((void *)0x40020C00u, 0x2000, 0);   /* GPIOD */
-    HAL_GPIO_WritePin((void *)0x40020C00u, 0x8000, 0);
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x0004, 0);   /* GPIOE */
-    HAL_GPIO_WritePin((void *)0x40020000u, 0x8000, 0);   /* GPIOA */
-    HAL_GPIO_WritePin((void *)0x40020000u, 0x1000, 0);
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x0040, 1);
+    HAL_GPIO_WritePin((void *)GPIOD_BASE, 0x2000, 0);   /* GPIOD */
+    HAL_GPIO_WritePin((void *)GPIOD_BASE, 0x8000, 0);
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0004, 0);   /* GPIOE */
+    HAL_GPIO_WritePin((void *)GPIOA_BASE, 0x8000, 0);   /* GPIOA */
+    HAL_GPIO_WritePin((void *)GPIOA_BASE, 0x1000, 0);
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0040, 1);
 
     FUN_0803c5f0(0);
     FUN_0803c5fc(0);
@@ -534,11 +577,11 @@ void console_cmd_factory_shipping(char *args)
     FUN_0803b2c4();
     (void)FUN_0803d110();
 
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x0020, 1);
-    HAL_GPIO_WritePin((void *)0x40020400u, 0x0200, 1);   /* GPIOB */
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0020, 1);
+    HAL_GPIO_WritePin((void *)GPIOB_BASE, 0x0200, 1);   /* GPIOB */
     systick_delay(10);
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x0020, 0);
-    HAL_GPIO_WritePin((void *)0x40020400u, 0x0200, 0);
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0020, 0);
+    HAL_GPIO_WritePin((void *)GPIOB_BASE, 0x0200, 0);
     systick_delay(50);
 
     ble_payload = 1;
@@ -576,37 +619,37 @@ extern void console_battery_dump(void);        /* 0x0804175C — periodic teleme
 
 void console_cmd_battery(char *args)
 {
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
     (void)args;
 
     memset(ctx + 0x3F2, 0, 300);                    /* wipe BMS telemetry shadow */
     *(uint16_t *)(ctx + 0x3FC) = 0xFFFF;            /* mark invalid until BMS replies */
     battery_request_telemetry();
 
-    if (*(uint8_t *)0x20000110u == SCHED_SLOT_NONE) {   /* 0xFA = no task yet */
+    if (*(uint8_t *)SCHED_SLOT_TELEMETRY == SCHED_SLOT_NONE) {   /* 0xFA = no task yet */
         uint8_t slot = scheduler_alloc();
-        *(uint8_t *)0x20000110u = slot;
+        *(uint8_t *)SCHED_SLOT_TELEMETRY = slot;
         scheduler_start(slot, 1000, console_battery_dump);
     }
 }
 
 /* `shifterstatus` — report the eShifter 24 V rail (GPIOB pin14), clear the
  * shifter scratch buffer (ctx+0x51E, 300 B), and (per HW version word at
- * ctx+0x520) arm a status-poll scheduler task (OEM 0x08042F74). */
+ * ctx+CTX_SHIFTER_HW) arm a status-poll scheduler task (OEM 0x08042F74). */
 extern void FUN_0802954c(void);   /* arm/refresh a related timer field (=3) */
 
 void console_cmd_shifterstatus(char *args)
 {
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
     (void)args;
 
-    short hw_ver = *(short *)(ctx + 0x520);
+    short hw_ver = *(short *)(ctx + CTX_SHIFTER_HW);
     memset(ctx + 0x51E, 0, 300);
 
     g_log_func("Power is: %s\r\n",
-               HAL_GPIO_ReadPin((void *)0x40020400u, 0x4000) ? "ON" : "OFF");
+               HAL_GPIO_ReadPin((void *)GPIOB_BASE, 0x4000) ? "ON" : "OFF");
 
-    uint8_t *slot_rec = (uint8_t *)0x2000010Eu;   /* this cmd's slot id at +1 */
+    uint8_t *slot_rec = (uint8_t *)SCHED_SLOT_REC;   /* this cmd's slot id at +1 */
     scheduler_release(&slot_rec[1]);
     FUN_0802954c();
     g_log_func("Wait 3 seconds..\r\n");
@@ -631,7 +674,7 @@ extern void motor_get_timer_cb(void);   /* 0x08040DE0 */
 
 void console_cmd_motorstatus(char *args)
 {
-    uint8_t *slot = (uint8_t *)0x20000110u;
+    uint8_t *slot = (uint8_t *)SCHED_SLOT_TELEMETRY;
     (void)args;
 
     if (*slot == SCHED_SLOT_NONE) {
@@ -640,7 +683,7 @@ void console_cmd_motorstatus(char *args)
         scheduler_set_timer_name(s, 500, "motor_get_tmr");
     }
 
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
     *(uint32_t *)(ctx + 0x364) = 0;
     *(uint32_t *)(ctx + 0x368) = 0;
     *(uint32_t *)(ctx + 0x36C) = 0;
@@ -753,7 +796,7 @@ void console_cmd_factory(char *args)
 {
     (void)args;
     g_log_func("Load factory defaults\r\n");
-    settings_factory_reset(*(void **)(0x20009368u + 0x2DC), 1);
+    settings_factory_reset((void *)CTXB, 1);
 }
 
 /* `reboot` — defer a restart so the console reply can flush, then run the
@@ -794,10 +837,10 @@ void console_cmd_bwritedata(char *args)
     g_log_func("Register %d data %d length %d\r\n", reg & 0xFFFF, data, length);
 
     uint8_t frame[0x86];
-    frame[0] = 0xAA;                            /* battery slave */
-    frame[1] = 0x10;                            /* write multiple registers */
+    frame[0] = MB_SLAVE_BAT;                            /* battery slave */
+    frame[1] = MB_FUNC_WRITE_MULTI;                            /* write multiple registers */
     *(uint16_t *)&frame[2] = (uint16_t)reg;
-    frame[0x84] = (uint8_t)(length << 1);
+    frame[MB_FRAME_COUNT_OFF] = (uint8_t)(length << 1);
     memset(&frame[4], 0, 0x80);
     for (uint32_t i = 0; i < length * 2u; i += 2) {
         frame[4 + i]     = (uint8_t)(data >> 8);
@@ -823,8 +866,8 @@ void console_cmd_swritereg(char *args)
     g_log_func("Register %d data %d\r\n", reg & 0xFFFF, data);
 
     uint8_t pdu[6];
-    pdu[0] = 0x20;                              /* shifter slave */
-    pdu[1] = 0x06;                              /* write single register */
+    pdu[0] = MB_SLAVE_SHIFT;                              /* shifter slave */
+    pdu[1] = MB_FUNC_WRITE_SINGLE;                              /* write single register */
     *(uint16_t *)&pdu[2] = (uint16_t)reg;
     pdu[4] = (uint8_t)data;
     pdu[5] = (uint8_t)(data >> 8);
@@ -861,7 +904,7 @@ void console_cmd_help(char *args)
 void console_cmd_logout(char *args)
 {
     (void)args;
-    *(volatile uint8_t *)(0x20009368u + 0x2D9) = 0;   /* g_app_state.ctx_sub->logged_in */
+    *(volatile uint8_t *)(APP_CTX_BASE + CTX_LOGGED_IN) = 0;   /* g_app_state.ctx_sub->logged_in */
 }
 
 /* `blereset` — pulse the BLE module reset line (GPIOE PE5) high 10 ms then low
@@ -869,36 +912,36 @@ void console_cmd_logout(char *args)
 void console_cmd_blereset(char *args)
 {
     (void)args;
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x20, 1);   /* PE5 high (assert) */
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x20, 1);   /* PE5 high (assert) */
     systick_delay(10);
-    HAL_GPIO_WritePin((void *)0x40021000u, 0x20, 0);   /* PE5 low (release) */
+    HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x20, 0);   /* PE5 low (release) */
 }
 
 /* `bledebug` — open the CC2642 BLE-chip sub-shell: log "Connect to UART8" and
- * arm the console UART-redirect selector (ctx+0x34C = 1) (OEM 0x08040C6C). */
+ * arm the console UART-redirect selector (ctx+CTX_REDIRECT_BLE = 1) (OEM 0x08040C6C). */
 void console_cmd_bledebug(char *args)
 {
     (void)args;
     g_log_func("Connect to UART8\r\n");
-    ((uint8_t *)*(void **)(0x20009368u + 0x2DC))[0x34C] = 1;
+    CTXB[CTX_REDIRECT_BLE] = 1;
 }
 
 /* `loop` — print super-loop timing (period/peak us + ms field) and reset the
- * ms + peak accumulators (ctx+0x358/0x35C/0x360) (OEM 0x08040C28). */
+ * ms + peak accumulators (ctx+CTX_LOOP_LAST_US/0x35C/0x360) (OEM 0x08040C28). */
 void console_cmd_loop(char *args)
 {
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
     (void)args;
     g_log_func("actual %d us (%d us - %d ms)\r\n",
-               1000u / *(uint32_t *)(ctx + 0x358),
-               1000u / *(uint32_t *)(ctx + 0x360),
-               *(uint32_t *)(ctx + 0x35C));
-    ctx = *(uint8_t **)(0x20009368u + 0x2DC);
-    *(uint32_t *)(ctx + 0x35C) = 0;
-    *(uint32_t *)(ctx + 0x360) = 0;
+               1000u / *(uint32_t *)(ctx + CTX_LOOP_LAST_US),
+               1000u / *(uint32_t *)(ctx + CTX_LOOP_PEAK_US),
+               *(uint32_t *)(ctx + CTX_LOOP_MS));
+    ctx = CTXB;
+    *(uint32_t *)(ctx + CTX_LOOP_MS) = 0;
+    *(uint32_t *)(ctx + CTX_LOOP_PEAK_US) = 0;
 }
 
-/* `logapp` — set the "log to APP vs Serial" flag (ctx+0x313) from the arg,
+/* `logapp` — set the "log to APP vs Serial" flag (ctx+CTX_LOG_TO_APP) from the arg,
  * persist the state record to EEPROM, and echo (OEM 0x08041E94). */
 extern int  save_state_record_to_eeprom(uint32_t f0, uint32_t f1, uint32_t f2, uint32_t f3,
                                          uint32_t f4, uint32_t f5, uint32_t f6, uint32_t f7,
@@ -910,51 +953,51 @@ void console_cmd_logapp(char *args)
 {
     char *p = args;
     if (console_next_token(&p) != 0) {
-        uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
-        ctx[0x313] = ((uint32_t)strtol(p, NULL, 10) & 0xFFFF) != 0;
+        uint8_t *ctx = CTXB;
+        ctx[CTX_LOG_TO_APP] = ((uint32_t)strtol(p, NULL, 10) & 0xFFFF) != 0;
         if (save_state_record_to_eeprom(
                 *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314), *(uint32_t *)(ctx + 0x318),
-                *(uint32_t *)(ctx + 0x31C), *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+                *(uint32_t *)(ctx + CTX_DISTANCE), *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
                 *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32C), *(uint32_t *)(ctx + 0x330),
-                *(uint32_t *)(ctx + 0x334), *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33C),
+                *(uint32_t *)(ctx + 0x334), *(uint32_t *)(ctx + CTX_SHIFT_COUNTER), *(uint32_t *)(ctx + 0x33C),
                 *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344), *(uint32_t *)(ctx + 0x348)) != 0) {
             g_log_func(" ERROR Save values\r\n");
         }
-        if (ctx[0x313]) {
+        if (ctx[CTX_LOG_TO_APP]) {
             FUN_080298dc();
         }
     }
     g_log_func("Logging %s\r\n",
-               (*(uint8_t **)(0x20009368u + 0x2DC))[0x313] ? "APP" : "Serial");
+               (CTXB)[0x313] ? "APP" : "Serial");
 }
 
-/* `powerchange` — set/report the "ride change" enable flag (ctx+0x3CB)
+/* `powerchange` — set/report the "ride change" enable flag (ctx+CTX_RIDE_CHANGE)
  * (OEM 0x080412BC). */
 void console_cmd_powerchange(char *args)
 {
     char *p = args;
     if (console_next_token(&p) != 0) {
-        (*(uint8_t **)(0x20009368u + 0x2DC))[0x3CB] = (strtol(p, NULL, 10) != 0);
+        (CTXB)[0x3CB] = (strtol(p, NULL, 10) != 0);
     }
     g_log_func("ride change: %s\r\n",
-               (*(uint8_t **)(0x20009368u + 0x2DC))[0x3CB] ? "Yes" : "No");
+               (CTXB)[0x3CB] ? "Yes" : "No");
 }
 
 /* `batreset` — pulse the BMS hardware reset (GPIOB PB5); a 5 s scheduled task
  * then releases the line + frees its slot (OEM 0x08041DD8). Slot byte @ 0x20000112. */
 static void bat_reset_release_cb(void)
 {
-    scheduler_release((uint8_t *)0x20000112u);          /* free this one-shot slot */
+    scheduler_release((uint8_t *)SCHED_SLOT_BATRESET);          /* free this one-shot slot */
     g_log_func("BMS release reset\r\n");
-    HAL_GPIO_WritePin((void *)0x40020400u, 0x20, 0);    /* PB5 low (deassert) */
+    HAL_GPIO_WritePin((void *)GPIOB_BASE, 0x20, 0);    /* PB5 low (deassert) */
 }
 
 void console_cmd_batreset(char *args)
 {
-    uint8_t *slot = (uint8_t *)0x20000112u;
+    uint8_t *slot = (uint8_t *)SCHED_SLOT_BATRESET;
     (void)args;
     g_log_func("BMS reset\r\n");
-    HAL_GPIO_WritePin((void *)0x40020400u, 0x20, 1);    /* PB5 high (assert) */
+    HAL_GPIO_WritePin((void *)GPIOB_BASE, 0x20, 1);    /* PB5 high (assert) */
     if (*slot == SCHED_SLOT_NONE) {
         *slot = scheduler_alloc();
     }
@@ -967,48 +1010,55 @@ void console_cmd_shiftware(char *args)
 {
     (void)args;
     g_log_func("Start shiftware update\r\n");
-    *(volatile uint8_t *)0x2000019Cu = 2;   /* console redirect: shiftware */
+    *(volatile uint8_t *)CONSOLE_REDIRECT_SEL = 2;   /* console redirect: shiftware */
 }
 
-/* `shiftdebug` — toggle the "stream Modbus-shifter debug" flag (ctx+0x34E) and
- * arm an 0x50-tick pump task (OEM 0x08041D50). */
-extern void shiftdebug_pump_task(void);   /* 0x08041FDC */
+/* The shifter-debug pump task (OEM 0x08041FDC): kicks the watchdog and re-arms
+ * itself every 0x50 ticks while shifter-debug streaming is on. */
+void shiftdebug_pump_task(void)
+{
+    watchdog_kick();
+    scheduler_start(*(volatile uint8_t *)SCHED_SLOT_SHIFTDEBUG, 0x50,
+                    (sched_cb_t)shiftdebug_pump_task);
+}
 
+/* `shiftdebug` — toggle the "stream Modbus-shifter debug" flag (CTX_DBG_SHIFTER)
+ * and arm an 0x50-tick pump task (OEM 0x08041D50). */
 void console_cmd_shiftdebug(char *args)
 {
     (void)args;
-    *(volatile uint8_t *)0x20000111u = scheduler_alloc();
-    scheduler_start(*(volatile uint8_t *)0x20000111u, 0x50, (sched_cb_t)shiftdebug_pump_task);
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
-    ctx[0x34E] ^= 1;
-    g_log_func("Show Modbus shifter %s\r\n", ctx[0x34E] ? "ON" : "OFF");
+    *(volatile uint8_t *)SCHED_SLOT_SHIFTDEBUG = scheduler_alloc();
+    scheduler_start(*(volatile uint8_t *)SCHED_SLOT_SHIFTDEBUG, 0x50, (sched_cb_t)shiftdebug_pump_task);
+    uint8_t *ctx = CTXB;
+    ctx[CTX_DBG_SHIFTER] ^= 1;
+    g_log_func("Show Modbus shifter %s\r\n", ctx[CTX_DBG_SHIFTER] ? "ON" : "OFF");
 }
 
-/* `shiftresetcounter` — zero the eShifter operation counter (ctx+0x338)
+/* `shiftresetcounter` — zero the eShifter operation counter (ctx+CTX_SHIFT_COUNTER)
  * (OEM 0x08040CB4). */
 void console_cmd_shiftresetcounter(char *args)
 {
     (void)args;
-    *(uint32_t *)(*(uint8_t **)(0x20009368u + 0x2DC) + 0x338) = 0;
+    *(uint32_t *)(CTXB + CTX_SHIFT_COUNTER) = 0;
     g_log_func("Shifter counter reset\r\n");
 }
 
 /* `gsmdebug` — open the u-blox modem AT sub-shell: log "Connect to UART2" and
- * set the GSM redirect-enable flag (ctx+0x34D = 1) (OEM 0x08040C90). */
+ * set the GSM redirect-enable flag (ctx+CTX_REDIRECT_GSM = 1) (OEM 0x08040C90). */
 void console_cmd_gsmdebug(char *args)
 {
     (void)args;
     g_log_func("Connect to UART2\r\n");
-    ((uint8_t *)*(void **)(0x20009368u + 0x2DC))[0x34D] = 1;
+    CTXB[CTX_REDIRECT_GSM] = 1;
 }
 
-/* `bmsdebug` — toggle the Modbus-BMS debug-print flag (ctx+0x34F) (OEM 0x08040CD8). */
+/* `bmsdebug` — toggle the Modbus-BMS debug-print flag (ctx+CTX_DBG_BMS) (OEM 0x08040CD8). */
 void console_cmd_bmsdebug(char *args)
 {
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
     (void)args;
-    ctx[0x34F] ^= 1;
-    g_log_func("Show Modbus BMS %s\r\n", ctx[0x34F] ? "ON" : "OFF");
+    ctx[CTX_DBG_BMS] ^= 1;
+    g_log_func("Show Modbus BMS %s\r\n", ctx[CTX_DBG_BMS] ? "ON" : "OFF");
 }
 
 /* `stcreset` — reset the battery STC gas-gauge / coulomb counter (OEM 0x080415EC). */
@@ -1035,13 +1085,13 @@ void console_cmd_setoad(char *args)
 
 /* `setgear` — store a gear-encoder position to the MT shifter via a Modbus
  * write-multiple (func 0x10): setgear <gear> <position>. Requires the MT
- * shifter present (ctx+0x520 == 0x201) and gear in 1..ctx+0x59C (OEM 0x080413B4). */
+ * shifter present (ctx+CTX_SHIFTER_HW == 0x201) and gear in 1..ctx+CTX_GEAR_COUNT (OEM 0x080413B4). */
 void console_cmd_setgear(char *args)
 {
     char    *p   = args;
-    uint8_t *ctx = *(uint8_t **)(0x20009368u + 0x2DC);
+    uint8_t *ctx = CTXB;
 
-    if (*(short *)(ctx + 0x520) != 0x201) {
+    if (*(short *)(ctx + CTX_SHIFTER_HW) != 0x201) {
         g_log_func("MT shifter not detected\r\n");
         return;
     }
@@ -1050,7 +1100,7 @@ void console_cmd_setgear(char *args)
         return;
     }
     uint32_t gear = (uint32_t)strtol(p, NULL, 10) & 0xFF;
-    if (gear == 0 || (int)*(short *)(ctx + 0x59C) < (int)gear) {
+    if (gear == 0 || (int)*(short *)(ctx + CTX_GEAR_COUNT) < (int)gear) {
         g_log_func("invalid gear number\r\n");
         return;
     }
@@ -1062,14 +1112,14 @@ void console_cmd_setgear(char *args)
     g_log_func("Save gear %d position %d\r\n", gear, pos);
 
     uint8_t frame[0x86];
-    frame[0] = 0x20;                                   /* shifter slave */
-    frame[1] = 0x10;                                   /* write multiple registers */
+    frame[0] = MB_SLAVE_SHIFT;                                   /* shifter slave */
+    frame[1] = MB_FUNC_WRITE_MULTI;                                   /* write multiple registers */
     *(short *)&frame[2] = (short)((gear + 0x1F) * 2);  /* register address */
     frame[4] = (uint8_t)((uint32_t)pos >> 24);         /* position, big-endian u32 */
     frame[5] = (uint8_t)((uint32_t)pos >> 16);
     frame[6] = (uint8_t)((uint32_t)pos >> 8);
     frame[7] = (uint8_t)pos;
-    frame[0x84] = 4;                                   /* byte count */
+    frame[MB_FRAME_COUNT_OFF] = 4;                                   /* byte count */
     if (modbus_shift_submit(frame) != 0) {
         g_log_func("  Error\r\n");
     }
