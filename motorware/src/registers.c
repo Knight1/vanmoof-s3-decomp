@@ -104,7 +104,7 @@ void write_register(uint8_t id, const uint8_t *operand)
     switch (id) {
     case 20:                                        /* enable / mode flags */
         if (operand[0] & 1) {                       /* request run */
-            g_status_flags |= 0x8000;
+            g_status_flags |= STATUS_RUN_REQ;
             /* ... start action sub_3F40E8(150, …) ... */
         }
         g_enable_flag = (operand[1] >> 7) & 1;
@@ -146,7 +146,7 @@ void link_service(void)
     int rc = slip_rx_decode((uint8_t *)L3_RX_FRAME_BUF);  /* 0x958A */
 
     if (rc == 2) {                                  /* receive error */
-        g_status_flags |= 2;
+        g_status_flags |= FAULT_RX_ERR;
         return;
     }
     if (rc != 0)                                    /* no complete frame yet */

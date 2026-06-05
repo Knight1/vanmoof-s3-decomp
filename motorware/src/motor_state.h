@@ -22,22 +22,26 @@
 #define L3_STATUS_FLAGS   0x9017  /* [V] fault/status word (reported by read-reg 12,
                                           which then clears the low 2 acked bits). Each bit
                                           is set at a distinct detection point: */
-/* status/fault bits and where the firmware sets them (function @addr). The
- * exact physical fault per bit is [~] inferred; the bit + setter are [V]. */
-#define FAULT_INIT_A      0x0001  /* sub_3EE07C (startup self-check) */
-#define FAULT_RX_ERR      0x0002  /* sub_3F3472 — SLIP receive error */
-#define FAULT_BIT_0004    0x0004  /* sub_3EE791 */
-#define FAULT_BIT_0008    0x0008  /* ISR sub_3F2444 */
-#define FAULT_BIT_0010    0x0010  /* ISR sub_3F2444 */
-#define FAULT_BIT_0020    0x0020  /* main loop sub_3EE894 */
-#define FAULT_BIT_0040    0x0040  /* main loop sub_3EE894 */
-#define FAULT_INIT_B      0x0100  /* sub_3EE07C */
-#define FAULT_BIT_0200    0x0200  /* sub_3EE2FD */
-#define FAULT_BIT_0400    0x0400  /* sub_3EE2FD */
-#define FAULT_BIT_0800    0x0800  /* ISR sub_3F2444 */
-#define FAULT_BIT_1000    0x1000  /* sub_3EE842 */
-#define FAULT_BIT_2000    0x2000  /* sub_3EE34B / main loop */
-#define STATUS_RUN_REQ    0x8000  /* write-reg 20 bit0 — run requested */
+/* Status/fault bits: verified detection mechanism (the test before `|= bit`)
+ * cross-referenced to the mainware user-facing error codes that mainware
+ * raises from this word (Knight1/VanMooof-Module ERRORS.md, motor errors
+ * 45-53). [V] = bit+mechanism proven in the image; the mainware error tag is a
+ * strong semantic match unless marked [~]. The motor's gate driver is a
+ * **DRV8301** (per error 46), so the digital-input faults are its status pins. */
+#define FAULT_INIT_CFG_A  0x0001  /* startup HAL/config check (sub_3EE07C→sub_3F3F2B) */
+#define FAULT_RX_ERR      0x0002  /* SLIP receive error (sub_3F3472) — maps to MOTOR_COMMUNICATION(22) */
+#define STATUS_TOGGLE     0x0004  /* recurring status (sub_3EE791; mirrored to byte 0x9019) */
+#define FAULT_MEAS_0008   0x0008  /* ISR: computed value on 0x9068 > 0 */
+#define FAULT_THRESH_0010 0x0010  /* ISR: value <= 100 (set/cleared) */
+#define FAULT_DRV_FAULT   0x0020  /* DRV8301 status pin == 0 (sub_3F3B0C) — MOTOR_OVER_CURRENT(46)/CABLE(45) */
+#define FAULT_DRV_OCTW    0x0040  /* DRV8301 status pin == 0 — over-current/temp warn or TORQUE_SENSOR(52) */
+#define FAULT_INIT_CFG_B  0x0100  /* startup cfg invalid (0x95A4==0 && 0x901E<5) — MOTOR_NOT_READY(53) [~] */
+#define FAULT_CURRENT_OFFSET 0x0200  /* current-sense offset outside window (sub_3EE2FD) — MOTOR_CURRENT_ERR(49) */
+#define FAULT_VOLTAGE_OFFSET 0x0400  /* voltage offset outside window (sub_3EE2FD) — MOTOR_VOLTAGE_ERR(50) */
+#define FAULT_THRESH_0800 0x0800  /* ISR: value <= limit (set/cleared) */
+#define FAULT_OVERTEMP    0x1000  /* 3-threshold range check (sub_3EE842) — MOTOR_DERATING(51), high temp */
+#define STATUS_TIMEOUT    0x2000  /* periodic/timeout, set on ePWM4-tick reset (sub_3EE894/34B) */
+#define STATUS_RUN_REQ    0x8000  /* run requested (write-reg 20 bit0) */
 #define L3_ENABLE_FLAG    0x9013  /* [V] enable, from write-reg 20 frame[1].bit7 */
 #define L3_STAT_BYTE_18   0x9018  /* [V] status byte (read-reg 12) */
 #define L3_STAT_BYTE_19   0x9019  /* [V] status byte (read-reg 12) */
