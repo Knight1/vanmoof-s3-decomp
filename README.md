@@ -16,6 +16,7 @@ behaviour-equivalent) images.
 | [`bleware/`](bleware/) | `bleware 1.4.01` | TI CC2642R1F (Cortex-M4F) | 178 KB | **159 decompiled** — OAD header byte-equivalent, full VanMoof code compiles |
 | [`batteryware/`](batteryware/) | `batteryware 1.17.1` | STM32L072CZT6 (Cortex-M0+) | ~88 KB | all functions `decomp-c` — builds (40 KB) + self-CRCs; behaviour-faithful (byte-eq out of reach: toolchain) |
 | [`powerbankware/`](powerbankware/) | `powerbank_firmware 1.11.05` | STM32F091xC (Cortex-M0) | ~92 KB | early — scaffold + `main`/state-loop decompiled (compiles; not yet linking) |
+| [`motorware/`](motorware/) | `motorware S.0.00.22` | TI TMS320F28054F (C2000/C28x DSP — **not ARM**) | ~58 KB flash | foundation verified — container byte-exact round-trip, boot flow + memory map proven, `.cinit` decoded, **356 functions disassembled** (IDA C28x); per-function C is open |
 
 ## Per-firmware MCU mapping
 
