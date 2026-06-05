@@ -38,10 +38,12 @@ struct session_ctx {
                                      *                  helper after every
                                      *                  volume-set. Semantics
                                      *                  not yet decoded. */
-    uint8_t  volume_low;            /* +0x104  (hypothesis) */
-    uint8_t  volume_medium;         /* +0x105  written by set-volume-medium */
-    uint8_t  volume_high;           /* +0x106  written by set-volume-high */
-    uint8_t  _pad1a[2];             /* +0x107..+0x108 */
+    uint8_t  audio_cfg_byte;        /* +0x104  audio block start byte (snapshotted,
+                                     *         not a volume-command target) */
+    uint8_t  volume_low;            /* +0x105  written by the `vollow` cmd */
+    uint8_t  volume_medium;         /* +0x106  written by the `volmid` cmd */
+    uint8_t  volume_high;           /* +0x107  written by the `volhigh` cmd */
+    uint8_t  _pad1a;                /* +0x108 */
     uint8_t  region;                /* +0x109 — region / speed mode set by the
                                      *           `region` console command:
                                      *           0=EU, 1=US, 2=JP, 3=OFFROAD
@@ -72,16 +74,18 @@ struct session_ctx {
                                      *           backdoor at OEM rodata
                                      *           0x080547EC is 40 chars
                                      *           plus NUL, well within. */
-    uint8_t  set_soc;               /* +0x3D4 — SOC override byte from the
-                                     *           console "soc" command;
-                                     *           gets announced via
-                                     *           FUN_0802F1C0(2) after write. */
+    uint8_t  set_soc;               /* +0x3D4 — SOC override byte; written by the
+                                     *           console `gear` command (help
+                                     *           "set gear", but the handler
+                                     *           prints "Set SOC %d" and writes
+                                     *           here — a firmware relabel quirk);
+                                     *           announced via announce_mark(2). */
     /* ... grows further; not yet decoded. */
 };
 _Static_assert(__builtin_offsetof(struct session_ctx, audio_engine_cfg) == 0xF4, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, volume_low)       == 0x104, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, volume_medium)    == 0x105, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, volume_high)      == 0x106, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_low)       == 0x105, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_medium)    == 0x106, "");
+_Static_assert(__builtin_offsetof(struct session_ctx, volume_high)      == 0x107, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, region)           == 0x109, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, region_lock)      == 0x144, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, logged_in)        == 0x2D9, "");

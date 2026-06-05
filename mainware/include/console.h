@@ -22,14 +22,14 @@ int console_next_token(char **pp);
  * and arms a 5-second lockout via the scheduler. */
 void login_handler(char *input);
 
-/* `volume_medium_set` / `volume_high_set` — set the two volume bytes
- * the console exposes (offsets `+0x105` / `+0x106` of the per-session
- * context). With no argument, just print the current value; with an
- * argument, parse it as a decimal in `[0, 64]` (the `"Volume 0..64"`
- * range), apply it, drive the audio amp via GPIO, and run an audio-
- * config apply step. A parsed `0` switches the amp off entirely.
- * The "low" counterpart at `+0x104` is wired up by a different (not
- * yet decoded) handler. */
+/* `vollow` / `volmid` / `volhigh` console commands — set the three volume bytes
+ * (offsets `+0x105` / `+0x106` / `+0x107` of the per-session context). With no
+ * argument, print the current value; with an argument, parse it as a decimal in
+ * `[0, 64]` (the `"Volume 0..64"` range), apply it, drive the audio amp via
+ * GPIO, and run a config-persist step. A parsed `0` switches the amp off. (The
+ * low/medium/high handler→byte binding is per the console command table; the
+ * `"Volume Low/Medium/High"` dump labels alone are off by one.) */
+void volume_low_set(char *input);
 void volume_medium_set(char *input);
 void volume_high_set(char *input);
 
@@ -47,5 +47,19 @@ void console_soc_set(char *input);
  * mode (0=EU, 1=US, 2=JP, 3=OFFROAD; OFFROAD lifts the speed cap) and echoes
  * the current lock state + region. */
 void console_region_set(char *input);
+
+/* Additional debug-console command handlers (dispatch table @ 0x0804F5C4; full
+ * 49-command map in docs/console.md). All take the argument string. */
+void console_cmd_distance(char *args);         /* `distance`  0x08041360 */
+void console_cmd_wheelsize(char *args);        /* `wheelsize` 0x08042120 */
+void console_cmd_speed(char *args);            /* `speed`     0x0804131C */
+void console_cmd_shipping(char *args);         /* `shipping`  0x080415D0 */
+void console_cmd_factory_shipping(char *args); /* `factory-shipping` 0x08041FF8 (no return) */
+void console_cmd_gsminfo(char *args);          /* `gsminfo`   0x08040D14 */
+void console_cmd_gsmstart(char *args);         /* `gsmstart`  0x08041D38 */
+void console_cmd_bwritereg(char *args);        /* `bwritereg` 0x08041C84 */
+void console_cmd_breadreg(char *args);         /* `breadreg`  0x08041B30 */
+void console_cmd_swritedata(char *args);       /* `swritedata` 0x0804168C */
+void console_cmd_sreadreg(char *args);         /* `sreadreg`  0x080414A4 */
 
 #endif
