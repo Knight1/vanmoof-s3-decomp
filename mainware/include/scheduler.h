@@ -79,4 +79,8 @@ int scheduler_start(uint8_t slot, uint32_t ticks, sched_cb_t cb);
  * callers must check the byte isn't the sentinel before trusting a 0 here. */
 int scheduler_slot_is_idle(uint8_t slot);
 
+/* Timer/task name-register hook — a no-op `bx lr` stub in this release build
+ * (OEM scheduler_set_timer_name, 0x08029B70). Callers pair it with scheduler_start. */
+void scheduler_set_timer_name(uint8_t slot, uint32_t ticks, const char *name);
+
 #endif

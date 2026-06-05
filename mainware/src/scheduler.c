@@ -114,3 +114,14 @@ int scheduler_slot_is_idle(uint8_t slot)
     }
     return g_scheduler.counters[slot] == 0;
 }
+
+/* Timer/task name-register hook (OEM scheduler_set_timer_name, 0x08029B70).
+ * Compiled out to a `bx lr` stub in this release build; the ~49 callers each
+ * follow it with scheduler_start(slot, ticks, NULL). The name (a rodata literal
+ * like "ssp_show_tmr") would be recorded for tracing in a debug build. */
+void scheduler_set_timer_name(uint8_t slot, uint32_t ticks, const char *name)
+{
+    (void)slot;
+    (void)ticks;
+    (void)name;
+}

@@ -29,3 +29,18 @@ uint16_t crc16(const uint8_t *buf, int len, uint16_t crc)
     }
     return crc;
 }
+
+/* STM32 hardware CRC-32 word-feed (OEM crc32_hw_feed, 0x0802320E). Marks the
+ * driver busy, streams each word into CRC->DR (the OEM re-reads dev->dr every
+ * iteration; `dr` is volatile-pointed so each store is a real register write),
+ * reads the accumulated CRC back, marks idle. */
+uint32_t crc32_hw_feed(crc_dev_t *dev, const uint32_t *src, uint32_t word_count)
+{
+    dev->state = 2;
+    for (uint32_t i = 0; i < word_count; i++) {
+        *dev->dr = src[i];
+    }
+    uint32_t result = *dev->dr;
+    dev->state = 1;
+    return result;
+}

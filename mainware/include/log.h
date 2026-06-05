@@ -13,4 +13,15 @@ extern log_func_t g_log_func;
 /* Emit a "DD/HH:MM:SS " timestamp prefix via g_log_func (OEM 0x0803DBC8). */
 void log_print_timestamp_prefix(void);
 
+/* Verify the circular log-buffer header CRC (SRAM 0x20037000); reset + note on
+ * mismatch (OEM 0x0802968C, earlier mislabelled "config_crc_check"). */
+void log_buffer_crc_check(void);
+
+/* Reset/reinit the SRAM circular log buffer (OEM 0x0802957C). */
+void log_buffer_reset(void);
+
+/* Append a NUL-terminated string into the SRAM circular log buffer; returns the
+ * byte count or 0xFFFFFFFF if too long (OEM 0x0802963C). */
+uint32_t log_emit_string(const char *s);
+
 #endif

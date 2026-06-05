@@ -1,22 +1,25 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "crc.h"
 #include "log.h"
 #include "panic.h"
 #include "ssp.h"
+#include "uart.h"
+#include "util.h"
 
 /* --- externs supplied elsewhere in the image ---
- * ssp_rx_byte                0x08036528  pop one byte from the bus RX ring (atomic).
  * ble_cmd_dispatch           0x08033970  BLE command dispatcher (write side).
  * ble_read_request_dispatch  0x08034D20  GATT/SSP read-request dispatcher.
- * uart_send_byte             0x080364F0  transmit one byte on the serial link.
- * FUN_08020E50               ACK completion run on a released TX slot's payload. */
-extern int  ssp_rx_byte(uint8_t *out);
+ * The TX heap payloads are malloc'd (0x08020E40) and freed (0x08020E50) via the
+ * image's newlib allocator. */
 extern void ble_cmd_dispatch(uint32_t cmd, uint32_t p2, uint8_t *payload);
 extern void ble_read_request_dispatch(uint16_t char_id);
-extern int  uart_send_byte(uint8_t b);
-extern void FUN_08020e50(uint32_t arg);
+
+/* RX/TX primitives defined at the end of this file. */
+int ssp_rx_byte(uint8_t *out);                /* OEM 0x08036528 */
+int ssp_ble_seq_id_in_use(uint8_t seq);       /* OEM 0x0803F470 — scan tx_queue for a seq id */
 
 /* SLIP/BLE message handlers, defined at the end of this file. */
 static void ble_data_packet(uint16_t cmd, uint16_t len, uint8_t *data, uint8_t len_hi);
@@ -24,8 +27,6 @@ static void ble_prepare_packet(uint16_t char_id);
 static int  ble_command(uint8_t id);
 
 /* TX side. */
-extern int     ssp_ble_seq_id_in_use(uint8_t seq);  /* 0x0803F470 — scan tx_queue for a seq id */
-extern void   *FUN_08020e40(uint32_t size);          /* malloc wrapper (free-list allocator) */
 extern uint8_t g_ssp_tx_seq;   /* rolling TX sequence id (OEM 0x200000F0 + 0x10) */
 
 /* One outbound packet descriptor (12 bytes); type == 5 means the slot is in use. */
@@ -178,7 +179,7 @@ uint8_t ssp_ble_enqueue_tx_packet(uint16_t cmd, uint16_t len,
         }
         g_ssp_tx_seq = (uint8_t)(seq + 1);
 
-        void *dst = FUN_08020e40(len);
+        void *dst = malloc(len);
         if (dst == 0) {
             muco_assert_fail("src/ssp_ble.c", 0x22B);  /* noreturn */
         }
@@ -213,8 +214,8 @@ static void ble_prepare_packet(uint16_t char_id)
 }
 
 /* Type-0x05 control message: an ACK that releases the queued TX packet whose
- * sequence id matches and runs its completion callback (OEM ble_command,
- * 0x0803F498). Returns 1 if a matching live slot was found, else 0. */
+ * sequence id matches and frees its heap payload (OEM ble_command, 0x0803F498).
+ * Returns 1 if a matching live slot was found, else 0. */
 static int ble_command(uint8_t id)
 {
     uint32_t i;
@@ -222,8 +223,8 @@ static int ble_command(uint8_t id)
     for (i = 0; (i & 0x80u) == 0; i = (i + 1) & 0xFFu) {
         ssp_tx_entry_t *e = &g_ble_ssp.tx_queue[i];
         if (e->seq == id && e->type != 0) {
-            e->type = 0;                          /* release the slot */
-            FUN_08020e50((uint32_t)e->payload);   /* run the completion */
+            e->type = 0;            /* release the slot */
+            free(e->payload);       /* free the heap copy of the payload */
             return 1;
         }
     }
@@ -263,6 +264,47 @@ uint32_t slip_send_frame(const uint8_t *buf, int len)
     /* only the closing delimiter's TX status is checked by the OEM */
     if (uart_send_byte(SLIP_END) == 0) {
         return 2;
+    }
+    return 0;
+}
+
+/* Atomically pop one byte from the bus RX ring (OEM ssp_rx_byte, 0x08036528).
+ * The RX-source interrupt is masked around the ring access:
+ *   g_ssp_rx_dev_pp @ 0x20009864 -> a wrapper whose first word points at the
+ *   peripheral control block; that block's +0xC word is the interrupt-enable,
+ *   bit 5 (0x20) gates the RX source. The RX ring handle is at *(g_ssp_ctx+0xB3C)
+ *   (g_ssp_ctx @ 0x20001A44 — the same UART/bus context uart_send_byte uses).
+ * ABI quirk preserved (as with uart_send_byte): the function returns no value of
+ * its own — r0 survives from ringbuf_get_byte through the trailing unmask — so it
+ * implicitly returns the get status (1 = byte produced, 0 = empty). slip_rx_packet
+ * relies on this. */
+int ssp_rx_byte(uint8_t *out)
+{
+    void * volatile *pp_wrap = (void * volatile *)0x20009864u;
+    void *wrap = *pp_wrap;                                  /* control wrapper object */
+    volatile uint32_t *ctl = *(volatile uint32_t * volatile *)wrap;  /* peripheral block */
+
+    ctl[3] &= ~0x20u;                                       /* mask RX interrupt (reg +0xC) */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    ringbuf_t *rb = *(ringbuf_t * volatile *)(*(uint32_t *)0x20001A44u + 0xB40u);
+    uint32_t rc = ringbuf_get_byte(rb, out);
+
+    ctl = *(volatile uint32_t * volatile *)wrap;            /* OEM re-derefs the wrapper */
+    ctl[3] |= 0x20u;                                        /* unmask RX interrupt */
+    return (int)rc;
+}
+
+/* Scan all 128 TX-queue slots for one already using `seq` (OEM ssp_ble_seq_id_in_use,
+ * 0x0803F470). The OEM compares the seq byte (+3) of every slot regardless of
+ * occupancy. Returns 1 if found, else 0. */
+int ssp_ble_seq_id_in_use(uint8_t seq)
+{
+    for (int i = 0; i < 128; i++) {
+        if (g_ble_ssp.tx_queue[i].seq == seq) {
+            return 1;
+        }
     }
     return 0;
 }

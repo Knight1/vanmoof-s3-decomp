@@ -22,6 +22,11 @@ typedef struct {
     uint16_t  tail;   /* +0x0A  read index */
 } ringbuf_t;
 
+/* Push one byte. Returns 1 on success, 0 if rb is NULL or the buffer is full.
+ * OEM ringbuf_push_byte at 0x08031874 (push twin of the getter; behind
+ * uart_send_byte and others). */
+uint32_t ringbuf_push_byte(ringbuf_t *rb, uint8_t b);
+
 /* Pop one byte into *out. Returns 1 on success, 0 if rb/out is NULL or the
  * buffer is empty. OEM ringbuf_get_byte at 0x080318AE. */
 uint32_t ringbuf_get_byte(ringbuf_t *rb, uint8_t *out);
