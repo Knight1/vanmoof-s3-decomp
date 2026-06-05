@@ -43,4 +43,15 @@ char slip_rx_packet(struct slip_rx *ctrl);
  * 0x0803F8FC. */
 int ble_ssp_dispatch(void);
 
+/* Enqueue an outbound packet (cmd + payload) into the 128-slot BLE/SSP TX
+ * queue. Returns the slot index 0..0x7F, 0xFD if len > 0x100, 0xFF if full.
+ * OEM ssp_ble_enqueue_tx_packet at 0x0803F9CC. */
+uint8_t ssp_ble_enqueue_tx_packet(uint16_t cmd, uint16_t len,
+                                  const void *payload, uint8_t flags);
+
+/* SLIP-frame + transmit a payload with a CRC-16 trailer (the TX counterpart of
+ * slip_rx_packet). Returns 0 on success, 2 on TX error. OEM slip_send_frame at
+ * 0x0803F4F0. */
+uint32_t slip_send_frame(const uint8_t *buf, int len);
+
 #endif

@@ -21,3 +21,24 @@ uint8_t bin_to_bcd(uint8_t bin)
     }
     return (uint8_t)(bin | (uint8_t)(tens << 4));
 }
+
+/* Generic byte FIFO dequeue (OEM 0x080318AE). The OEM advances `tail` and
+ * stores it back before reading the byte and wrap-checking — preserved here. */
+uint32_t ringbuf_get_byte(ringbuf_t *rb, uint8_t *out)
+{
+    uint16_t tail;
+
+    if (rb == 0 || out == 0 || rb->count == 0) {
+        return 0;
+    }
+
+    tail = rb->tail;
+    rb->tail = (uint16_t)(tail + 1);
+    *out = rb->data[tail];
+
+    if (rb->tail >= rb->cap) {
+        rb->tail = 0;
+    }
+    rb->count = (int16_t)(rb->count - 1);
+    return 1;
+}

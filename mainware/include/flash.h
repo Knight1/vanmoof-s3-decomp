@@ -17,4 +17,9 @@ int flash_erase(int addr, int len);
  * OEM flash_write at 0x0803CF94. */
 int flash_write(uint32_t addr, const uint32_t *data, int len);
 
+/* FLASH HAL leaves: program one word (OEM 0x08027A04), and unlock + clear the
+ * SR error flags (OEM 0x0803CF1C, the eraser's prep step). */
+void flash_program_word(volatile uint32_t *dst, uint32_t value);
+void flash_unlock_and_clear_status(void);
+
 #endif

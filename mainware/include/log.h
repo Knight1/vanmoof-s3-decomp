@@ -10,4 +10,7 @@ typedef int (*log_func_t)(const char *fmt, ...);
 
 extern log_func_t g_log_func;
 
+/* Emit a "DD/HH:MM:SS " timestamp prefix via g_log_func (OEM 0x0803DBC8). */
+void log_print_timestamp_prefix(void);
+
 #endif

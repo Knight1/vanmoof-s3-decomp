@@ -4,6 +4,7 @@
 
 #include "app.h"
 #include "app_state.h"
+#include "audio.h"
 #include "console.h"
 #include "log.h"
 #include "scheduler.h"
@@ -24,7 +25,6 @@ extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
  * so we can call them at the right addresses for behavioural
  * equivalence without committing to a name we'd have to revise. */
 extern uint32_t FUN_08031728(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
-extern int      FUN_080391B8(uint8_t *p);
 
 /* Hard-coded fallback password. Reading the OEM rodata at 0x080547EC.
  * Accepted in addition to whatever the user has stored in
@@ -171,7 +171,7 @@ static void volume_set_common(char *input, uint8_t *target)
         g_log_func("res: %d\r\n", res);
     }
 
-    if (FUN_080391B8(&parsed) != 0) {
+    if (amp_volume_brownout_apply(&parsed) != 0) {
         g_log_func(" ERR set volume\r\n");
     }
 

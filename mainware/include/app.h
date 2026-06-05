@@ -22,4 +22,17 @@ void update_mode_request(uint8_t mode);
  * instead consumed directly by the loop each iteration). */
 void announce_mark(int channel);
 
+/* Set an FSM state byte unless it is currently 6 or 7 (sticky/locked).
+ * OEM maybe_set_state_if_unlocked at 0x08029B88. */
+void maybe_set_state_if_unlocked(uint8_t new_state);
+
+/* Read the FSM state byte (getter twin; OEM 0x08029BA0). */
+uint8_t maybe_get_bike_state(void);
+
+/* Latch a requested value + pending flag (OEM 0x0803B738). */
+void maybe_set_pending_request(int32_t value);
+
+/* Resolve a channel's status and emit a notify (OEM 0x0802A2F0). */
+void channel_notify_with_status(uint32_t channel_id);
+
 #endif

@@ -7,21 +7,42 @@
  * flags (write-1-to-clear) before programming. The OEM literal is 0x40023C00
  * (FLASH base) + 0x0C. */
 #define FLASH_SR (*(volatile uint32_t *)0x40023C0Cu)
+#define FLASH_CR (*(volatile uint32_t *)0x40023C10u)   /* +0x10: PSIZE[9:8], PG=bit0 */
 
 /* --- HAL / runtime externs ---
  * flash_program        0x08027BE0  width-tagged program: op 0/1/2/3 =
  *                                   byte/half/word/dword (CubeF4-style, locked).
+ *                                   Its word case calls flash_program_word below.
  * flash_erase_sector   0x080235B4  HAL sector erase (EraseInit, &sector_error).
  * flash_addr_to_sector 0x0803CE14  flash address -> sector index.
- * flash_erase_prep     0x0803CF1C  pre-erase housekeeping.
+ * flash_unlock         0x08027B14  KEY1/KEY2 unlock of FLASH_CR.
  * lock_acquire         0x08027B80  flash/resource lock (tick timeout).
  * watchdog_kick        0x080314D8  refresh the watchdog (flash ops are slow). */
-extern int  flash_program(int op, uint32_t addr, uint32_t value, int unused);
-extern int  flash_erase_sector(void *erase_init, uint32_t *sector_error);
-extern int  flash_addr_to_sector(int addr);
-extern void flash_erase_prep(void);
-extern int  lock_acquire(int timeout_ticks);
-extern void watchdog_kick(void);
+extern int      flash_program(int op, uint32_t addr, uint32_t value, int unused);
+extern int      flash_erase_sector(void *erase_init, uint32_t *sector_error);
+extern int      flash_addr_to_sector(int addr);
+extern uint32_t flash_unlock(void);
+extern int      lock_acquire(int timeout_ticks);
+extern void     watchdog_kick(void);
+
+/* Program one 32-bit word (OEM flash_program_word, 0x08027A04): set PSIZE=x32 +
+ * PG, then the store itself triggers the program. The dispatcher (flash_program)
+ * is responsible for the unlock, the BSY poll, and clearing PG afterwards. */
+void flash_program_word(volatile uint32_t *dst, uint32_t value)
+{
+    FLASH_CR &= ~0x300u;   /* clear PSIZE[9:8] */
+    FLASH_CR |=  0x200u;   /* PSIZE = 0b10 (x32) */
+    FLASH_CR |=  0x001u;   /* PG (program enable) */
+    *dst = value;          /* the write programs the word */
+}
+
+/* Pre-erase/program housekeeping (OEM flash_unlock_and_clear_status, 0x0803CF1C):
+ * unlock FLASH_CR via KEY1/KEY2, then clear the SR error flags. */
+void flash_unlock_and_clear_status(void)
+{
+    flash_unlock();
+    FLASH_SR = 0xF3;       /* clear EOP/OPERR/WRPERR/PGAERR/PGPERR/PGSERR */
+}
 
 /* CubeF4 FLASH_EraseInitTypeDef (sector mode). */
 struct flash_erase_init {
@@ -37,7 +58,7 @@ static inline void irq_enable(void)  { __asm volatile ("cpsie i" ::: "memory"); 
 
 int flash_erase(int addr, int len)
 {
-    flash_erase_prep();
+    flash_unlock_and_clear_status();
 
     int first = flash_addr_to_sector(addr);
     int last  = flash_addr_to_sector(addr + len);

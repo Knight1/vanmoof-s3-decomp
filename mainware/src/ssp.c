@@ -1,25 +1,48 @@
 #include <stdint.h>
+#include <string.h>
 
+#include "crc.h"
 #include "log.h"
+#include "panic.h"
 #include "ssp.h"
 
-/* --- externs supplied elsewhere in the image -------------------------------
- * ssp_rx_byte       0x08036528  pop one byte from the bus RX ring (atomic).
- * crc16             0x0803C2C8  Modbus-bus CRC-16 over (buf,len) with init.
- * ble_cmd_dispatch  0x08033970  command-id dispatcher (lock/region/power/...).
- * The three message-type handlers are thin shims onto the dispatcher / control
- * paths; kept opaque here (the dispatcher itself is mapped, not sourced). */
+/* --- externs supplied elsewhere in the image ---
+ * ssp_rx_byte                0x08036528  pop one byte from the bus RX ring (atomic).
+ * ble_cmd_dispatch           0x08033970  BLE command dispatcher (write side).
+ * ble_read_request_dispatch  0x08034D20  GATT/SSP read-request dispatcher.
+ * uart_send_byte             0x080364F0  transmit one byte on the serial link.
+ * FUN_08020E50               ACK completion run on a released TX slot's payload. */
 extern int  ssp_rx_byte(uint8_t *out);
-extern int  crc16(const uint8_t *buf, int len, int init);
-extern void ble_data_packet(uint16_t cmd, uint16_t len, uint8_t *data, uint8_t len_hi); /* 0x0803F6A4 */
-extern void ble_prepare_packet(uint16_t len);                                            /* 0x0803F6AC */
-extern int  ble_command(uint8_t id);                                                     /* 0x0803F498 */
-extern void ble_send_response(uint8_t *resp, int len);                                   /* 0x0803F4F0 */
+extern void ble_cmd_dispatch(uint32_t cmd, uint32_t p2, uint8_t *payload);
+extern void ble_read_request_dispatch(uint16_t char_id);
+extern int  uart_send_byte(uint8_t b);
+extern void FUN_08020e50(uint32_t arg);
 
-/* The BLE/SSP receive context (OEM SRAM 0x20008A40). Only the fields the
- * transport touches are modelled; `slip_state` is the de-framer state byte. */
+/* SLIP/BLE message handlers, defined at the end of this file. */
+static void ble_data_packet(uint16_t cmd, uint16_t len, uint8_t *data, uint8_t len_hi);
+static void ble_prepare_packet(uint16_t char_id);
+static int  ble_command(uint8_t id);
+
+/* TX side. */
+extern int     ssp_ble_seq_id_in_use(uint8_t seq);  /* 0x0803F470 — scan tx_queue for a seq id */
+extern void   *FUN_08020e40(uint32_t size);          /* malloc wrapper (free-list allocator) */
+extern uint8_t g_ssp_tx_seq;   /* rolling TX sequence id (OEM 0x200000F0 + 0x10) */
+
+/* One outbound packet descriptor (12 bytes); type == 5 means the slot is in use. */
+typedef struct {
+    uint8_t  flags;    /* +0x00 */
+    uint8_t  type;     /* +0x01  5 = occupied, 0 = free */
+    uint8_t  _resv;    /* +0x02 */
+    uint8_t  seq;      /* +0x03  unique sequence id */
+    uint16_t cmd;      /* +0x04 */
+    uint16_t len;      /* +0x06 */
+    void    *payload;  /* +0x08  heap copy of the payload */
+} ssp_tx_entry_t;
+
+/* The BLE/SSP context (OEM SRAM 0x20008A40). The 128-entry TX queue occupies
+ * the first 0x600 bytes; the SLIP de-framer state and the ack frame follow it. */
 struct ble_ssp_ctx {
-    uint8_t _pad0[0x600];
+    ssp_tx_entry_t tx_queue[128]; /* +0x000..+0x5FF (128 x 12 B) */
     uint8_t slip_state;      /* +0x600 */
     uint8_t got_packet;      /* +0x601 — cleared when a frame is consumed */
     uint8_t _pad1[0x10E];    /* +0x602..+0x70F */
@@ -109,13 +132,13 @@ int ble_ssp_dispatch(void)
             g_ble_ssp.response[0] = 1;
             g_ble_ssp.response[1] = 5;
             g_ble_ssp.response[2] = id;
-            ble_send_response(g_ble_ssp.response, 3);
+            slip_send_frame(g_ble_ssp.response, 3);
         } else if (type == BLE_MSG_PREPARE) {        /* 0x06 — length announce */
             ble_prepare_packet((uint16_t)(msg[3] | (msg[4] << 8)));
             g_ble_ssp.response[0] = 1;
             g_ble_ssp.response[1] = 5;
             g_ble_ssp.response[2] = id;
-            ble_send_response(g_ble_ssp.response, 3);
+            slip_send_frame(g_ble_ssp.response, 3);
         } else if (type == BLE_MSG_COMMAND) {        /* 0x05 — control command */
             if (ble_command(id) == 0) {
                 g_log_func("ERR BLE SSP packet not in queue\r\n");
@@ -126,4 +149,120 @@ int ble_ssp_dispatch(void)
     }
 
     return r == 0;
+}
+
+/* Enqueue an outbound packet into the 128-slot TX queue (OEM
+ * ssp_ble_enqueue_tx_packet, 0x0803F9CC). Finds a free slot, assigns a unique
+ * sequence id (skipping ids still queued — re-testing the same slot on a
+ * collision, per the OEM), heap-copies the payload, and fills the descriptor.
+ * Returns the slot index 0..0x7F, 0xFD if len > 0x100, or 0xFF if full. */
+uint8_t ssp_ble_enqueue_tx_packet(uint16_t cmd, uint16_t len,
+                                  const void *payload, uint8_t flags)
+{
+    uint32_t i;
+
+    if (len > 0x100u) {
+        return 0xFD;
+    }
+
+    for (i = 0; (i & 0x80u) == 0; ) {
+        if (g_ble_ssp.tx_queue[i].type != 0) {        /* slot occupied -> next slot */
+            i = (i + 1) & 0xFFu;
+            continue;
+        }
+
+        uint8_t seq = g_ssp_tx_seq;
+        if (ssp_ble_seq_id_in_use(seq) != 0) {        /* seq in use -> bump, retest slot */
+            g_ssp_tx_seq = (uint8_t)(seq + 1);
+            continue;
+        }
+        g_ssp_tx_seq = (uint8_t)(seq + 1);
+
+        void *dst = FUN_08020e40(len);
+        if (dst == 0) {
+            muco_assert_fail("src/ssp_ble.c", 0x22B);  /* noreturn */
+        }
+        memcpy(dst, payload, len);
+
+        g_ble_ssp.tx_queue[i].flags   = flags;
+        g_ble_ssp.tx_queue[i].type    = 5;
+        g_ble_ssp.tx_queue[i].seq     = seq;
+        g_ble_ssp.tx_queue[i].cmd     = cmd;
+        g_ble_ssp.tx_queue[i].len     = len;
+        g_ble_ssp.tx_queue[i].payload = dst;
+        return (uint8_t)i;
+    }
+    return 0xFF;   /* queue full */
+}
+
+/* --- SLIP/BLE message handlers (dispatched by ble_ssp_dispatch) --- */
+
+/* Type-0x07 data message → BLE command dispatcher (OEM ble_data_packet
+ * 0x0803F6A4, a thunk forwarding cmd/len/payload to ble_cmd_dispatch). */
+static void ble_data_packet(uint16_t cmd, uint16_t len, uint8_t *data, uint8_t len_hi)
+{
+    (void)len_hi;
+    ble_cmd_dispatch(cmd, len, data);
+}
+
+/* Type-0x06 read/prepare message → GATT read dispatcher (OEM ble_prepare_packet
+ * 0x0803F6AC, a thunk). */
+static void ble_prepare_packet(uint16_t char_id)
+{
+    ble_read_request_dispatch(char_id);
+}
+
+/* Type-0x05 control message: an ACK that releases the queued TX packet whose
+ * sequence id matches and runs its completion callback (OEM ble_command,
+ * 0x0803F498). Returns 1 if a matching live slot was found, else 0. */
+static int ble_command(uint8_t id)
+{
+    uint32_t i;
+
+    for (i = 0; (i & 0x80u) == 0; i = (i + 1) & 0xFFu) {
+        ssp_tx_entry_t *e = &g_ble_ssp.tx_queue[i];
+        if (e->seq == id && e->type != 0) {
+            e->type = 0;                          /* release the slot */
+            FUN_08020e50((uint32_t)e->payload);   /* run the completion */
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* SLIP byte emit with escaping (helper for slip_send_frame). */
+static void slip_put(uint8_t b)
+{
+    if (b == SLIP_END) {
+        uart_send_byte(SLIP_ESC);
+        uart_send_byte(SLIP_ESC_END);
+    } else if (b == SLIP_ESC) {
+        uart_send_byte(SLIP_ESC);
+        uart_send_byte(SLIP_ESC_ESC);
+    } else {
+        uart_send_byte(b);
+    }
+}
+
+/* SLIP-frame + transmit a payload with a CRC-16 trailer (OEM slip_send_frame,
+ * 0x0803F4F0 — the TX counterpart of slip_rx_packet). Wire format:
+ * 0xC0 [escaped payload] [escaped CRC-lo] [escaped CRC-hi] 0xC0. */
+uint32_t slip_send_frame(const uint8_t *buf, int len)
+{
+    uint16_t crc = crc16(buf, len, 0xFFFFu);
+
+    uart_send_byte(SLIP_END);
+    while (len != 0) {
+        slip_put(*buf);
+        buf++;
+        len--;
+    }
+    slip_put((uint8_t)(crc & 0xFF));
+    slip_put((uint8_t)((crc >> 8) & 0xFF));
+
+    /* only the closing delimiter's TX status is checked by the OEM */
+    if (uart_send_byte(SLIP_END) == 0) {
+        return 2;
+    }
+    return 0;
 }
