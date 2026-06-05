@@ -14,4 +14,8 @@
  * the caller's source path (e.g. "src/time.c" for the scheduler). */
 _Noreturn void muco_assert_fail(const char *file, int line);
 
+/* CubeF4 stock fatal-error handler (OEM 0x0803DDCC): log "Error_Handler" and
+ * spin. Called by HAL init failures (WWDG, I2C). */
+_Noreturn void Error_Handler(void);
+
 #endif

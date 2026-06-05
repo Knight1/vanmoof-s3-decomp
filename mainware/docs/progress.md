@@ -45,15 +45,21 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 794 | pending (auto-named `FUN_xxxxxxxx`) |
-| 3   | vendor-stock — `strcmp`, `strtol` (newlib); `HAL_GPIO_WritePin` (CubeF4 HAL) |
+| 680 | pending (auto-named `FUN_xxxxxxxx`) |
+| 22  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`, `HAL_I2C_Mem_Write`, `HAL_I2C_Init`, `HAL_I2C_DeInit` |
 | 0   | in-progress |
-| 6   | decomp-c — `systick_tick`, `login_handler`, `volume_high_set`, `volume_medium_set`, `console_start_motor_update`, `console_soc_set` |
-| 0   | decomp-asm |
-| 8   | named (rename in Ghidra, no source yet) — `Reset_Handler`, `SysTick_Handler`, `scheduler_tick`, `scheduler_alloc`, `scheduler_release`, `scheduler_start`, `scheduler_slot_is_idle`, `console_next_token` |
+| 92  | decomp-c — `systick.c` (3), `console.c` (7), `scheduler.c` (7), `exceptions.c` (10), `panic.c` (2), `app.c` (16), `util.c` (4), `system_stm32f413.c` (1), `ssp.c` (9), `flash.c` (6), `crc.c` (3), `audio.c` (1), `log.c` (8), `sensor.c` (2), `uart.c` (1), `net.c` (2), `gpio.c` (1), `eeprom.c` (1), `i2c.c` (2), `watchdog.c` (5), `states.c` (1) — see per-module log below |
+| 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`) |
+| 16  | named (rename in Ghidra, no source yet) — startup/loop spine (`main`, `boot_init_cold/warm`, `mainware_boot_init_sequence`, `subsystem_update_sm`, `status_process`), BLE (`ble_cmd_dispatch`, `ble_read_request_dispatch`, `maybe_enqueue_tx_message`), modem/tracking (`sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`) |
 
-`function_count = 811` per `ghidra/exports/mainware_program.json`
-(refresh after every mutating Ghidra run; see top-level `CLAUDE.md`).
+`function_count = 811` per `ghidra/exports/mainware_program.json`.
+**The committed JSON is stale**: ~172 functions have been renamed + given
+prototypes/no-return across the recent sessions (everything in the Decoded,
+Decomp-asm, Vendor-stock and Named tables below carries its OEM address, so
+those tables are the authoritative name map until the JSON is regenerated).
+The GhidraMCP server can't run the dump script — re-run
+`ghidra/scripts/DumpMainwareProgram.java` in Ghidra to refresh it. The program
+itself was saved after each session.
 
 ## Per-module decomp log
 

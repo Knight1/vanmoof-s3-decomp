@@ -88,6 +88,21 @@ soft float for now.
 | `0x20009368` | 4 | `g_app_ctx` | (not yet decoded) | application-state block; `+0x2DC` is `ctx_sub`, the pointer to `g_ctx` (`0x200083A8`). Through it the console reaches `[0x2D9]` logged-in flag, `[0x2E0]` failed-login counter, `[0x398]` service password. |
 | `0x20009704` | 4 | `g_systick_counter` | `systick.c` | free-running SysTick counter |
 | `0x20009D98` | 4 | `g_log_func` | `log.h` (extern) | `(*g_log_func)(const char *fmt, …)`-style logger. Referenced by `exceptions.c`, `panic.c`, `console.c`. Set once during init (initialiser not yet decoded). |
+| `0x20000083` | 1 | `g_state_flag` | `app.c` | state/mode flag byte; `state_flag_get`/`state_flag_set`. `log_print_timestamp_prefix` saves/zeroes/restores it around a line; also written by `subsystem_update_sm` and the announce path. Plain byte, **not** an IRQ mask. |
+| `0x200000E5` | 1 | `g_sms_track_state` | (modem) | `sms_info_tracking_state_machine` state byte (4-state SMS info-tracking scheduler). |
+| `0x20000914` | ≥0x2C | `g_adc_ctx` | `sensor.c` | ADC/sensor context **shared** by `supply_voltage_read` and `moving_avg10_push`: moving-avg write cursor (byte) `+0x00`, ten `u16` samples `+0x04`, ADC status byte `+0x22`, raw ADC sample (`u16`) `+0x2A`. |
+| `0x20000944` | 4 | `g_app_ctx_ptr` | `app.c` | pointer to the app context used by `channel_resolve_status`; the three channel priority bitmasks are at `*ptr + 0xF4/0xF8/0xFC`. |
+| `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` | UART/bus driver context; `+0xB3C` = TX ring-buffer pointer (`uart_send_byte`), `+0xB40` = RX ring-buffer pointer (`ssp_rx_byte`). |
+| `0x20007E14` | 16×24 | `g_msg_tx_table` | (link) | second outbound message table (`maybe_enqueue_tx_message`): 16 slots × 24 B (`[0]`=type, `[1]`=in-use marker, `[3]`=handle, `[4..5]`=arg, `[6..7]`=len, `[8..23]`=payload). Distinct from the BLE/SSP `tx_queue` at `0x20008A40`. |
+| `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | pointer-to-pointer to the UART/bus peripheral block. `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TX-int); `ssp_rx_byte` masks/sets bit 5 of `(*(*g_uart_dev_pp))+0xC` (RX-int — a second deref hop). |
+| `0x200099E4` | — | `g_rtc_handle` | (rtc) | STM32 HAL `RTC_HandleTypeDef` used by `rtc_fill_time_fields`. |
+| `0x20009D90` | — | `g_crc_handle` | `crc.c` | STM32 CRC HAL handle (`CRC_HandleTypeDef`); field[0] → `CRC->DR`. Used by `crc32_hw_feed` and `HAL_CRC_Accumulate` (and passed by `flash_config_bank_write`). |
+| `0x20037000` | ≥10 | `g_log_buffer_hdr` | `log.c` | circular SRAM log-buffer control header (just above `_estack`): 8-byte body + `u16` CRC-16 at `+8`, read/write cursors at `+0xC`/`+0x10`. `log_buffer_crc_check` validates it. |
+| `0x20000029` | ≥0xB | `g_sound_rec` | `app.c` | sound/clocking record (`channel_notify_emit`): bike-state byte at `+4`, saved state `+5`, aux `+9`, scheduler timer-slot id `+0xA` (`0xFA` = none). |
+| `0x200001D8` | ≥0xD | `g_brownout_ctr` | `app.c` | brownout/clocking counter block; `+0xC` bumps on each amp-volume failure and triggers a `"Clocking %d"` log every third. |
+| `0x20000068` | ≥8 | `g_mode_state` | `app.c` | mode/state block: byte[0] = mode/sub-mode (`aux_mode_byte_get`/`set_mode_state_byte`; `enter_mode3_arm_show_timer` writes 3), byte[7] = scheduler slot id (`0xFA` = none). |
+| `0x20009B04` | ~0x24 | `g_i2c3_handle` | `i2c.c`/`eeprom.c` | I2C3 HAL handle (`I2C_HandleTypeDef`, Instance `0x40005C00`); the EEPROM bus (`eeprom_write_region`) + the bit-bang recovery (`i2c3_handle_init`/`deinit`). |
+| `0x20009728` | 0x14 | `g_wwdg_desc` | `watchdog.c` | WWDG refresh descriptor (built by `watchdog_init`): `{WWDG_CR 0x40002C00, 0x180, 0x7F, 0x7F, 0}`. `wwdg_hw_init` programs `WWDG_CR=0xFF` (T|WDGA) + `WWDG_CFR=0x1FF`; `watchdog_kick`→`wdg_reg_write_from_desc` reloads `WWDG_CR=0x7F` each loop. |
 
 ### C runtime (startup) layout
 
@@ -126,6 +141,35 @@ envelope (container header + `__DATE__`/`__TIME__`), and the STM32
 vector table begins at offset `0x200` into the sector
 (`0x08020200`). That 512-B prefix lets mainboot validate the magic
 and print the build banner before bothering with VTOR.
+
+## GPIO bring-up (`gpio_init`, `src/gpio.c`)
+
+`gpio_init` (`0x080314E8`) enables the GPIO port clocks via `RCC_AHB1ENR`
+(`0x40023830`) in the order **E, H, C, A, B, D**, sets initial output levels,
+then configures each port through the CubeF4 `HAL_GPIO_Init`. Port bases (AHB1):
+A `0x40020000`, B `0x40020400`, C `0x40020800`, D `0x40020C00`, E `0x40021000`.
+
+Per-port pin masks (semantic per-pin roles still TBD — the masks are
+reproduced verbatim in `gpio.c`):
+
+| Port | Init level / mode | Pin mask |
+| --- | --- | --- |
+| E | outputs low | `0x102C` |
+| E | output high | `0x40` |
+| E | outputs (Mode 1) | `0x106C`; inputs `0x410` |
+| B | outputs low | `0xC32F`; output high `0x400`; outputs (Mode 1) `0xC72F` |
+| D | outputs low | `0xBCF0`; output high `0x1`; outputs `0xBCF1`; inputs `0x400E` |
+| A | outputs low | `0x9000`; input `0x800`; outputs `0x9000` |
+| C | alternate-function | `0x2F` (AF0), `0x10`, `0x100` (AF1), `0x400` (AF2) |
+
+Identified concrete function: **PA8 = I2C3 SCL (bit-bang), PC9 = I2C3 SDA
+(sense)** — `clock_pulse_gpioa8_until_pc9` (`0x0803C8F4`) is the I2C3 **stuck-bus
+recovery** routine (deinit I2C3, pulse SCL up to 200× until SDA releases high,
+re-init I2C3; the "Clocking %d" probe). I2C3 (`0x40005C00`, 100 kHz) is the
+on-board EEPROM (AT24C, dev `0xA0`) bus; its HAL handle lives at SRAM
+`0x20009B04`. The GPIOC AF pins are the other peripheral I/O (inter-module-bus
+UART + the I2C3 normal SCL/SDA). The **window watchdog** (WWDG `0x40002C00`) is
+refreshed each loop by `watchdog_kick` (writes `0x7F` to `WWDG_CR`).
 
 ## Vector table (head, from raw bytes — image @ flash `0x08020200`)
 

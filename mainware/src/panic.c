@@ -14,3 +14,13 @@ _Noreturn void muco_assert_fail(const char *file, int line)
     for (;;) {
     }
 }
+
+/* CubeF4 stock `Error_Handler` (OEM 0x0803DDCC), filled in by VanMoof: log a
+ * line via g_log_func and spin forever. Shared by the HAL init failures (WWDG
+ * `watchdog_init`, I2C3 `i2c3_handle_init`). The watchdog reboots the board. */
+_Noreturn void Error_Handler(void)
+{
+    g_log_func("Error_Handler\r\n");
+    for (;;) {
+    }
+}

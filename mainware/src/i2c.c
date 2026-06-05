@@ -1,13 +1,13 @@
 #include <stdint.h>
 
 #include "i2c.h"
+#include "panic.h"
 
 /* I2C3 HAL handle in SRAM @ 0x20009B04 (also reached as g_eeprom_i2c_handle). */
 #define I2C3_HANDLE  ((volatile uint32_t *)0x20009B04u)
 
 extern unsigned int HAL_I2C_DeInit(void *hi2c);        /* CubeF4 HAL, 0x0802472C */
 extern int          HAL_I2C_Init(volatile uint32_t *hi2c); /* CubeF4 HAL, 0x08024570 */
-extern void         i2c_init_error_trap(void);         /* 0x0803DDCC (no-return) */
 
 /* De-init the I2C3 handle (OEM 0x0803C8E4) — a thunk forwarding the fixed handle
  * to HAL_I2C_DeInit; used before the SCL bit-bang in the bus-recovery path. */
@@ -34,6 +34,6 @@ void i2c3_handle_init(void)
     h[8] = 0u;            /* +0x20 NoStretchMode    = disable                */
 
     if (HAL_I2C_Init(h) != 0) {
-        i2c_init_error_trap();   /* never returns */
+        Error_Handler();   /* never returns */
     }
 }
