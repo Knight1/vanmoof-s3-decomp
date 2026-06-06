@@ -45,12 +45,12 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 590 | pending (auto-named `FUN_xxxxxxxx`) |
+| 548 | pending (auto-named `FUN_xxxxxxxx`) |
 | 22  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`, `HAL_I2C_Mem_Write`, `HAL_I2C_Init`, `HAL_I2C_DeInit`; `memcmp` (newlib) |
 | 0   | in-progress |
-| 152 | decomp-c — `systick.c` (3), `console.c` (49), `scheduler.c` (7), `exceptions.c` (10), `panic.c` (2), `app.c` (16), `util.c` (4), `system_stm32f413.c` (1), `ssp.c` (9), `flash.c` (6), `crc.c` (3), `audio.c` (1), `log.c` (8), `sensor.c` (2), `uart.c` (1), `net.c` (2), `gpio.c` (1), `eeprom.c` (1), `i2c.c` (2), `watchdog.c` (5), `states.c` (1), `modem.c` (16), `ble.c` (1), `ble_read.c` (1) — see per-module log below |
+| 153 | decomp-c — `systick.c` (3), `console.c` (49), `scheduler.c` (7), `exceptions.c` (10), `panic.c` (2), `app.c` (16), `util.c` (4), `system_stm32f413.c` (1), `ssp.c` (9), `flash.c` (6), `crc.c` (3), `audio.c` (1), `log.c` (8), `sensor.c` (2), `uart.c` (1), `net.c` (2), `gpio.c` (1), `eeprom.c` (1), `i2c.c` (2), `watchdog.c` (5), `states.c` (1), `modem.c` (16), `ble.c` (1), `ble_read.c` (1), `update.c` (1) — see per-module log below |
 | 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`) |
-| 48  | named (rename in Ghidra, no source yet) — startup/loop spine (`main`, `boot_init_cold/warm`, `mainware_boot_init_sequence`, `subsystem_update_sm`, `status_process`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`) |
+| 89  | named (rename in Ghidra, no source yet) — startup/loop spine (`main`, `boot_init_cold/warm`, `mainware_boot_init_sequence`, `status_process`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int`, `accel_enable`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
 
 `function_count = 814` per `ghidra/exports/mainware_program.json` (3 OEM functions newly
 created this pass: `console_cmd_shipping`, `shiftdebug_pump_task`, `bat_reset_release_cb`).
@@ -76,17 +76,19 @@ itself was saved after each session.
   Named+documented (too big for the decompiler, not sourced). The logic
   counterpart to `ble-commands.md`/`console.md` (inputs) and `state-machine.md`
   (positions).
-- **OTA orchestrator** (`subsystem_update_sm` `0x08031900`) — decoded +
-  documented (`docs/ota.md`), the multi-subsystem firmware-update state machine
-  (~22 states). Updates all five firmwares from one BLE-delivered PACK package:
-  `mainware.bin` (self → shadow flash + `NVICReset` reboot to bootloader),
-  `motorware.bin`, `shifterware.bin`, `batteryware.bin` (Modbus 0xAA),
-  `bleware.bin`, + powerbank. 8 helper callees named (`flash_cache_disable/enable`
-  FLASH_ACR bit 11, `download_chunks_pending_count`, `shifter_update_status_get`/
-  `_request`, `batteryware_update_status_get`/`_set_pending`, `bus_rx_byte_locked`);
-  `memcmp` (`0x08020E60`) classified vendor-stock. Named+documented (deep
-  multi-target SM, not sourced — like the BLE dispatchers were). Per-subsystem
-  progress at ctx+0x32C; verify-after-flash with `pack_validate` + version compare.
+- `update.c` — **OTA orchestrator** (`subsystem_update_sm` `0x08031900`) now
+  **SOURCED as full faithful C** (771 lines) via source→verify workflow, with all
+  62 log strings byte-exact and every callee resolved to a named extern (build
+  clean, gc'd). The multi-subsystem firmware-update state machine (~22 states):
+  updates all five firmwares from one BLE PACK package — `mainware.bin` (self →
+  shadow flash `0x08060000` + `NVICReset` reboot to bootloader, "wait for BMS
+  shutdown"), `motorware.bin` (`0x080A0000`), `shifterware.bin` (`0x08010000`),
+  `batteryware.bin`/powerbank (Modbus 0xAA, `0x080C0000`), `bleware.bin` (OAD).
+  Control struct `g_update_sm`@`0x20000760`, slots `g_update_slots`@`0x20000079`.
+  Target-type map (ctx[0x32C+i]): 1=bleware, 2=mainware, 3=motorware,
+  4=shifterware, 5=batteryware. 8 helper callees named; `memcmp` (`0x08020E60`)
+  vendor. Per-target verify with `pack_validate` + version compare. Doc:
+  `docs/ota.md`.
 - `ble.c` / `ble_read.c` — the **BLE app-command surface**, both dispatchers
   sourced (were named+documented). `ble_cmd_dispatch` (`0x08033970`, ble.c) =
   the write/command switch (~40 `0x55xx` GATT-write cmds + low provisioning

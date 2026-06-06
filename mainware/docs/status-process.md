@@ -83,8 +83,14 @@ State model: `maybe_get_bike_state` / `maybe_set_state_if_unlocked` /
 `batteryware_update_set_pending`. Persistence/lifecycle:
 `save_state_record_to_eeprom`, `reboot_restart_task`, `testmode_command_dispatch`,
 `console_cmd_logout`, `scheduler_*`, `watchdog_kick`, `ssp_ble_enqueue_tx_packet`,
-`maybe_enqueue_tx_message`. ~50 of its callees are still `FUN_*` (the per-state
-sub-handlers) — candidates for future naming.
+`maybe_enqueue_tx_message`. **42 of its per-state sub-handlers are now named**
+(see the "named" table in `progress.md`): e.g. `locked_state_step`,
+`power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`,
+`enter_stop_mode`, `system_reset`, the shifter-SM steps, `state_flags_set`/
+`clear`/`test`, the LIS3DH helpers (`lis3dh_int1_clear`/`powerdown`/
+`config_motion_int`), `light_sensor_read_step`, `charge_level_adc_get`,
+`led_driver_*_shipping_mode`, `battery_on_detect_step`, `bms_write_reg8_and_poll`,
+`telemetry_datalog_emit`.
 
 ## Where it sits
 
