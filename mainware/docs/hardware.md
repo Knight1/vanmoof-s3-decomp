@@ -109,6 +109,9 @@ soft float for now.
 | `0x20009728` | 0x14 | `g_wwdg_desc` | `watchdog.c` | WWDG refresh descriptor (built by `watchdog_init`): `{WWDG_CR 0x40002C00, 0x180, 0x7F, 0x7F, 0}`. `wwdg_hw_init` programs `WWDG_CR=0xFF` (T|WDGA) + `WWDG_CFR=0x1FF`; `watchdog_kick`→`wdg_reg_write_from_desc` reloads `WWDG_CR=0x7F` each loop. |
 | `0x20000101` | 1 | `g_boot_retry_budget` | `main.c` | boot self-test retry budget. `mainware_boot_init_sequence` decrements it after an I2C-bus-error recovery pass (≥3 device failures); the do/while loop exits when it reaches 0 (set 0 directly on a clean pass). |
 | `0x20009A84` | ≥0x40 | `g_led_pwm_obj` | `main.c` | TIM1 (`0x40010000`) handle / LED-driver object: `obj_set_field34/38` + `led_channel3_set_brightness` zero its `+0x34/+0x38/+0x3C` PWM-duty channels at boot; `tim_channel_enable_output(&obj, 0/4/8)` enables TIM1 CH1/2/3. |
+| `0x20006E90` | ≥0xE80 | `g_bat_modbus_ctx` | `battery.c` | battery/BMS Modbus-RTU master context (slave 0xAA): master-SM state byte `[0]`, RX byte counter `[2]`, bus ring handle `[0xE74]`, transaction-SM state `[0xE78]`, the request/response **frame** at `[0xE7C]` (= `0x20007D0C`: `[0]`slave `[1]`func `[2..3]`reg(BE) `[0x84]`byte-count `[0x85+]`response `[0x105]`len `[0x106]`exception flag). Cleared by `bmodbus_queue_timer_init`. |
+| `0x200000E7` | ≥9 | `g_bms_state` | `battery.c` | BMS lifecycle state object (`battery_telemetry_step`): substate byte `[3]`, scheduler-timer slots `[0]`/`[5]`/`[7]` (`0xFA`=unallocated), retry counter `[6]`, light-mode latch `[8]`. |
+| `0x20008A00` | ≥0x40 | `g_batware_update` | `battery.c` / `update.c` | batteryware (BMS firmware) update record: arm flag `[6]`, status `[7]`, charger/FAULT-pin shadow `[0x3E]`. |
 
 ### C runtime (startup) layout
 
@@ -247,6 +250,25 @@ toggled around the amp probe; **PE10** read as SIM-source detect (low →
 `"SIM: PCB"` + set **PE12**; high → `"SIM: Holder"` + clear PE12); **PC8** read for
 a state-record default. The firmware self-identifies as **"ES3"** (boot banner
 `"ES3 v%d.%02d.%02d"`, model string `"%cS3.%c"` → e.g. `ES3.2`).
+
+### Battery / BMS (inter-module Modbus, `docs/battery.md`)
+
+The battery's BMS (a `batteryware` STM32L0) is **not** on I2C — mainware reaches
+it as a Modbus-RTU master (slave **0xAA**, func 3 read / func 6 write, CRC-16
+poly 0xA001) over the shared inter-module bus. Control/sense GPIO (from
+`battery.c`):
+
+| signal | pin | role |
+| --- | --- | --- |
+| BMS present | **PC10** (GPIOC, `0x400`) | pack-inserted detect |
+| charger sense | **PC4** (GPIOC, `0x10`) | charging vs discharging |
+| sense / FAULT | **PD1** (GPIOD, `0x2`) | BMS sleep / battery FAULT pin |
+| BMS reset | **PB5** (GPIOB, `0x20`) | reset/power pulse |
+| motor reset | **PB10/PB9** (GPIOB, `0x400`/`0x200`) | motor reset during pack bring-up |
+
+Telemetry registers are unpacked (big-endian u16) into the app context at
+`g_app_ctx + 0x3F2 + reg*2`; the batteryware register map (cells 1–10 at regs
+27–36) is cross-validated from both sides.
 
 ## Vector table (head, from raw bytes — image @ flash `0x08020200`)
 
