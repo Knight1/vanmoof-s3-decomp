@@ -13,11 +13,15 @@
  *
  * Faithfulness: control-flow shape, ctx field offsets + access widths, helper
  * calls, state transitions, the config-persist / EEPROM-record idioms and the
- * enqueue thresholds were all verified against the live disassembly. The
- * debug-log string *text* is a best-effort resolution of the OEM rodata
- * pointers — it is cosmetic (g_log_func is a printf-style fn ptr with no
- * behavioural effect); where a literal reads oddly it is the OEM string or a
- * close resolution, not a behavioural change.
+ * enqueue thresholds were verified against the live disassembly. The debug-log
+ * string literals are now the EXACT OEM rodata text (resolved from the literal
+ * pools + rodata). NOTE: the firmware's debug labels are frequently
+ * functionally shifted/stale — e.g. cmd 0x5566 (horn) logs
+ * "CMD_BLE_STATE_SOFT_RESET", 0x55A2/0x55A3 (testmode) log
+ * "CMD_BLE_TOP/BOTTOM_HALF_OF_DISPLAY", 0x5521/0x5523 swap LOCK/ALARM — these
+ * are reproduced verbatim, not corrected to the functional meaning.
+ * (The maybe_set_pending_request REQ_* descriptors are opaque flash structs;
+ * their addresses are approximate and pending a separate verification pass.)
  */
 
 #include <stdint.h>
@@ -64,25 +68,25 @@ extern void    maybe_set_pending_request(const void *req);
 extern void    reset_dual_buffers_and_flags(void);
 
 /* Display/sound request descriptors in flash (passed by pointer to
- * maybe_set_pending_request); kept as opaque externs at their OEM addresses. */
-extern const uint8_t REQ_ALARM_OFF[];      /* 0x08046708 */
-extern const uint8_t REQ_ALARM_ON[];       /* 0x08046744 */
-extern const uint8_t REQ_UNITS_METRIC[];   /* 0x08046634 */
-extern const uint8_t REQ_UNITS_IMPERIAL[]; /* 0x080468E4 */
-extern const uint8_t REQ_REGION_EU[];      /* 0x08046760 */
-extern const uint8_t REQ_REGION_US[];      /* 0x080467D8 */
-extern const uint8_t REQ_REGION_JP[];      /* 0x080467B4 */
-extern const uint8_t REQ_REGION_OFFROAD[]; /* 0x08046780 */
-extern const uint8_t REQ_SOUND_SELECT[];   /* 0x080464EC */
-extern const uint8_t REQ_CODE_UP[];        /* 0x08046820 */
-extern const uint8_t REQ_CODE_DOWN[];      /* 0x0804684C */
-extern const uint8_t REQ_HORN_0A[];        /* 0x08046720 */
-extern const uint8_t REQ_HORN_16[];        /* 0x080467A0 */
-extern const uint8_t REQ_HORN_17[];        /* 0x080467CC */
-extern const uint8_t REQ_HORN_18[];        /* 0x08046794 */
-extern const uint8_t REQ_LIGHT_ON[];       /* 0x08046810 */
-extern const uint8_t REQ_LIGHT_OFF[];      /* 0x0804687C */
-extern const uint8_t REQ_LIGHT_AUTO[];     /* 0x080467E4 */
+ * maybe_set_pending_request); opaque externs (addresses approximate). */
+extern const uint8_t REQ_ALARM_OFF[];      /* alarm off  (0x5524 p0) */
+extern const uint8_t REQ_ALARM_ON[];       /* alarm on   (0x5524 p1) */
+extern const uint8_t REQ_UNITS_METRIC[];   /* units 0    (0x5533 p0) */
+extern const uint8_t REQ_UNITS_IMPERIAL[]; /* units 1    (0x5533 p1) */
+extern const uint8_t REQ_REGION_EU[];      /* region 0   (0x5535)    */
+extern const uint8_t REQ_REGION_US[];      /* region 1   (0x5535)    */
+extern const uint8_t REQ_REGION_JP[];      /* region 2   (0x5535)    */
+extern const uint8_t REQ_REGION_OFFROAD[]; /* region 3   (0x5535)    */
+extern const uint8_t REQ_SOUND_SELECT[];   /* sound sel  (0x5566)    */
+extern const uint8_t REQ_CODE_UP[];        /* code up    (0x5572)    */
+extern const uint8_t REQ_CODE_DOWN[];      /* code down  (0x5572)    */
+extern const uint8_t REQ_HORN_0A[];        /* horn 0x0A  (0x5574)    */
+extern const uint8_t REQ_HORN_16[];        /* horn 0x16  (0x5574)    */
+extern const uint8_t REQ_HORN_17[];        /* horn 0x17  (0x5574)    */
+extern const uint8_t REQ_HORN_18[];        /* horn 0x18  (0x5574)    */
+extern const uint8_t REQ_LIGHT_ON[];       /* light on   (0x5581 p1) */
+extern const uint8_t REQ_LIGHT_OFF[];      /* light off  (0x5581 p2) */
+extern const uint8_t REQ_LIGHT_AUTO[];     /* light auto (0x5581 p0) */
 
 /* case 0x5564 1 s wheel-size poll task body (OEM 0x08033935, Thumb). */
 extern void FUN_08033934(void);   /* matches sched_cb_t (void(void)) */
@@ -141,11 +145,11 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
             else if (cmd < 0x124 && cmd > 0xf9) {
                 switch (cmd) {
                 case 0xfa:
-                    g_log_func("CMD_BLE_MAINWARE_DELAY_STANDBY\r\n", *payload);
+                    g_log_func("CMD_BLE_CONNECTION_STATUS [%d]\r\n", *payload);
                     FUN_0804031c(7);
                     if (*payload == 1 && (uint8_t)(ctx[0x310] - 3u) < 2) {
                         log_print_timestamp_prefix();
-                        g_log_func("set delay\r\n");
+                        g_log_func("App connect Leave, tracking mode\r\n");
                         ctx[0x310] = 0x0b;
                         ctx[0x312] = 0;
                         memcpy(rec_scratch, ctx + 0x320, sizeof(rec_scratch));
@@ -164,7 +168,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                         return;
                     }
                     log_print_timestamp_prefix();
-                    g_log_func("Start PIN\r\n");
+                    g_log_func("App connect Leave, BMS alarm\r\n");
                     maybe_set_state_if_unlocked('\x0e');
                     set_mode_state_byte(0xf);
                     return;
@@ -202,7 +206,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     g_log_func("CMD_BLE_MAC\r\n");
                     *(uint32_t *)(ctx + 0x390) = *(uint32_t *)payload;
                     *(uint16_t *)(ctx + 0x394) = *(uint16_t *)(payload + 4);
-                    /* OEM format @0x08051D40 = "%02X%02X%02XDeBug" (3 args, no bug) */
+                    /* OEM format @0x08051D40 = "%02X%02X%02XDeBug" (3 args) */
                     snprintf((char *)(ctx + 0x398), 0xc, "%02X%02X%02XDeBug",
                              (unsigned)ctx[0x393], (unsigned)ctx[0x394], (unsigned)ctx[0x395]);
                     return;
@@ -217,19 +221,19 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     return;
 
                 case 0x122:
-                    g_log_func("CMD_BLE_DISPLAY_CUSTOM_DISPLAY_ENABLE\r\n");
-                    g_log_func("Size %d\r\n", *(uint16_t *)payload);
+                    g_log_func("CMD_BLE_MAINWARE_DELAY_STANDBY\r\n");
+                    g_log_func("set delay %d sec\r\n", *(uint16_t *)payload);
                     FUN_0802e3d0(*(uint16_t *)payload);
                     return;
 
                 case 0x123:
-                    g_log_func("CMD_BLE_TOP_HALF_OF_DISPLAY\r\n");
+                    g_log_func("CMD_BLE_MUTE\r\n");
                     if (*payload != 0) {
-                        g_log_func("BLE reset high\r\n");
+                        g_log_func("Mute\r\n");
                         HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 1);
                         return;
                     }
-                    g_log_func("BLE reset low\r\n");
+                    g_log_func("Unmute\r\n");
                     HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 0);
                     return;
                 }
@@ -240,7 +244,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
         else {
             switch (cmd) {
             case 0x5503:
-                g_log_func("CMD_BLE_SECURITY_BACKUP_CODE\r\n");
+                g_log_func("CMD_BLE_SECURITY_BACKUP_CODE XXX\r\n");
                 channel_notify_with_status(1);
                 if (payload[0] == 0xff && payload[1] == 0xff && payload[2] == 0xff) {
                     *(uint16_t *)(ctx + 0x100) = 0xff;
@@ -252,7 +256,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     ctx[0x317] = 1;
                     payload[0] = 0;
                 }
-                g_log_func("SOC saved %d\r\n",
+                g_log_func("Write 0x5503 %d\r\n",
                            ((unsigned)payload[0] + payload[1] + payload[2]) * 2 + 0x7b0);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
@@ -263,7 +267,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 return;
 
             case 0x5521:
-                g_log_func("CMD_BLE_DEFENCE_ALARM_STATE\r\n");
+                g_log_func("CMD_BLE_DEFENCE_LOCK_STATE\r\n");
                 if (*payload == 1) {
                     ctx[0x312] = 1;
                     maybe_set_state_if_unlocked(' ');
@@ -280,8 +284,8 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 }
                 if (ctx[0x312] != 0) {
                     if (HAL_GPIO_ReadPin(GPIOC_BASE, 0x100) == 0) {
-                        g_log_func("App connect Leave, BMS alarm\r\n");
-                        g_log_func("BT set Shipping mode\r\n");
+                        g_log_func("BT virtual unlock\r\n");
+                        g_log_func("Lights P1\r\n");
                         ctx[0x351] = 3;
                         ctx[0x350] = 3;
                         ctx[0x352] = 3;
@@ -291,7 +295,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 return;
 
             case 0x5523:
-                g_log_func("CMD_BLE_DEFENCE_LOCK_STATE\r\n");
+                g_log_func("CMD_BLE_DEFENCE_ALARM_STATE\r\n");
                 channel_notify_with_status(1);
                 switch (*payload) {
                 case 0:
@@ -303,7 +307,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     break;
                 case 1:
                     ctx[0x312] = 1;
-                    g_log_func("BT virtual unlock\r\n");
+                    g_log_func("XXXX-2\r\n");
                     maybe_set_state_if_unlocked('\x0e');
                     break;
                 case 2:
@@ -322,7 +326,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     FUN_0803dbb8();
                     break;
                 default:
-                    g_log_func("Invalid lock state\r\n");
+                    g_log_func("Invalid rx value\r\n");
                     break;
                 }
                 memcpy(rec_scratch, ctx + 0x320, sizeof(rec_scratch));
@@ -342,7 +346,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     maybe_set_pending_request(REQ_ALARM_OFF);
                 } else {
                     if (*payload != 1) {
-                        g_log_func("Invalid rx value\r\n");
+                        g_log_func("Invald SSP value\r\n");
                         return;
                     }
                     maybe_set_pending_request(REQ_ALARM_ON);
@@ -356,7 +360,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     g_log_func(" ERROR Save values\r\n");
                 }
                 if (ssp_ble_enqueue_tx_packet(0x5524, 1, payload, '\0') > 0x80) {
-                    g_log_func("  ERROR SSP place\r\n");
+                    g_log_func("XXXX-2\r\n");
                 }
                 return;
 
@@ -372,7 +376,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
             case 0x5533:
                 g_log_func("CMD_BLE_MOVEMENT_UNIT_SETTING\r\n");
                 if (*payload > 1) {
-                    g_log_func("Invalid unit setting\r\n");
+                    g_log_func("Invald unit setting\r\n");
                     return;
                 }
                 channel_notify_with_status(1);
@@ -461,12 +465,12 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 FUN_0803fc24((uint32_t)(uintptr_t)(ctx + 0x1c4), ctx[0x109]);
                 if (cmd == 0x553c) {
                     if (ssp_ble_enqueue_tx_packet(0x553c, 2, payload, '\0') > 0x80) {
-                        g_log_func("Invalid parameter use (1..4)\r\n");
+                        g_log_func("  ERROR SSP place\r\n");
                     }
                     return;
                 }
                 if (ssp_ble_enqueue_tx_packet(0x5535, 1, payload, '\0') > 0x80) {
-                    g_log_func("Invalid parameter use (1..4)\r\n");
+                    g_log_func("  ERROR SSP place\r\n");
                 }
                 return;
 
@@ -477,7 +481,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 if (*(int16_t *)(ctx + 0x3fc) != -1 && (char)g_eshifter_busy == 0) {
                     g_eshifter_busy = 1;
                     log_print_timestamp_prefix();
-                    g_log_func("Shifter calibrate\r\n");
+                    g_log_func("Shifter on\r\n");
                     FUN_0802954c();
                     return;
                 }
@@ -494,7 +498,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
             case 0x5537:
                 g_log_func("CMD_BLE_MOVEMENT_ESHIFTER_RATIO\r\n");
                 if (ssp_ble_enqueue_tx_packet(0x5537, 6, payload, '\0') > 0x80) {
-                    g_log_func("Invalid parameter use (1..4)\r\n");
+                    g_log_func("  ERROR SSP place\r\n");
                 }
                 {
                     uint8_t region = ctx[0x109];
@@ -522,14 +526,14 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                         g_log_func("  ERROR SSP place\r\n");
                     }
                     ctx[0x108] = *payload;
-                    g_log_func("Shifter mode set\r\n");
+                    g_log_func("Write 0x5538 %d\r\n");
                     memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                     config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
                                              *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
                     channel_notify_with_status(1);
                     return;
                 }
-                g_log_func("Invalid shifter mode\r\n");
+                g_log_func("Invald shifter mode\r\n");
                 return;
 
             case 0x5562:
@@ -537,14 +541,14 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     (maybe_get_bike_state() == 0x15 &&
                      (maybe_get_bike_state() != 0x15 || ctx[0x3e1] == 0)) ||
                     (maybe_get_bike_state() > 0x18 && maybe_get_bike_state() < 0x1e)) {
-                    g_log_func("Ignore alarm-arm\r\n");
+                    g_log_func("Ignore CMD_BLE_STATE_MODULE_STATE\r\n");
                     return;
                 }
-                g_log_func("CMD_BLE_DEFENCE_ALARM_ARM\r\n");
+                g_log_func("CMD_BLE_STATE_MODULE_STATE\r\n");
                 if (*payload == 1) {
                     channel_notify_with_status(1);
-                    g_log_func("BT set autowakeup\r\n");
                     g_log_func("BT set sleep mode\r\n");
+                    g_log_func("Lights P3\r\n");
                     ctx[0x350] = 4;
                     ctx[0x351] = 4;
                     ctx[0x352] = 4;
@@ -552,8 +556,8 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     return;
                 }
                 if (*payload == 2) {
-                    g_log_func("BT set riding mode\r\n");
-                    g_log_func("BT set sleep mode\r\n");
+                    g_log_func("BT set Shipping mode\r\n");
+                    g_log_func("Lights P3\r\n");
                     ctx[0x350] = 4;
                     ctx[0x351] = 4;
                     ctx[0x352] = 4;
@@ -562,7 +566,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 }
                 if (*payload != 0) {
                     channel_notify_with_status(2);
-                    g_log_func("Invalid alarm-arm value\r\n");
+                    g_log_func("Invalid CMD_BLE_STATE_MODULE_STATE\r\n");
                     return;
                 }
                 channel_notify_with_status(1);
@@ -570,11 +574,11 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     if (maybe_get_bike_state() != '2' &&
                         maybe_get_bike_state() != 0 &&
                         maybe_get_bike_state() != 1) {
-                        g_log_func("Ignore autowakeup\r\n");
+                        g_log_func("BT set autowakeup\r\n");
                         maybe_set_state_if_unlocked('\x12');
                         return;
                     }
-                    g_log_func("Already awake\r\n");
+                    g_log_func("Ignore autowakeup\r\n");
                     return;
                 }
                 if (maybe_get_bike_state() == '\f') {
@@ -588,7 +592,8 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                         return;
                     }
                 }
-                g_log_func("BT set Shipping mode\r\n");
+                g_log_func("BT set riding mode\r\n");
+                g_log_func("Lights P1\r\n");
                 ctx[0x351] = 3;
                 ctx[0x350] = 3;
                 ctx[0x352] = 3;
@@ -633,7 +638,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 return;
 
             case 0x5566:
-                g_log_func("CMD_BLE_HORN_SELECTOR\r\n");
+                g_log_func("CMD_BLE_STATE_SOFT_RESET\r\n");
                 if (*payload < 7) {
                     channel_notify_with_status(7);
                     enter_mode3_arm_show_timer();
@@ -641,11 +646,11 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     FUN_08038ec4(*payload);
                     return;
                 }
-                g_log_func("Invalid horn index\r\n");
+                g_log_func("Invald soft reset state\r\n");
                 return;
 
             case 0x5567:
-                g_log_func("CMD_BLE_TRACKING_FIELD\r\n");
+                g_log_func("CMD_BLE_STATE_CLOCK\r\n");
                 FUN_080381d0(*(uint32_t *)payload);
                 return;
 
@@ -693,7 +698,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 return;
 
             case 0x5574:
-                g_log_func("CMD_BLE_HORN_FILE\r\n");
+                g_log_func("CMD_BLE_HORN_SELECTOR\r\n");
                 enter_mode3_arm_show_timer();
                 switch (*payload) {
                 case 0x0a:
@@ -713,7 +718,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     channel_notify_with_status(0x18);
                     break;
                 default:
-                    g_log_func("Invalid horn file\r\n");
+                    g_log_func("Invald SSP value\r\n");
                     return;
                 }
                 ctx[0x318] = *payload;
@@ -732,7 +737,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
             case 0x5581:
                 g_log_func("CMD_BLE_LIGHT_LIGHT_SETTING\r\n");
                 if (*payload > 2) {
-                    g_log_func("Invalid light setting\r\n");
+                    g_log_func("Invald SSP value\r\n");
                     return;
                 }
                 ctx[0x10c] = *payload;
@@ -773,17 +778,17 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                                              *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
                     return;
                 }
-                g_log_func(" ERROR invalid value 0..65535\r\n");
+                g_log_func("  ERROR invalid value 0..65535\r\n");
                 return;
 
             case 0x55a1:
-                g_log_func("CMD_BLE_TEST_FLAGS\r\n");
+                g_log_func("CMD_BLE_DISPLAY_CUSTOM_DISPLAY_ENABLE\r\n");
                 ctx[0xf0] = *payload & 1;
                 ctx[0xf1] = (uint8_t)(((uint32_t)*payload << 0x1e) >> 0x1f);
                 return;
 
             case 0x55a2:
-                g_log_func("CMD_BLE_TESTMODE_A\r\n");
+                g_log_func("CMD_BLE_TOP_HALF_OF_DISPLAY\r\n");
                 *(uint32_t *)(ctx + 0)   = 1;
                 *(uint32_t *)(ctx + 4)   = 10;
                 *(uint32_t *)(ctx + 8)   = 1;
@@ -792,7 +797,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 return;
 
             case 0x55a3:
-                g_log_func("CMD_BLE_TESTMODE_B\r\n");
+                g_log_func("CMD_BLE_BOTTOM_HALF_OF_DISPLAY\r\n");
                 *(uint32_t *)(ctx + 0)   = 0x0b;
                 *(uint32_t *)(ctx + 4)   = 9;
                 *(uint32_t *)(ctx + 8)   = 1;
@@ -818,5 +823,5 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
         }
     }
 
-    g_log_func("Unhandeled SSP message %04X\r\n", cmd, p2);
+    g_log_func("Unhandeled SSP message %04X size %d\r\n", cmd, p2);
 }
