@@ -90,6 +90,8 @@ soft float for now.
 | `0x20009D98` | 4 | `g_log_func` | `log.h` (extern) | `(*g_log_func)(const char *fmt, …)`-style logger. Referenced by `exceptions.c`, `panic.c`, `console.c`. Set once during init (initialiser not yet decoded). |
 | `0x20000083` | 1 | `g_state_flag` | `app.c` | state/mode flag byte; `state_flag_get`/`state_flag_set`. `log_print_timestamp_prefix` saves/zeroes/restores it around a line; also written by `subsystem_update_sm` and the announce path. Plain byte, **not** an IRQ mask. |
 | `0x200000E5` | 1 | `g_sms_track_state` | (modem) | `sms_info_tracking_state_machine` state byte (4-state SMS info-tracking scheduler). |
+| `0x20000070` | 3 | `g_modem_at_timer` | `modem.c` | modem AT-engine scheduler-slot pair (`[0]` send, `[1]` response — reused by POWERON); `[2]` = AT-init command count (13 for SARA, 14 for LARA). |
+| `0x20000294` | ≥0x22A | `g_modem_ctx` | `modem.c` | u-blox SARA modem working context: AT-engine state at `+0`, retry counter `+1`, AT tx scratch buffer `+0x18`, and a per-step `(substate,substep)` byte pair for every `modem_step_*` (`+0x14` POWERON, `+0x218` POWEROFF, `+0x21A..+0x229` SMS/PDP/PING/MESSAGE/LOCATION). |
 | `0x20000914` | ≥0x2C | `g_adc_ctx` | `sensor.c` | ADC/sensor context **shared** by `supply_voltage_read` and `moving_avg10_push`: moving-avg write cursor (byte) `+0x00`, ten `u16` samples `+0x04`, ADC status byte `+0x22`, raw ADC sample (`u16`) `+0x2A`. |
 | `0x20000944` | 4 | `g_app_ctx_ptr` | `app.c` | pointer to the app context used by `channel_resolve_status`; the three channel priority bitmasks are at `*ptr + 0xF4/0xF8/0xFC`. |
 | `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` | UART/bus driver context; `+0xB3C` = TX ring-buffer pointer (`uart_send_byte`), `+0xB40` = RX ring-buffer pointer (`ssp_rx_byte`). |
@@ -170,6 +172,26 @@ on-board EEPROM (AT24C, dev `0xA0`) bus; its HAL handle lives at SRAM
 `0x20009B04`. The GPIOC AF pins are the other peripheral I/O (inter-module-bus
 UART + the I2C3 normal SCL/SDA). The **window watchdog** (WWDG `0x40002C00`) is
 refreshed each loop by `watchdog_kick` (writes `0x7F` to `WWDG_CR`).
+
+### Motion sensor — ST LIS3DH accelerometer
+
+The anti-theft motion sensor is an **ST LIS3DH** 3-axis accelerometer (confirmed
+by the `status_process` log strings `"LIS3DH high sense"` / `"LIS3DH low sense"`).
+`status_process` switches its sensitivity between a high-sensitivity standby/theft
+mode and a ride mode, and consumes its motion interrupt as the `"Mems trigger"`
+input to the alarm escalation (alongside the wheel-rotation sensor's `"Wheel
+trigger"`). Bus wiring (I2C/SPI instance + INT pin) not yet pinned down.
+
+### Cellular modem (u-blox SARA-G350) — power & control pins
+
+The modem driver (`src/modem.c`, `docs/modem.md`) drives these lines (matching
+the masks above): **PB4** main-supply enable (1 = on), **PA15** level-shifter
+enable, **PE6** reset (1 = held; deasserted at power-on — the `E output high
+0x40`), **PB0** PWR_KEY (held low, pulsed high ~150 ms to toggle the module — the
+`B output high 0x400` is a sibling), **PB1** aux (held low), **PE10** SIM-present
+detect (input, in the `E inputs 0x410` group; read by `sim_iccid_check`). The
+modem-supply rail **Vgsm** is read via ADC (`adc_read_vgsm`); POWEROFF spins
+until it falls below 200 mV. The AT channel is a dedicated UART (the SARA module).
 
 ## Vector table (head, from raw bytes — image @ flash `0x08020200`)
 
