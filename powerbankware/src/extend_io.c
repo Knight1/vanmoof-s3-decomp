@@ -48,6 +48,7 @@ static void extend_io_aux(void)
 {
 }
 
+/* SOC% -> bar level: >=90/75/50/25/1% lights 5/4/3/2/1 white segments (0 = empty). */
 static uint8_t soc_bar(uint8_t soc)
 {
     if (soc >= 0x5a) return 0xfc;
@@ -82,10 +83,12 @@ static void blink_step(uint16_t limit)
  * Extend_IO expander when it differs from the last value sent. */
 static void extend_io_commit(void)
 {
+    /* Output byte: bit0 = bypass/recovery flag (mode bit12); bits 1..7 come from
+     * the level (bit1 = fault/red, bit2 = "on"/white, bits 3..7 = bar segments). */
     *s_led_out = (*s_mode & 0x1000) ? 1 : 0;
     *s_led_out = (uint8_t)(*s_led_out | (*s_led_level & 0xfe));
     if (*s_led_out == *s_led_shadow) {
-        return;
+        return;                       /* unchanged -> don't re-send over SPI */
     }
 
     uint8_t retry = 0;
@@ -133,7 +136,9 @@ void extend_io_update(void)
     uint8_t state = *s_state;
     uint8_t soc   = *s_soc;
 
-    /* All-on / fault patterns. */
+    /* Any protection / fault / shipping / power-down state (7..0x1B, and 0xFF):
+     * solid full bar in red. 0xFA = all 5 segments + the fault marker (bit1)
+     * instead of the normal "on" marker (bit2); blink off (steady). */
     if ((state >= 7 && state <= 0x18) ||
         (state >= 0x19 && (state < 0x1c || state == 0xff))) {
         *s_led_level = 0xfa;
@@ -143,7 +148,7 @@ void extend_io_update(void)
     }
 
     switch (state) {
-    case 3:
+    case 3:   /* idle hold: SOC bar, then gently pulse full<->one-dimmer once settled */
         if (*s_cnt < 200) {
             *s_led_level = soc_bar(soc);
             *s_blink = 0;
@@ -158,8 +163,8 @@ void extend_io_update(void)
         extend_io_commit();
         return;
 
-    case 2:
-        if (soc < 0x5f || *s_val644 > 299) {
+    case 2:   /* operating/charging: sweep-fill the bar up to the SOC level */
+        if (soc < 0x5f || *s_val644 > 299) {      /* actively charging (not full) */
             if (soc < 0x5a) {
                 if (soc < 0x4b) {
                     if (soc < 0x32) {
@@ -198,14 +203,14 @@ void extend_io_update(void)
                 blink_step(0x17);
             }
         } else {
-            *s_led_level = 0xfc;
+            *s_led_level = 0xfc;                   /* full / not charging: solid full bar */
             *s_blink = 0;
         }
         extend_io_commit();
         return;
 
     case 5:
-    case 6:
+    case 6:   /* boot / charge-window: bar off, drop the bypass flag */
         *s_led_level = 0;
         *s_blink = 0;
         *s_mode &= (uint16_t)~0x1000u;
@@ -216,6 +221,7 @@ void extend_io_update(void)
         break;       /* states 0, 1, 4, 0x1c..0xfe: steady SOC bar */
     }
 
+    /* Normal case: steady SOC bar. */
     *s_led_level = soc_bar(soc);
     *s_blink = 0;
     extend_io_commit();
