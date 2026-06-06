@@ -10,9 +10,23 @@ BLE/console commands (`ble-commands.md`, `console.md`) are the *inputs* and the
 state byte is the *position*, **`status_process` is the logic that moves between
 states and acts in each one.**
 
-Too large to render as a single C function (the decompiler bails); decoded here
-as its call surface + the per-state behaviour vocabulary (its rodata log
-strings, which name every branch). Named + documented, not sourced.
+**Now SOURCED as full faithful C → `src/states.c`** (alongside `alarm_state_name`).
+The decompiler renders the whole function once its prototype is fixed to the
+single context param (`void status_process(uint8_t *ctx)`); the ~2300-line body
+is a common prologue followed by a 62-case `switch` on the bike-state byte
+`G_STATE[4]` (cases `0..0x3D` = the `alarm_state_name` codes). It was transcribed
+region-by-region (9 agents over the case ranges), assembled, and **adversarially
+verified** against the live disassembly (the verify pass caught 3 slips — a
+deref-vs-address argument in case 9 and two copy-pasted log strings in cases
+0x1b/0x26 — now fixed). Build clean (gc-sectioned, `text 1996`).
+
+Model: the dozens of `DAT_*` literal aliases the decompiler created collapse to a
+few real bases — `ctx` (the param), `G_STATE` (`signed char *`@`0x20000029`, state
+byte `[4]`, per-state scheduler-slot handles at `[0x14..0x3E]`), `G_CLK`
+(`@0x200001D8`, the clocking / PIN-attempt / odometer aux block) and `g_log_func`.
+ARM's unsigned `char` means the OEM `== -6` / `== -0x12` slot sentinels require
+`signed char` for those two bases. The per-state log vocabulary below names every
+branch; the call surface is the catalogue of actions.
 
 ## Sensors it reads each tick
 
