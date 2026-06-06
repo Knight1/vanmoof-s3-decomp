@@ -107,6 +107,8 @@ soft float for now.
 | `0x20000068` | ≥8 | `g_mode_state` | `app.c` | mode/state block: byte[0] = mode/sub-mode (`aux_mode_byte_get`/`set_mode_state_byte`; `enter_mode3_arm_show_timer` writes 3), byte[7] = scheduler slot id (`0xFA` = none). |
 | `0x20009B04` | ~0x24 | `g_i2c3_handle` | `i2c.c`/`eeprom.c` | I2C3 HAL handle (`I2C_HandleTypeDef`, Instance `0x40005C00`); the EEPROM bus (`eeprom_write_region`) + the bit-bang recovery (`i2c3_handle_init`/`deinit`). |
 | `0x20009728` | 0x14 | `g_wwdg_desc` | `watchdog.c` | WWDG refresh descriptor (built by `watchdog_init`): `{WWDG_CR 0x40002C00, 0x180, 0x7F, 0x7F, 0}`. `wwdg_hw_init` programs `WWDG_CR=0xFF` (T|WDGA) + `WWDG_CFR=0x1FF`; `watchdog_kick`→`wdg_reg_write_from_desc` reloads `WWDG_CR=0x7F` each loop. |
+| `0x20000101` | 1 | `g_boot_retry_budget` | `main.c` | boot self-test retry budget. `mainware_boot_init_sequence` decrements it after an I2C-bus-error recovery pass (≥3 device failures); the do/while loop exits when it reaches 0 (set 0 directly on a clean pass). |
+| `0x20009A84` | ≥0x40 | `g_led_pwm_obj` | `main.c` | TIM1 (`0x40010000`) handle / LED-driver object: `obj_set_field34/38` + `led_channel3_set_brightness` zero its `+0x34/+0x38/+0x3C` PWM-duty channels at boot; `tim_channel_enable_output(&obj, 0/4/8)` enables TIM1 CH1/2/3. |
 
 ### C runtime (startup) layout
 
@@ -182,7 +184,9 @@ by the `status_process` log strings `"LIS3DH high sense"` / `"LIS3DH low sense"`
 `status_process` switches its sensitivity between a high-sensitivity standby/theft
 mode and a ride mode, and consumes its motion interrupt as the `"Mems trigger"`
 input to the alarm escalation (alongside the wheel-rotation sensor's `"Wheel
-trigger"`). Bus wiring (I2C/SPI instance + INT pin) not yet pinned down.
+trigger"`). **I2C address 0x33** (WHO_AM_I reads back 0x33), with auto-increment
+(`reg | 0x80`); brought up at boot by `lis3dh_accel_init` (`0x0803D0BC`, enables
+**NVIC IRQ 0x48 + 0x49** for the two INT lines) → `lis3dh_config_motion_int(0,6)`.
 
 ### Cellular modem (u-blox SARA-G350) — power & control pins
 
@@ -194,6 +198,55 @@ enable, **PE6** reset (1 = held; deasserted at power-on — the `E output high
 detect (input, in the `E inputs 0x410` group; read by `sim_iccid_check`). The
 modem-supply rail **Vgsm** is read via ADC (`adc_read_vgsm`); POWEROFF spins
 until it falls below 200 mV. The AT channel is a dedicated UART (the SARA module).
+
+### On-board peripherals & I2C devices (boot init, `main.c` / `docs/boot.md`)
+
+`main` brings up the clock tree then ~30 peripherals; the bases + baud rates come
+from the individual init functions (named this pass). Clock tree (cold/warm):
+HSE + PLL (**M 6 / N 96 / P 2**), SYSCLK ← PLL, **FLASH_LATENCY_3**, VOS scale 1;
+cold uses the **LSI**, warm the **LSE** (RTC already running). `SCB->VTOR` is
+re-pointed to `0x08020200` as the first instruction of `main`.
+
+| Peripheral | Base | Config | Init fn |
+| --- | --- | --- | --- |
+| USART1 | `0x40011000` | 115200 8N1 | `usart1_init` |
+| USART2 | `0x40004400` | 115200 | `usart2_init` |
+| USART3 | `0x40004800` | 9600 | `usart3_init` |
+| UART4 | `0x40005000` | 115200 | `uart4_init` |
+| UART5 | `0x40004C00` | 9600 | `uart5_init` |
+| USART6 | `0x40011400` | 38400 | `usart6_init` |
+| UART7 | `0x40007C00` | 115200 | `uart7_init` |
+| UART8 | `0x40007800` | 115200 | `uart8_init` |
+| I2C2 | `0x40005400` | 400 kHz | `i2c2_init` |
+| I2C3 | `0x40005C00` | 100 kHz | `i2c3_handle_init` |
+| TIM1 | `0x40010000` | PWM, period 2400, 3 OC ch | `tim1_pwm_init` |
+| TIM6 | `0x40001000` | presc 66 / period 50 | `tim6_init` |
+| TIM7 | `0x40001400` | presc 1199 / period 10000 | `tim7_init` |
+| TIM10 | `0x40014400` | presc 95 / period 5000 | `tim10_init` |
+| ADC1 | `0x40012000` | regular ch 4–7 | `adc1_init` |
+| RTC | `0x40002800` | 24 h, 1 Hz (async 0x7F / sync 0xF9) | `rtc_init` |
+| CRC | `0x40023000` | HW CRC-32 | `crc_init` |
+| DMA1/DMA2 | `0x40026000/0400` | clocks + IRQ 0x0C/0x38 | `dma_controller_init` |
+| WWDG | `0x40002C00` | reload 0x7F each loop | `watchdog_init` |
+
+On-board I2C devices, probed in the `mainware_boot_init_sequence` self-test
+(each failure increments a fault counter; ≥3 → I2C bus recovery + retry):
+
+| Device | Role | I2C addr (8-bit) | Bring-up / fail log |
+| --- | --- | --- | --- |
+| HDC1080 | temperature / humidity | `0x80` (reg 0x02 config) | `hdc1080_write_config_reg` / `" ERROR HDC1080"` |
+| STC3115 | LiPo gas-gauge (fuel) | shared bus (handle `0x20009B04`) | `stc3115_wake`→`stc3115_fuel_gauge_init` / `"ERR ST3115 wake"` |
+| LIS3DH | 3-axis accelerometer | `0x33` | `lis3dh_accel_init` / `"ERR LIS3DH"` |
+| MAX9768 | audio amplifier | `0x96` (config 0xD6) | `audio_amp_init` / `"ERR init MAX9768"` |
+| AT24-series EEPROM | state + config records | `0xA0` (I2C3) | `eeprom_read_config_with_crc_fallback` / `"ERROR I2C eerom"` |
+| LED-matrix controller | display + ambient light sensor | `0x60`/`0x66` (handle `0x20009BB8`) | `display_module_init` / `"ERR Led Display"`; light sensor via `display_write_reg20_init` / `"ERR Light sensor"` |
+
+Other boot pins: **PD7** powered high after init; **PD15/PA12/PA15, PB3/9/10/15,
+PD10/11/12/13, PE2/3/5** driven as power/LED rails; **PE2** = amp enable, **PD5**
+toggled around the amp probe; **PE10** read as SIM-source detect (low →
+`"SIM: PCB"` + set **PE12**; high → `"SIM: Holder"` + clear PE12); **PC8** read for
+a state-record default. The firmware self-identifies as **"ES3"** (boot banner
+`"ES3 v%d.%02d.%02d"`, model string `"%cS3.%c"` → e.g. `ES3.2`).
 
 ## Vector table (head, from raw bytes — image @ flash `0x08020200`)
 

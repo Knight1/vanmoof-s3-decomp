@@ -124,13 +124,17 @@ Default_Handler:
     .size   Default_Handler, .-Default_Handler
 
 /* ---------------------------------------------------------------------------
- * Weak placeholders so the partial tree links. Each is overridden the moment
- * its real definition is added:
- *   main             — decoded (0x0803DEA8) but not yet sourced; spins here.
+ * Link entry + placeholders so the partial tree links:
+ *   main             — the real super-loop is sourced in src/main.c (OEM
+ *                      0x0803DEA8) but defined __attribute__((weak)) there, so
+ *                      this STRONG spin-stub remains the link target while ~70
+ *                      of main's callees are still unsourced (the closure isn't
+ *                      ready to root). When it is, drop this stub and flip
+ *                      src/main.c's main to strong so `bl main` runs the loop.
  *   __libc_init_array— newlib CRT (vendor-stock); empty until libc is linked.
  * ------------------------------------------------------------------------- */
     .section .text.main_stub,"ax",%progbits
-    .weak   main
+    .global main
     .type   main, %function
 main:
     b       .

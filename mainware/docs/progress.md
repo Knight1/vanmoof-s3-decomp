@@ -45,12 +45,12 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 548 | pending (auto-named `FUN_xxxxxxxx`) |
-| 22  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`, `HAL_I2C_Mem_Write`, `HAL_I2C_Init`, `HAL_I2C_DeInit`; `memcmp` (newlib) |
+| 473 | pending (auto-named `FUN_xxxxxxxx`) |
+| 23  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `memset`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`, `HAL_I2C_Mem_Write`, `HAL_I2C_Init`, `HAL_I2C_DeInit`; `memcmp` (newlib) |
 | 0   | in-progress |
-| 153 | decomp-c — `systick.c` (3), `console.c` (49), `scheduler.c` (7), `exceptions.c` (10), `panic.c` (2), `app.c` (16), `util.c` (4), `system_stm32f413.c` (1), `ssp.c` (9), `flash.c` (6), `crc.c` (3), `audio.c` (1), `log.c` (8), `sensor.c` (2), `uart.c` (1), `net.c` (2), `gpio.c` (1), `eeprom.c` (1), `i2c.c` (2), `watchdog.c` (5), `states.c` (1), `modem.c` (16), `ble.c` (1), `ble_read.c` (1), `update.c` (1) — see per-module log below |
+| 157 | decomp-c — `systick.c` (3), `console.c` (49), `scheduler.c` (7), `exceptions.c` (10), `panic.c` (2), `app.c` (16), `util.c` (4), `system_stm32f413.c` (1), `ssp.c` (9), `flash.c` (6), `crc.c` (3), `audio.c` (1), `log.c` (8), `sensor.c` (2), `uart.c` (1), `net.c` (2), `gpio.c` (1), `eeprom.c` (1), `i2c.c` (2), `watchdog.c` (5), `states.c` (1), `modem.c` (16), `ble.c` (1), `ble_read.c` (1), `update.c` (1), `main.c` (4) — see per-module log below |
 | 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`) |
-| 89  | named (rename in Ghidra, no source yet) — startup/loop spine (`main`, `boot_init_cold/warm`, `mainware_boot_init_sequence`, `status_process`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int`, `accel_enable`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
+| 159 | named (rename in Ghidra, no source yet) — `status_process` (the per-state engine; the spine `main`/`boot_init_cold`/`boot_init_warm`/`mainware_boot_init_sequence` are now **SOURCED → `main.c`**, with their **~74 callees named this pass**, `docs/boot.md`: peripheral init `hal_mcu_init`/`dma_controller_init`/`usart1·2·3·6_init`/`uart4·5·7·8_init`/`i2c2_init`/`tim1_pwm_init`/`tim6·7·10_init`/`adc1_init`/`rtc_init`/`crc_init`/`comm_buffers_register_all`, clock `rcc_oscillator_config`/`rcc_clock_config`/`rcc_periph_clock_config`/`tim_channel_enable_output`, loop services `light_tick_update`/`light_pattern_step`/`modbus_shifter_link_monitor`/`lipo_charge_state_monitor`/`ssp_ble_tx_queue_pump`/`motor_fw_update_fsm_step`/`sspm_rx_reply_handler`/`sspm_tx_queue_pump`/`led_matrix_render·overlay_frame_region`/`dsp_recovery_telemetry_pump`/`charger_and_pc1_sense_debounce`/`supply_voltage_sample_step`/`output_value_filter_step`/`ble_telemetry_change_broadcast`/`update_sm_is_idle`/`log_upload_sm_step`/`display_mode_sm_step`/`factory_reset_sm_step`/`staged_msg_validate_and_dispatch`/`button_press_state_machines_step`/`app_ctx_ptr_set`, boot devices `display_module_init`/`hdc1080_write_config_reg`/`stc3115_wake`/`stc3115_fuel_gauge_init`/`lis3dh_accel_init`/`audio_amp_init`/`display_write_reg20_init`/`eeprom_read_id_block`/`eeprom_read_config_with_crc_fallback`/`flash_read_config_with_crc_restore`/`backup_code_init_default`/`region_speed_preset_table_load`/`flash_program_rdp_level_once`/`reset_reason_log_and_clear`/`log_wake_reason`/`log_console_subsystem_init`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int`, `accel_enable`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
 
 `function_count = 814` per `ghidra/exports/mainware_program.json` (3 OEM functions newly
 created this pass: `console_cmd_shipping`, `shiftdebug_pump_task`, `bat_reset_release_cb`).
@@ -66,6 +66,25 @@ itself was saved after each session.
 
 ## Per-module decomp log
 
+- `main.c` — **the application capstone**, now SOURCED (4 functions, faithful C,
+  adversarially verified): `main` (`0x0803DEA8`, super-loop), `boot_init_cold`
+  (`0x0803DDE0`), `boot_init_warm` (`0x0803DADC`), `mainware_boot_init_sequence`
+  (`0x0803FC94`). Full writeup → `docs/boot.md`. The OEM's own assert filename
+  for this TU is literally `"src/main.c"` (rodata `0x08053320`). Entry relocates
+  `SCB->VTOR=0x08020200`, dispatches warm (`*0x20000000==0x55AA55CF`, HSE+LSE) vs
+  cold (HSE+LSI) clock setup (PLL HSE/6×96/2, FLASH_LATENCY_3), runs ~30
+  peripheral inits (8 UARTs, I2C2, TIMs, ADC1, RTC, CRC, DMA, WWDG, scheduler),
+  then `mainware_boot_init_sequence` (banner `"ES3 v%d.%02d.%02d"`, GPIO rails,
+  I2C device self-test HDC1080/STC3115/LIS3DH/MAX9768 with a fault-counted retry
+  loop, state-record + config-schema defaults, SIM-source detect, model string).
+  The infinite loop ticks lights → modem SM → shifter/BMS Modbus → BLE/SSP
+  bridges → motor recovery → LED matrix → `status_process` → telemetry →
+  `subsystem_update_sm` each pass. **Link:** `main` is weak so the startup stub
+  stays the entry (closure not yet rooted) — build clean, `text 1996`. 31 strings
+  byte-exact; the ~74 callees named in Ghidra (one verify-pass correction:
+  `0x080398CE` is `stc3115_wake`, not the agents' "accel_disable" — proven by its
+  caller gating `stc3115_fuel_gauge_init`). RCC names de-rotated:
+  `0x0802643C`=OscConfig, `0x08027208`=ClockConfig, `0x08026064`=PeriphCLKConfig.
 - **Per-state engine** (`status_process` `0x0802AAF8`, ~14 KB) — decoded +
   documented (`docs/status-process.md`), the bike's central behaviour engine
   ticked every super-loop: dispatches on the bike-state byte and runs each
@@ -294,10 +313,13 @@ itself was saved after each session.
 
 ## Application structure (main / super-loop)
 
-`main` (`0x0803DEA8`, 613 B) is decoded structurally but not yet sourced —
-it calls ~60 still-opaque subsystem functions and indexes a context struct
-only partly understood, so per leaf-first discipline its C waits on those
-callees. The shape:
+**`main` (`0x0803DEA8`) + the boot chain are now SOURCED → `src/main.c`** (full
+map in `docs/boot.md`), adversarially verified behaviour-equivalent against the
+disassembly. `main` is defined `__attribute__((weak))` so the strong startup
+spin-stub stays the link entry until the ~70-callee closure is sourced — the
+real loop compiles + warning-checks but gc-sections out (build stays clean,
+`text 1996`); flip to strong + drop the stub to root the graph. The ~74 direct
+callees were named this pass. The shape:
 
 **Entry / one-time init.** First instruction writes `SCB->VTOR = 0x08020200`
 — mainware re-points the vector table to its **own** table, overriding the
