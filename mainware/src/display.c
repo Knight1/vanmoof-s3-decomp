@@ -72,8 +72,8 @@ extern int  FUN_080248d8();   /* I2C2 blocking mem-read  (CubeF4 HAL) */
 extern int  FUN_08024bc0();   /* I2C2 DMA mem-write      (CubeF4 HAL) */
 extern int  FUN_0803c8a8();   /* I2C2 bus-busy check (0 = ok, 2 = busy) */
 extern int  FUN_0803c8d4();   /* I2C2 deinit */
-extern int  FUN_0803a588();   /* clamp + linear range-scale */
-extern int  FUN_0804031c();   /* shared announce/event-slot clear */
+extern int  telemetry_map_clamp();   /* clamp + linear range-scale */
+extern int  announce_records_reset();   /* shared announce/event-slot clear */
 extern int  i2c2_init();
 
 /* file-static helpers, defined below in OEM address order. */
@@ -160,7 +160,7 @@ void display_mode_sm_step(uint8_t *ctx)
     case 0:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            FUN_0804031c(7);
+            announce_records_reset(7);
             set_mode_state_byte(6);
         }
         break;
@@ -1509,7 +1509,7 @@ void matrix_draw_speed(uint32_t speed, char param_2, uint32_t param_3,
             }
 
             /* scale speed 7..0x5c -> bar level 0..0x15 (clamp+linear) */
-            level = (uint8_t)FUN_0803a588(speed, 7, 0x5c, 0, 0x15);
+            level = (uint8_t)telemetry_map_clamp(speed, 7, 0x5c, 0, 0x15);
 
             if (blink == 1) {
                 /* param_2 read as signed char (LDRSB at sp+0x14) */

@@ -66,17 +66,17 @@ extern int maybe_enqueue_tx_message();
 extern int sched_timer_arm_or_alloc();
 extern int motor_fw_update_fsm_step();
 extern int console_cmd_battery();
-extern int FUN_08037ea0();   /* bus ring enqueue PDU */
-extern int FUN_08037ede();   /* bus ring peek/has-frame */
-extern int FUN_08037f22();   /* bus ring reset */
-extern int FUN_08037e04();
-extern int FUN_08030858();
-extern int FUN_0802aad8();
-extern int FUN_08039df8();
-extern int FUN_0803ea88();
-extern int FUN_0803e314();
-extern int FUN_0803e414();
-extern int FUN_0803e4ac();
+extern int bus_queue_push();   /* bus ring enqueue PDU */
+extern int bus_queue_pop();   /* bus ring peek/has-frame */
+extern int bus_queue_reset();   /* bus ring reset */
+extern int shift_aux_state_reset();
+extern int scheduler_slot_get_remaining();
+extern int status_clear_pulse_flag();
+extern int bus_queue_peek_status();
+extern int battery_fault_warning_report();
+extern int battery_charge_lookup();
+extern int battery_charge_complete_watchdog();
+extern int battery_set_charge_mode();
 
 /* ───────────────────────────────────────────────────────────────────────── */
 /*
@@ -124,7 +124,7 @@ int modbus_bat_submit(void *frame)
 {
     int iVar1;
 
-    iVar1 = (int)FUN_08037ea0(*(void **)(g_bat_modbus_ctx + 0xE74), frame);
+    iVar1 = (int)bus_queue_push(*(void **)(g_bat_modbus_ctx + 0xE74), frame);
     return (iVar1 != 0);
 }
 
@@ -215,7 +215,7 @@ _Bool bat_modbus_reinit(void)
 {
     int iVar1;
 
-    iVar1 = (int)FUN_08037f22(*(void **)(g_bat_modbus_ctx + 0xE74));
+    iVar1 = (int)bus_queue_reset(*(void **)(g_bat_modbus_ctx + 0xE74));
     return iVar1 == 0;
 }
 
@@ -300,8 +300,8 @@ uint8_t batteryware_update_status_get(void)
  *   DAT_08039F24 = 0x20009D98 -> g_log_func
  *   DAT_08039F28 = 0x0805296C -> "BMS reset end\r\n"
  *
- * FUN_08037EDE: generic ring/queue dequeue helper.  Called as
- *   FUN_08037EDE(*(void**)(g_bat_modbus_ctx + 0xE74), g_bat_frame)
+ * bus_queue_pop: generic ring/queue dequeue helper.  Called as
+ *   bus_queue_pop(*(void**)(g_bat_modbus_ctx + 0xE74), g_bat_frame)
  * to pull the next queued request frame into g_bat_frame; returns 0 on success.
  */
 
@@ -318,7 +318,7 @@ uint32_t bat_modbus_txn_pump(void)
 
     case 0:
         /* Dequeue the next request frame from the bus handle into g_bat_frame. */
-        rc = FUN_08037ede(*(void **)(g_bat_modbus_ctx + 0xE74),
+        rc = bus_queue_pop(*(void **)(g_bat_modbus_ctx + 0xE74),
                           (void *)g_bat_frame);
         if (rc == 0) {
             g_bat_modbus_ctx[0xE78] = 1;
@@ -821,10 +821,10 @@ void modbus_bat_service_step(uint32_t param_1, uint32_t param_2,
  * Then, based on the charging-state code (ctx+0x3FC):
  *   -1  : no battery -> force charge% to 200 (sentinel)
  *   else: dispatch on the clamped power state (0..6):
- *         0,3,4,5,6 : run the normal charge-curve helper (FUN_0803E314);
+ *         0,3,4,5,6 : run the normal charge-curve helper (battery_charge_lookup);
  *                     if it returns >=0 latch the resulting display code
- *                     (FUN_0803E4AC); if that code == 6, kick the
- *                     charge-timer scheduler (FUN_0803E414).
+ *                     (battery_set_charge_mode); if that code == 6, kick the
+ *                     charge-timer scheduler (battery_charge_complete_watchdog).
  *         1 : reset charge% to 0; if helper result > 3, set display 2.
  *         2 : reset charge% to 0; if helper result > 9, set display 4;
  *             if helper result < 4, set display 1.
@@ -884,33 +884,33 @@ void battery_charge_display_step(int param_1)
         case 4:
         case 5:
         case 6:
-            charge_state_i = FUN_0803e314((int)charge_state, aux_flags,
+            charge_state_i = battery_charge_lookup((int)charge_state, aux_flags,
                                           (int)(int16_t)(level_raw - 0xaab),
                                           ctx_charge_field, disp_code);
             if (-1 < charge_state_i) {
-                FUN_0803e4ac(disp_code[0]);
+                battery_set_charge_mode(disp_code[0]);
             }
             if (disp_code[0] == '\x06') {
-                FUN_0803e414((int)*(int16_t *)(param_1 + 0x3fe), ctx_charge_field);
+                battery_charge_complete_watchdog((int)*(int16_t *)(param_1 + 0x3fe), ctx_charge_field);
             }
             break;
         case 1:
             *(uint16_t *)(param_1 + 0x3b2) = 0;
             if (3 < charge_state_i) {
-                FUN_0803e4ac(2);
+                battery_set_charge_mode(2);
             }
             break;
         case 2:
             *(uint16_t *)(param_1 + 0x3b2) = 0;
             if (9 < charge_state_i) {
-                FUN_0803e4ac(4);
+                battery_set_charge_mode(4);
             }
             if (charge_state_i < 4) {
-                FUN_0803e4ac(1);
+                battery_set_charge_mode(1);
             }
             break;
         default:
-            FUN_0803e4ac(0);
+            battery_set_charge_mode(0);
             break;
         }
     }
@@ -1057,7 +1057,7 @@ void battery_telemetry_step(int param_1)
             log_print_timestamp_prefix();
             g_log_func("BMS set discharge\r\n");
             *(uint16_t *)(param_1 + 0x402) = 0;
-            FUN_0802aad8();
+            status_clear_pulse_flag();
             HAL_GPIO_WritePin((void *)0x40020C00u, 0x2000, 0);   /* PD13 */
             bms_modbus_write(8, 1);
             bms_modbus_write(9, 0);
@@ -1153,7 +1153,7 @@ void battery_telemetry_step(int param_1)
             log_print_timestamp_prefix();
             g_log_func("BMS Resetting %d\r\n", *(uint16_t *)(param_1 + 0x3b0));
             sched_timer_arm_or_alloc(15000);
-            FUN_08037e04();
+            shift_aux_state_reset();
             st[8] = *(uint8_t *)(param_1 + 0x10c);
             *(uint8_t *)(param_1 + 0x10c) = 2;
             HAL_GPIO_WritePin((void *)0x40020400u, 0x20, 1);   /* BMS reset on */
@@ -1211,7 +1211,7 @@ void battery_telemetry_step(int param_1)
             bms_modbus_read(3, 4);
         }
         if ((100 < *(uint16_t *)(param_1 + 0x3c2)) &&
-            (uVar7 = FUN_08030858(st[0]), 1000 < uVar7)) {
+            (uVar7 = scheduler_slot_get_remaining(st[0]), 1000 < uVar7)) {
             scheduler_start(st[0], 1000, 0);
         }
         if (st[8] != 3) {
@@ -1235,7 +1235,7 @@ void battery_telemetry_step(int param_1)
             bms_modbus_read(2, 1);
             bms_modbus_read(0x28, 1);
         }
-        FUN_0803ea88(param_1);
+        battery_fault_warning_report(param_1);
         st[6] = 10;
         break;
 
@@ -1248,7 +1248,7 @@ void battery_telemetry_step(int param_1)
 
     case 0x0e:
         if (scheduler_slot_is_idle(st[5]) != 0) {
-            FUN_0803ea88(param_1);
+            battery_fault_warning_report(param_1);
             scheduler_start(st[5], 100, 0);
             st[3] = 1;
         }
@@ -1403,7 +1403,7 @@ void battery_state_process(int param_1, int param_2)
     }
 
     case 9: /* wait for write ack, advance / retry */
-        if ((param_2 == 1) && (FUN_08039df8() == 0)) {
+        if ((param_2 == 1) && (bus_queue_peek_status() == 0)) {
             state_flag_set(0);
             /* "%d/%d\r" -- progress (written / total) */
             g_log_func("%d/%d\r",

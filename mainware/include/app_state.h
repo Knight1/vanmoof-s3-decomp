@@ -49,7 +49,7 @@ struct session_ctx {
                                      *           0=EU, 1=US, 2=JP, 3=OFFROAD
                                      *           (OFFROAD removes the speed cap).
                                      *           Pushed to the drive subsystem via
-                                     *           the config-apply (FUN_08031728). */
+                                     *           the config-apply (config_persist_dual_bank). */
     uint8_t  _pad1b[0x3A];          /* +0x10A..+0x143 */
     uint8_t  region_lock;           /* +0x144 — region lock state: 1=off-road
                                      *           disabled, 2=locked, else unlocked.

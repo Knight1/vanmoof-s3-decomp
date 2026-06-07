@@ -89,8 +89,8 @@ extern void    update_mode_request(char mode);
 extern void    watchdog_kick(void);
 extern uint32_t systick_now(void);
 extern void    state_flag_set(int on);
-extern void    flash_cache_disable(void);
-extern void    flash_cache_enable(void);
+extern void    wwdg_apb_clk_disable(void);
+extern void    wwdg_apb_clk_enable(void);
 extern int     download_chunks_pending_count(void);
 extern int     shifter_update_status_get(void);
 extern void    shifter_update_request(int req);
@@ -309,16 +309,16 @@ void subsystem_update_sm(int param_1)
     case 7: {  /* ERASE */
         int err;
         g_log_func("Erasing shadow flash %d Kb\r\n", *(uint32_t *)(sm + 0x1a8) >> 10);
-        flash_cache_disable();
+        wwdg_apb_clk_disable();
         err = flash_erase(*(int *)(sm + 0x1a4), *(int *)(sm + 0x1a8));
         if (err == 0) {
-            flash_cache_enable();
+            wwdg_apb_clk_enable();
             watchdog_kick();
             g_log_func("OK\r\n");
             sm[0] = 8;
             *(uint32_t *)(sm + 0x1ac) = systick_now();
         } else {
-            flash_cache_enable();
+            wwdg_apb_clk_enable();
             watchdog_kick();
             g_log_func("ERROR %d\r\n", err);
             testmode_command_dispatch(5);

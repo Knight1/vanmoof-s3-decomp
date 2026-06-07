@@ -51,15 +51,15 @@ extern unsigned int maybe_enqueue_tx_message(uint16_t id, int kind, uint32_t src
 
 /* Helpers still to be decoded — kept as opaque externs so we call them at
  * the right address for behavioural equivalence. */
-extern uint8_t  FUN_0803a588(uint8_t v, int a, int b, int c, int d); /* SoC scale/clamp -> % */
-extern uint8_t  FUN_0802a87c(void);                    /* BMS sw-version byte (0x5542) */
-extern uint8_t  FUN_08037160(void);                    /* charger state (0x5543) */
-extern void    *FUN_0802a9dc(int arg);                 /* testmode blob, 0x60 B (0x5551) */
-extern uint32_t FUN_080380ec(void);                    /* tracking/modem field (0x5567) */
-extern uint8_t  FUN_08040350(void);                    /* button state A (0x5568) */
-extern uint8_t  FUN_08040368(void);                    /* button state B (0x5568) */
-extern int      FUN_08037a68(void);                    /* LED channel state (0x5582) */
-extern int      FUN_08037aac(void);                    /* light-sensor reading (0x5584) */
+extern uint8_t  telemetry_map_clamp(uint8_t v, int a, int b, int c, int d); /* SoC scale/clamp -> % */
+extern uint8_t  ble_get_charge_plug_state(void);                    /* BMS sw-version byte (0x5542) */
+extern uint8_t  charge_level_adc_get(void);                    /* charger state (0x5543) */
+extern void    *ble_build_testmode_versions_blob(int arg);                 /* testmode blob, 0x60 B (0x5551) */
+extern uint32_t rtc_now_epoch_seconds(void);                    /* tracking/modem field (0x5567) */
+extern uint8_t  gpio_pc0_is_low(void);                    /* button state A (0x5568) */
+extern uint8_t  gpio_pc1_is_low(void);                    /* button state B (0x5568) */
+extern int      ble_get_led_channel_state(void);                    /* LED channel state (0x5582) */
+extern int      light_sensor_read_step(void);                    /* light-sensor reading (0x5584) */
 
 /* The OEM log calls take two shapes: (*log[2])(fmt) for the plain label form
  * and (*log[0])(fmt, arg) for the formatted form. Both resolve to the same
@@ -278,7 +278,7 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
         resp[7] = (uint8_t)*(uint16_t *)(ctx + 0x3de);
         resp[8] = (uint8_t)(*(uint16_t *)(ctx + 0x3de) >> 8);
         resp[9] = ctx[0x3e0];
-        resp[0] = FUN_0803a588(r8, 0, 0x61, 0, 100);
+        resp[0] = telemetry_map_clamp(r8, 0, 0x61, 0, 100);
         g_log_func("REQ 0x5541\r\n");
         if (ssp_ble_enqueue_tx_packet(0x5541, 10, resp, 0) >= 0x81) {
             g_log_func("  ERROR SSP place\r\n");
@@ -287,7 +287,7 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 
     case 0x5542: /* BMS serial/version (ctx+0x3D5..0x3D7) */
         g_log_func("REQ 0x5542\r\n");
-        r8 = FUN_0802a87c();
+        r8 = ble_get_charge_plug_state();
         resp[0] = r8;
         resp[1] = 0;
         resp[2] = ctx[0x3d5];
@@ -302,7 +302,7 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 
     case 0x5543: /* charger state */
         g_log_func("REQ 0x5543\r\n");
-        resp[0] = FUN_08037160();
+        resp[0] = charge_level_adc_get();
         if (ssp_ble_enqueue_tx_packet(0x5543, 1, resp, 0) >= 0x81) {
             g_log_func("  ERROR SSP place\r\n");
         }
@@ -467,9 +467,9 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
         }
         return;
 
-    case 0x5551: /* testmode blob (FUN_0802A9DC, 0x60 B) */
+    case 0x5551: /* testmode blob (ble_build_testmode_versions_blob, 0x60 B) */
         g_log_func("REQ 0x5551\r\n");
-        if (ssp_ble_enqueue_tx_packet(0x5551, 0x60, FUN_0802a9dc(0), 0) >= 0x81) {
+        if (ssp_ble_enqueue_tx_packet(0x5551, 0x60, ble_build_testmode_versions_blob(0), 0) >= 0x81) {
             g_log_func("  ERROR SSP place\r\n");
         }
         return;
@@ -505,10 +505,10 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
         }
         return;
 
-    case 0x5567: /* tracking/modem field (FUN_080380EC, u32) */
+    case 0x5567: /* tracking/modem field (rtc_now_epoch_seconds, u32) */
         g_log_func("REQ 0x5567\r\n");
         {
-            uint32_t v = FUN_080380ec();
+            uint32_t v = rtc_now_epoch_seconds();
             memcpy(resp, &v, 4);
         }
         if (ssp_ble_enqueue_tx_packet(0x5567, 4, resp, 0) >= 0x81) {
@@ -518,8 +518,8 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 
     case 0x5568: /* button states + lock pin (GPIOD PD2) */
         g_log_func("REQ 0x5568\r\n");
-        resp[0] = FUN_08040350();
-        resp[1] = FUN_08040368();
+        resp[0] = gpio_pc0_is_low();
+        resp[1] = gpio_pc1_is_low();
         resp[2] = (HAL_GPIO_ReadPin((void *)GPIOD_BASE, 4) == 0) ? 1 : 0;
         resp[3] = 0;
         if (ssp_ble_enqueue_tx_packet(0x5568, 4, resp, 0) >= 0x81) {
@@ -572,9 +572,9 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 
     case 0x5582: /* LED control — three channel on/off bits */
         g_log_func("REQ 0x5582\r\n");
-        resp[0] = (uint8_t)FUN_08037a68() & 1;
-        resp[1] = (uint8_t)((uint32_t)(FUN_08037a68() << 0x1e) >> 0x1f); /* bit 1 */
-        resp[2] = (uint8_t)((uint32_t)(FUN_08037a68() << 0x1d) >> 0x1f); /* bit 2 */
+        resp[0] = (uint8_t)ble_get_led_channel_state() & 1;
+        resp[1] = (uint8_t)((uint32_t)(ble_get_led_channel_state() << 0x1e) >> 0x1f); /* bit 1 */
+        resp[2] = (uint8_t)((uint32_t)(ble_get_led_channel_state() << 0x1d) >> 0x1f); /* bit 2 */
         if (ssp_ble_enqueue_tx_packet(0x5582, 3, resp, 0) >= 0x81) {
             g_log_func("  ERROR SSP place\r\n");
         }
@@ -582,7 +582,7 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 
     case 0x5584: /* dark/light threshold (light sensor + ctx+0x102) */
         g_log_func("REQ 0x5584\r\n");
-        i = FUN_08037aac();
+        i = light_sensor_read_step();
         if (i == 0xfffe) {
             i = 0;
         }

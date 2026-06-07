@@ -24,7 +24,7 @@
  * maybe_enqueue_tx_message is called with 3 or 4) ───────────────────────────*/
 extern int HAL_GPIO_ReadPin();
 extern int HAL_GPIO_WritePin();
-extern int accel_enable();
+extern int stc_gas_gauge_set_run();
 extern int battery_on_detect_step();
 extern int battery_substate_advance();
 extern int batteryware_update_set_pending();
@@ -80,13 +80,13 @@ extern int telemetry_datalog_emit();
 extern int testmode_command_dispatch();
 extern int testmode_continue_state_10();
 extern int testmode_enter_state_16();
-extern int FUN_0803b76c();
-extern int FUN_0803bec8();
-extern int FUN_0803ce08();
-extern int FUN_0803dbb8();
-extern int FUN_0803e5f0();
-extern int FUN_0804031c();
-extern int FUN_08040350();
+extern int display_request_clear();
+extern int matrix_draw_icon();
+extern int clear_flag_00e5();
+extern int app_ctx_clear_field_328();
+extern int battery_telemetry_state_get();
+extern int announce_records_reset();
+extern int gpio_pc0_is_low();
 
 /* Map an alarm/bike state code (0..0x3D) to its name (OEM alarm_state_name,
  * 0x08032DF0). The OEM is a `tbh` jump table; this behaviour-equivalent switch
@@ -214,10 +214,10 @@ void status_process(uint8_t *ctx)
   if (G_STATE[0x14] != G_STATE[4]) {
     led_driver_set_shipping_mode(0xff);
     if (((uint8_t)(G_STATE[4] - 0xd) < 2) || (G_STATE[4] == '\0')) {
-      FUN_0804031c(6);
+      announce_records_reset(6);
     }
     else {
-      FUN_0804031c(7);
+      announce_records_reset(7);
     }
     log_print_timestamp_prefix();
     pcVar14 = alarm_state_name((uint32_t)(uint8_t)G_STATE[4]);
@@ -340,7 +340,7 @@ void status_process(uint8_t *ctx)
     }
     state_table_ptr_get(&local_128);
     if (*local_128 == '\x01') {
-      FUN_0804031c(1);
+      announce_records_reset(1);
       iVar17 = HAL_GPIO_ReadPin(GPIOC_BASE,4);
       if (iVar17 == 0) {
         scheduler_release((uint8_t *)(G_STATE + 0xf));
@@ -361,11 +361,11 @@ void status_process(uint8_t *ctx)
     }
     if (*local_128 == '\x02') {
       scheduler_release((uint8_t *)(G_STATE + 0x30));
-      FUN_0804031c(1);
+      announce_records_reset(1);
       G_STATE[4] = 0x26;
     }
     if ((local_128[1] == '\x01') || (local_128[2] == '\x06')) {
-      FUN_0804031c(6);
+      announce_records_reset(6);
       log_print_timestamp_prefix();
       g_log_func("Locked\r\n");
       G_STATE[4] = 0x11;
@@ -485,11 +485,11 @@ void status_process(uint8_t *ctx)
     state_table_ptr_get(&local_128);
     if (*local_128 == '\x02') {
       scheduler_release((uint8_t *)(G_STATE + 0x30));
-      FUN_0804031c(1);
+      announce_records_reset(1);
       G_STATE[4] = 0x26;
     }
     if ((*local_128 == '\x01') && (G_CLK[0xa4] == '\0')) {
-      FUN_0804031c(1);
+      announce_records_reset(1);
       iVar13 = HAL_GPIO_ReadPin(GPIOC_BASE,4);
       if (iVar13 != 0) {
         log_print_timestamp_prefix();
@@ -534,7 +534,7 @@ void status_process(uint8_t *ctx)
       G_STATE[4] = 0xe;
       log_print_timestamp_prefix();
       g_log_func("SMS: Tracking active\r\n");
-      FUN_0803ce08();
+      clear_flag_00e5();
       *(uint32_t *)(ctx + 0x33c) = 0;
       *(uint8_t *)(ctx + 0x3c8) = 1;
       *(uint8_t *)(ctx + 0x310) = 3;
@@ -551,12 +551,12 @@ void status_process(uint8_t *ctx)
         g_log_func(" ERROR Save values\r\n");
       }
       G_STATE[0x11] = 1;
-      FUN_0803dbb8();
+      app_ctx_clear_field_328();
     }
     state_table_ptr_get(&local_128);
     if ((*local_128 == '\x02') && (G_STATE[0x32] == -6)) {
       scheduler_release((uint8_t *)(G_STATE + 0x20));
-      FUN_0804031c(3);
+      announce_records_reset(3);
       G_STATE[4] = 0x26;
     }
     iVar13 = scheduler_slot_is_idle(G_STATE[0x32]);
@@ -596,7 +596,7 @@ void status_process(uint8_t *ctx)
     }
     uVar10 = maybe_get_bike_state();
     if ((uVar10 == '\x03') && (state_table_ptr_get(&local_128), *local_128 == '\x02')) {
-      FUN_0804031c(3);
+      announce_records_reset(3);
       led_driver_set_shipping_mode(0xff);
       if (*(short *)(ctx + 0x100) == 0xff) {
         log_print_timestamp_prefix();
@@ -854,7 +854,7 @@ LAB_0802ca9a:
       log_print_timestamp_prefix();
       g_log_func("Start-GSM: riding\r\n");
       scheduler_start(G_STATE[0x1f],0x36ee80,0);
-      FUN_0803ce08();
+      clear_flag_00e5();
     }
     iVar13 = scheduler_slot_is_idle(G_STATE[7]);
     if (iVar13 != 0) {
@@ -879,7 +879,7 @@ LAB_0802ca9a:
     if (*(uint16_t *)(ctx + 0x3c2) < 9) {
       if (G_CLK[0x8b] == '\0') {
         G_CLK[0x8b] = 1;
-        FUN_0804031c();
+        announce_records_reset();
       }
       iVar13 = HAL_GPIO_ReadPin((void *)0x40020800u,0x10);
       if ((iVar13 == 0) && (*(signed char *)(ctx + 0x3e0) != '\x01')) {
@@ -928,7 +928,7 @@ LAB_0802ca9a:
         g_log_func("BLE standby mode\r\n");
         *(uint8_t *)(ctx + 0x351) = 4;
         *(uint8_t *)(ctx + 0x352) = 4;
-        FUN_0804031c(1);
+        announce_records_reset(1);
         iVar13 = HAL_GPIO_ReadPin((void *)0x40020800u,4);
         if (iVar13 == 0) {
           set_mode_state_byte(0x19);
@@ -944,7 +944,7 @@ LAB_0802ca9a:
     }
     else {
       if (local_128[2] == '\x01') {
-        FUN_0804031c(4);
+        announce_records_reset(4);
       }
       G_CLK[0x8b] = 0;
       iVar13 = HAL_GPIO_ReadPin((void *)0x40020800u,0x100);
@@ -1070,7 +1070,7 @@ LAB_0802ca9a:
         g_log_func("  ERROR SSPM2 place\r\n");
       }
     }
-    iVar13 = FUN_08040350();
+    iVar13 = gpio_pc0_is_low();
     if (((iVar13 != 0) && (iVar13 = state_flags_test(0,0x100), iVar13 == 0)) ||
        ((iVar13 = gpio_pc1_is_low(), iVar13 != 0 &&
         (iVar13 = state_flags_test(0,0x200), iVar13 == 0)))) {
@@ -1078,19 +1078,19 @@ LAB_0802ca9a:
     }
     bVar11 = aux_mode_byte_get();
     if (bVar11 == 0) {
-      FUN_0804031c(1);
+      announce_records_reset(1);
     }
     if (*local_128 == '\x01') {
-      FUN_0804031c(1);
+      announce_records_reset(1);
       channel_notify_with_status(*(uint8_t *)(ctx + 0x318));
     }
     if (*(signed char *)(ctx + 0x3cb) == '\0') {
       if (((*local_128 == '\x02') && (*(short *)(ctx + 0x3c2) != 0)) &&
          (*(signed char *)(ctx + 0x108) == '\0')) {
-        FUN_0804031c(1);
+        announce_records_reset(1);
         G_CLK[0xa0] = 1;
       }
-      iVar13 = FUN_08040350();
+      iVar13 = gpio_pc0_is_low();
       if (iVar13 == 0) {
         G_CLK[0xa0] = 0;
       }
@@ -1131,23 +1131,23 @@ LAB_0802ca9a:
           (*(short *)(ctx + 0x3c2) == 0)) && (bVar11 = aux_mode_byte_get(), bVar11 != 0))
       {
         if ((*local_128 == '\x04') && (iVar13 = state_flags_test(0,0x100), iVar13 == 0)) {
-          FUN_0804031c(1);
+          announce_records_reset(1);
           log_print_timestamp_prefix();
           g_log_func("Button horn: off\r\n");
         }
         if (local_128[2] == '\x03') {
-          FUN_0804031c(4);
+          announce_records_reset(4);
           log_print_timestamp_prefix();
           g_log_func("USER Button reset: off\r\n");
         }
-        FUN_0804031c(5);
+        announce_records_reset(5);
         channel_notify_with_status(0x11);
         log_print_timestamp_prefix();
         g_log_func("Charger detected Lights OFF\r\n");
         *(uint8_t *)(ctx + 0x350) = 4;
         *(uint8_t *)(ctx + 0x351) = 4;
         *(uint8_t *)(ctx + 0x352) = 4;
-        FUN_0803b76c();
+        display_request_clear();
         scheduler_release((uint8_t *)(G_STATE + 0x1f));
         G_STATE[4] = 0x1f;
       }
@@ -1462,7 +1462,7 @@ LAB_0802ca9a:
          ((iVar13 = bike_is_locked(), iVar13 == 0 && (*(signed char *)(ctx + 0x310) == '\v')))) {
         log_print_timestamp_prefix();
         g_log_func("USER bike on\r\n");
-        FUN_0804031c(7);
+        announce_records_reset(7);
         scheduler_release((uint8_t *)(G_STATE + 0xf));
         scheduler_release((uint8_t *)(G_STATE + 0x10));
         iVar13 = shifter_sm_get_step();
@@ -1545,7 +1545,7 @@ LAB_0802ca9a:
     while (1) {
       iVar13 = scheduler_slot_is_idle(*(uint8_t *)(G_STATE + 0x25));
       if (((iVar13 != 0) &&
-          ((iVar13 = FUN_0803e5f0(), iVar13 == 5 && (*(signed char *)(G_STATE + 0x26) == -6)))) ||
+          ((iVar13 = battery_telemetry_state_get(), iVar13 == 5 && (*(signed char *)(G_STATE + 0x26) == -6)))) ||
          (iVar13 = scheduler_slot_is_idle(*(uint8_t *)(G_STATE + 0x26)), iVar13 != 0)) {
         scheduler_release((uint8_t *)(G_STATE + 0x26));
         scheduler_release((uint8_t *)(G_STATE + 0x25));
@@ -1557,7 +1557,7 @@ LAB_0802ca9a:
         if (iVar13 != 0) {
           g_log_func(" ERROR Display off\r\n");
         }
-        accel_enable();
+        stc_gas_gauge_set_run();
         enter_stop_mode(*(uint8_t *)(G_STATE + 0x11));
       }
       iVar13 = HAL_GPIO_ReadPin(GPIOC_BASE,4);
@@ -1589,7 +1589,7 @@ LAB_0802c26e:
     }
     state_table_ptr_get(&local_128);
     if ((*local_128 == '\x02') && (*(signed char *)(ctx + 0x310) != '\x04')) {
-      FUN_0804031c(3);
+      announce_records_reset(3);
       scheduler_release((uint8_t *)(G_STATE + 0xf));
       scheduler_release((uint8_t *)(G_STATE + 0x10));
       if (*(short *)(ctx + 0x100) == 0xff) {
@@ -1620,7 +1620,7 @@ LAB_0802c26e:
     }
     state_table_ptr_get(&local_128);
     if (*local_128 == '\x01') {
-      FUN_0804031c(3);
+      announce_records_reset(3);
       log_print_timestamp_prefix();
       g_log_func("Auto wake request BLE unlock\r\n");
       local_138[0] = 1;
@@ -1630,7 +1630,7 @@ LAB_0802c26e:
       }
     }
     if (*local_128 == '\x02') {
-      FUN_0804031c(3);
+      announce_records_reset(3);
       scheduler_release((uint8_t *)(G_STATE + 0x3d));
       log_print_timestamp_prefix();
       g_log_func("Auto wake do unlock\r\n");
@@ -1730,7 +1730,7 @@ LAB_0802c26e:
       locked_state_step(local_128,uVar16);
     }
     if (*(signed char *)(ctx + 0x3e0) != '\x01') {
-      FUN_0804031c(7);
+      announce_records_reset(7);
     }
     iVar13 = scheduler_slot_is_idle(*(uint8_t *)(G_STATE + 0x1c));
     if (iVar13 != 0) {
@@ -1842,7 +1842,7 @@ LAB_0802c26e:
           }
         }
         else {
-          FUN_0804031c(7);
+          announce_records_reset(7);
           set_mode_state_byte(0xf);
           *(uint8_t *)(G_STATE + 4) = 0xe;
         }
@@ -1881,7 +1881,7 @@ LAB_0802c26e:
       uVar10 = scheduler_alloc();
       G_STATE[0x36] = uVar10;
       scheduler_start(uVar10,15000,0);
-      FUN_0804031c(7);
+      announce_records_reset(7);
     }
     state_table_ptr_get(&local_128);
     iVar17 = scheduler_slot_is_idle(G_STATE[0x36]);
@@ -2059,7 +2059,7 @@ LAB_0802d668:
   case 0x22:
     iVar13 = is_display_bus_ready();
     if (iVar13 != 0) {
-      FUN_0804031c(1);
+      announce_records_reset(1);
       set_mode_state_byte(0xf);
       iVar13 = bike_is_locked();
       if (iVar13 == 0) {
@@ -2118,7 +2118,7 @@ LAB_0802d668:
     }
     break;
   case 0x26:
-    FUN_0804031c(3);
+    announce_records_reset(3);
     G_CLK[0xaa] = (signed char)0xff;
     G_CLK[0xa9] = (signed char)0xff;
     G_CLK[0xa8] = (signed char)0xff;
@@ -2129,10 +2129,10 @@ LAB_0802d668:
       channel_notify_with_status(6);
     }
     G_CLK[0xab] = 1;
-    iVar13 = FUN_08040350();
+    iVar13 = gpio_pc0_is_low();
     if (iVar13 == 0) {
       G_CLK[0xa6] = (signed char)G_CLK[0xa6] + '\x01';
-      FUN_0804031c(1);
+      announce_records_reset(1);
       G_STATE[4] = 0x28;
     }
     iVar13 = state_flags_test(0,0x100);
@@ -2301,7 +2301,7 @@ LAB_0802d668:
       }
       cVar2 = (signed char)G_CLK[0xac];
       G_CLK[0xac] = cVar2 + -1;
-      FUN_0803bec8(cVar2,0xd);
+      matrix_draw_icon(cVar2,0xd);
       scheduler_start(G_STATE[0x3a],1000,0);
     }
     iVar13 = HAL_GPIO_ReadPin(GPIOC_BASE,0x100);
@@ -2427,7 +2427,7 @@ LAB_0802d668:
         if (iVar13 != 0) {
           scheduler_release((uint8_t *)0x2000005bu);
           G_CLK[0xa6] = 0;
-          FUN_0804031c(3);
+          announce_records_reset(3);
         }
       }
       else {

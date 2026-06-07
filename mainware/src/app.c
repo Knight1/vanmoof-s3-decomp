@@ -118,7 +118,7 @@ uint32_t channel_resolve_status(uint32_t channel_id)
  * clocking sub-path: it records the prior bike state and an aux byte into the
  * record at 0x20000029, force-sets bike state 0x3D, allocates a scheduler slot
  * if none is held, arms it for a channel-specific duration, and selects a
- * clocking sub-mode via FUN_0802E7F4.
+ * clocking sub-mode via set_mode_state_byte.
  *
  * The common tail always runs: release a (separate) scheduler slot, read the
  * per-channel volume byte at ctx+volume_index+0x104, push it through the amp
@@ -291,7 +291,7 @@ uint8_t update_mode_get(void)
  * 0x0803B780): zero the two 0x96-byte buffers at g_request_ctx (0x20008230) +0x01
  * and +0x99, set the status byte at +0x132, then clear the +0x130/+0x131 flags. */
 extern void *FUN_08020ff4(void *dst, int val, unsigned int len);   /* memset */
-extern void  FUN_0803b76c(void);                                   /* clears +0x130/+0x131 */
+extern void  display_request_clear(void);                                   /* clears +0x130/+0x131 */
 
 void reset_dual_buffers_and_flags(void)
 {
@@ -300,5 +300,5 @@ void reset_dual_buffers_and_flags(void)
     FUN_08020ff4(base + 0x01, 0, 0x96);
     FUN_08020ff4(base + 0x99, 0, 0x96);
     *(volatile uint8_t *)(base + 0x132) = 1;
-    FUN_0803b76c();
+    display_request_clear();
 }

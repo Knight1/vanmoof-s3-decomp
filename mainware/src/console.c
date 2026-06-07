@@ -28,7 +28,7 @@ extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 /* Helpers we have not decoded yet — kept as opaque extern declarations
  * so we can call them at the right addresses for behavioural
  * equivalence without committing to a name we'd have to revise. */
-extern uint32_t FUN_08031728(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+extern uint32_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
 
 /* Hard-coded fallback password. Reading the OEM rodata at 0x080547EC.
  * Accepted in addition to whatever the user has stored in
@@ -168,7 +168,7 @@ static void volume_set_common(char *input, uint8_t *target)
            sizeof snapshot);
 
     {
-        uint32_t res = FUN_08031728(
+        uint32_t res = config_persist_dual_bank(
             g_app_state.ctx_sub->audio_engine_cfg[0],
             g_app_state.ctx_sub->audio_engine_cfg[1],
             g_app_state.ctx_sub->audio_engine_cfg[2],
@@ -238,7 +238,7 @@ void console_soc_set(char *input)
  * then echoes the current lock state and region. The lock state at `+0x144` is
  * read and written back unchanged (only the region is set here); a value < 3 is
  * required to accept a change. Applying the region re-runs the config-apply
- * (FUN_08031728) that pushes the `ctx_sub[0xF4..0x103]` block to the drive
+ * (config_persist_dual_bank) that pushes the `ctx_sub[0xF4..0x103]` block to the drive
  * subsystem — the same path the volume commands use; the OEM snapshots
  * `ctx_sub[0x104..0x1C4]` onto the stack first because the apply helper reads
  * it back from the caller's frame. */
@@ -260,7 +260,7 @@ void console_region_set(char *input)
                    sizeof snapshot);
 
             {
-                uint32_t res = FUN_08031728(
+                uint32_t res = config_persist_dual_bank(
                     g_app_state.ctx_sub->audio_engine_cfg[0],
                     g_app_state.ctx_sub->audio_engine_cfg[1],
                     g_app_state.ctx_sub->audio_engine_cfg[2],
@@ -372,7 +372,7 @@ void console_cmd_wheelsize(char *args)
             g_log_func("wheel 24..28 for 24/28 inch\r\n");
         }
         memcpy(snapshot, CTXB + CTX_AUDIO_CFG_BLOCK, sizeof snapshot);
-        uint32_t res = FUN_08031728(*(uint32_t *)(CTXB + CTX_AUDIO_GROUP_LOW), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_MED),
+        uint32_t res = config_persist_dual_bank(*(uint32_t *)(CTXB + CTX_AUDIO_GROUP_LOW), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_MED),
                                     *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_HIGH), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP3));
         g_log_func("res: %d\r\n", res);
         (void)snapshot;
@@ -547,14 +547,14 @@ extern char     modbus_tx_count_free_slots(void); /* 0x0803A510 — 0x10 = all f
 extern void     modbus_tx_pump(void);             /* 0x0803A278 */
 extern uint32_t maybe_enqueue_tx_message(uint16_t type, uint32_t len, void *payload, uint8_t flags); /* 0x0803A1C4 */
 extern void     shipping_powerdown_deinit(int mode); /* 0x080382D0 — no return */
-extern void     FUN_0803c5f0(int);
-extern void     FUN_0803c5fc(int);
-extern void     FUN_0803c608(int);
-extern void     FUN_0803b2c4(void);
-extern int      FUN_0803d110(void);
-extern void     FUN_0803c1c0(void);
-extern void     FUN_080398b8(void);
-extern void     FUN_080314a4(void);
+extern void     obj_set_field34(int);
+extern void     obj_set_field38(int);
+extern void     led_channel3_set_brightness(int);
+extern void     display_send_init_cmd(void);
+extern int      lis3dh_powerdown(void);
+extern void     led_driver_enter_shipping_mode(void);
+extern void     stc_gas_gauge_set_run(void);
+extern void     wwdg_apb_clk_disable(void);
 
 void console_cmd_factory_shipping(char *args)
 {
@@ -571,11 +571,11 @@ void console_cmd_factory_shipping(char *args)
     HAL_GPIO_WritePin((void *)GPIOA_BASE, 0x1000, 0);
     HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0040, 1);
 
-    FUN_0803c5f0(0);
-    FUN_0803c5fc(0);
-    FUN_0803c608(0);
-    FUN_0803b2c4();
-    (void)FUN_0803d110();
+    obj_set_field34(0);
+    obj_set_field38(0);
+    led_channel3_set_brightness(0);
+    display_send_init_cmd();
+    (void)lis3dh_powerdown();
 
     HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x0020, 1);
     HAL_GPIO_WritePin((void *)GPIOB_BASE, 0x0200, 1);   /* GPIOB */
@@ -598,9 +598,9 @@ void console_cmd_factory_shipping(char *args)
         watchdog_kick();
     }
 
-    FUN_0803c1c0();
-    FUN_080398b8();
-    FUN_080314a4();
+    led_driver_enter_shipping_mode();
+    stc_gas_gauge_set_run();
+    wwdg_apb_clk_disable();
     systick_delay(1000);
     shipping_powerdown_deinit(6);   /* does not return */
 }
@@ -636,7 +636,7 @@ void console_cmd_battery(char *args)
 /* `shifterstatus` — report the eShifter 24 V rail (GPIOB pin14), clear the
  * shifter scratch buffer (ctx+0x51E, 300 B), and (per HW version word at
  * ctx+CTX_SHIFTER_HW) arm a status-poll scheduler task (OEM 0x08042F74). */
-extern void FUN_0802954c(void);   /* arm/refresh a related timer field (=3) */
+extern void shifter_sm_set_step_3(void);   /* arm/refresh a related timer field (=3) */
 
 void console_cmd_shifterstatus(char *args)
 {
@@ -651,7 +651,7 @@ void console_cmd_shifterstatus(char *args)
 
     uint8_t *slot_rec = (uint8_t *)SCHED_SLOT_REC;   /* this cmd's slot id at +1 */
     scheduler_release(&slot_rec[1]);
-    FUN_0802954c();
+    shifter_sm_set_step_3();
     g_log_func("Wait 3 seconds..\r\n");
 
     if (slot_rec[1] == SCHED_SLOT_NONE) {
@@ -725,7 +725,7 @@ void console_cmd_adc(char *args)
 
 /* `stc` — read the battery STC fuel-gauge and print V/I/temp/percent
  * ("%d mV, %d mA %d%dC %d.%d%%") (OEM 0x08041614). */
-extern uint32_t FUN_080396e4(void *ctx, uint32_t *out);   /* STC read; 1 = valid */
+extern uint32_t stc_read(void *ctx, uint32_t *out);   /* STC read; 1 = valid */
 
 void console_cmd_stc(char *args)
 {
@@ -734,7 +734,7 @@ void console_cmd_stc(char *args)
     (void)args;
 
     g_log_func("Read STC\r\n");
-    if (FUN_080396e4(ctx, out) == 1) {
+    if (stc_read(ctx, out) == 1) {
         int pct = (int)out[2], voltage = (int)out[3], current = (int)out[4], temp = (int)out[5];
         int temp_tens = temp / 10, pct_int = pct / 10;
         g_log_func("%d mV, %d mA %d%dC %d.%d%%\r\n",
@@ -947,7 +947,7 @@ extern int  save_state_record_to_eeprom(uint32_t f0, uint32_t f1, uint32_t f2, u
                                          uint32_t f4, uint32_t f5, uint32_t f6, uint32_t f7,
                                          uint32_t f8, uint32_t f9, uint32_t f10, uint32_t f11,
                                          uint32_t f12, uint32_t f13, uint32_t f14); /* 0x0803E2CC */
-extern void FUN_080298dc(void);   /* enable the APP-log sink */
+extern void app_log_sink_enable(void);   /* enable the APP-log sink */
 
 void console_cmd_logapp(char *args)
 {
@@ -964,7 +964,7 @@ void console_cmd_logapp(char *args)
             g_log_func(" ERROR Save values\r\n");
         }
         if (ctx[CTX_LOG_TO_APP]) {
-            FUN_080298dc();
+            app_log_sink_enable();
         }
     }
     g_log_func("Logging %s\r\n",

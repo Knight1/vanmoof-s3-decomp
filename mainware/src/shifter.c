@@ -89,8 +89,8 @@ extern int  ssp_ble_enqueue_tx_packet();
 extern int  amp_volume_brownout_apply();
 extern void matrix_set_corner_led();
 extern int  state_table_ptr_get();           /* writes a record ptr to *out */
-extern void FUN_0804031c();                   /* state-record reset(mask)    */
-extern uint8_t FUN_08040350(void);            /* manual-shift button state A */
+extern void announce_records_reset();                   /* state-record reset(mask)    */
+extern uint8_t gpio_pc0_is_low(void);            /* manual-shift button state A */
 extern void usart3_init(void);                /* 0x08033358 */
 extern void hal_usart_reinit(void *handle);   /* 0x08026d5a */
 extern void obj_set_field34();                /* lighting/display teardown   */
@@ -1138,7 +1138,7 @@ void shifter_control_step(uint8_t *ctx)
 
     state_table_ptr_get(&state_rec);
     if (state_rec[1] == 0x01) {
-        FUN_0804031c(3);
+        announce_records_reset(3);
     }
 
     switch (g_shifter_sm[1]) {
@@ -1417,9 +1417,9 @@ void shifter_control_step(uint8_t *ctx)
         }
         state_table_ptr_get(&state_rec);
         if (state_rec[1] == 0x05) {
-            FUN_0804031c(3);
+            announce_records_reset(3);
             scheduler_release(&g_shifter_sm[7]);
-            if (FUN_08040350() == 0) {     /* manual-shift button state A */
+            if (gpio_pc0_is_low() == 0) {     /* manual-shift button state A */
                 if ((g_shifter_sm[8] < 4) &&
                     (maybe_get_bike_state() == '\f') &&
                     (*(int16_t *)(ctx + 0x3c2) != 0)) {

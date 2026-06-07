@@ -11,20 +11,20 @@
 /* Opaque helpers (kept as OEM externs until decoded): supply read, table probe,
  * and the per-device bus TX engine. */
 extern void     HAL_GPIO_WritePin(void *GPIOx, uint16_t pin, int state);
-extern uint32_t FUN_08032d6c(void);                                  /* supply/voltage read */
-extern int      FUN_08032ce4(uint8_t *out_index);                    /* probe 16-entry table */
+extern uint32_t supply_voltage_read(void);                                  /* supply/voltage read */
+extern int      hw_version_lookup(uint8_t *out_index);                    /* probe 16-entry table */
 extern uint32_t FUN_08024760(void *dev, uint8_t cmd, uint8_t *data,
                              uint16_t len, uint32_t timeout);         /* bus TX engine */
 extern void    *g_amp_dev_ctx;   /* SRAM 0x20009B04 — amp device/transport handle */
 
 uint32_t amp_volume_brownout_apply(uint8_t *level)
 {
-    uint32_t supply = FUN_08032d6c();
+    uint32_t supply = supply_voltage_read();
 
     if (*level != 0) {
         HAL_GPIO_WritePin((void *)GPIOD_BASE, AMP_MUTE_PIN, 0);
         uint8_t probe_index;
-        FUN_08032ce4(&probe_index);
+        hw_version_lookup(&probe_index);
         if (probe_index > 5) {
             *level = (uint8_t)(*level + 1);
         }

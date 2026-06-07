@@ -12,7 +12,7 @@ extern void *g_eeprom_i2c_handle;   /* SRAM 0x20009B04: I2C HAL handle */
 extern void  watchdog_kick(void);   /* 0x080314D8 */
 
 /* CubeF4 HAL_I2C_Mem_Write(handle, dev_addr, mem_addr, mem_addr_size, data,
- * size, timeout) — OEM FUN_08024D2C. 0 = HAL_OK. */
+ * size, timeout) — OEM HAL_I2C_Mem_Write. 0 = HAL_OK. */
 extern int HAL_I2C_Mem_Write(void *handle, uint16_t dev_addr, uint16_t mem_addr,
                              uint16_t mem_addr_size, const uint8_t *data,
                              uint16_t size, uint32_t timeout);
