@@ -108,7 +108,7 @@ soft float for now.
 | `0x20009B04` | ~0x24 | `g_i2c3_handle` | `i2c.c`/`eeprom.c` | I2C3 HAL handle (`I2C_HandleTypeDef`, Instance `0x40005C00`); the EEPROM bus (`eeprom_write_region`) + the bit-bang recovery (`i2c3_handle_init`/`deinit`). |
 | `0x20009728` | 0x14 | `g_wwdg_desc` | `watchdog.c` | WWDG refresh descriptor (built by `watchdog_init`): `{WWDG_CR 0x40002C00, 0x180, 0x7F, 0x7F, 0}`. `wwdg_hw_init` programs `WWDG_CR=0xFF` (T|WDGA) + `WWDG_CFR=0x1FF`; `watchdog_kick`→`wdg_reg_write_from_desc` reloads `WWDG_CR=0x7F` each loop. |
 | `0x20000101` | 1 | `g_boot_retry_budget` | `main.c` | boot self-test retry budget. `mainware_boot_init_sequence` decrements it after an I2C-bus-error recovery pass (≥3 device failures); the do/while loop exits when it reaches 0 (set 0 directly on a clean pass). |
-| `0x20009A84` | ≥0x40 | `g_led_pwm_obj` | `main.c` | TIM1 (`0x40010000`) handle / LED-driver object: `obj_set_field34/38` + `led_channel3_set_brightness` zero its `+0x34/+0x38/+0x3C` PWM-duty channels at boot; `tim_channel_enable_output(&obj, 0/4/8)` enables TIM1 CH1/2/3. |
+| `0x20009A84` | ≥0x40 | `g_led_pwm_obj` | `main.c`/`lighting.c` | TIM1 (`0x40010000`) handle / lamp-PWM object: `obj_set_field34/38` + `led_channel3_set_brightness` (`lighting.c`) write its `+0x34/+0x38/+0x3C` PWM-duty channels = the 3 front/rear lamp brightness outputs (driven by the `light_pattern_step` fade engine); `tim_channel_enable_output(&obj, 0/4/8)` enables TIM1 CH1/2/3 at boot. |
 | `0x20006E90` | ≥0xE80 | `g_bat_modbus_ctx` | `battery.c` | battery/BMS Modbus-RTU master context (slave 0xAA): master-SM state byte `[0]`, RX byte counter `[2]`, bus ring handle `[0xE74]`, transaction-SM state `[0xE78]`, the request/response **frame** at `[0xE7C]` (= `0x20007D0C`: `[0]`slave `[1]`func `[2..3]`reg(BE) `[0x84]`byte-count `[0x85+]`response `[0x105]`len `[0x106]`exception flag). Cleared by `bmodbus_queue_timer_init`. |
 | `0x200000E7` | ≥9 | `g_bms_state` | `battery.c` | BMS lifecycle state object (`battery_telemetry_step`): substate byte `[3]`, scheduler-timer slots `[0]`/`[5]`/`[7]` (`0xFA`=unallocated), retry counter `[6]`, light-mode latch `[8]`. |
 | `0x20008A00` | ≥0x40 | `g_batware_update` | `battery.c` / `update.c` | batteryware (BMS firmware) update record: arm flag `[6]`, status `[7]`, charger/FAULT-pin shadow `[0x3E]`. |
@@ -242,7 +242,15 @@ On-board I2C devices, probed in the `mainware_boot_init_sequence` self-test
 | LIS3DH | 3-axis accelerometer | `0x33` | `lis3dh_accel_init` / `"ERR LIS3DH"` |
 | MAX9768 | audio amplifier | `0x96` (config 0xD6) | `audio_amp_init` / `"ERR init MAX9768"` |
 | AT24-series EEPROM | state + config records | `0xA0` (I2C3) | `eeprom_read_config_with_crc_fallback` / `"ERROR I2C eerom"` |
-| LED-matrix controller | display + ambient light sensor | `0x60`/`0x66` (handle `0x20009BB8`) | `display_module_init` / `"ERR Led Display"`; light sensor via `display_write_reg20_init` / `"ERR Light sensor"` |
+| IS31FL3236 ×2 | LED-matrix display drivers (left/right half) | `0x60` / `0x66` (I2C2, handle `0x20009BB8`) | `display_module_init`→`led_driver_panel_config` / `"NAK"`, `"ERR Led Display"`; IS31FL373x `0xFE`/`0xC5` unlock + `0xFD` page-select (`docs/display.md`) |
+| Panel sub-controller | panel cmd (dev 0x20) + ambient light sensor | `0x20` (I2C2; sensor reg `0x50`) | `display_send_init_cmd`/`display_write_reg20_init`; `light_sensor_i2c_read` / `"ERR Light sensor"`, `"ERR CM2323"` (`docs/lighting.md`) |
+
+The display framebuffer is a dual-half buffer in `g_request_ctx` (`0x20008230`:
+half A `+0x01`, half B `+0x99`, each 0x96 B); the 3-bit brightness LUT + 5×7
+glyph/digit ROM live in flash rodata at **`0x0804F358`**. `led_matrix_transmit_step`
+DMAs the two halves to the drivers and recovers a hung I2C2 by bit-banging SCL
+(**PA8**, mask 0x100) until SDA (**PC9**, mask 0x200) releases (logs `" ERR dsp freeze"`).
+The three lamp PWM channels are TIM1 CCR1/2/3 (see `g_led_pwm_obj` `0x20009A84`).
 
 Other boot pins: **PD7** powered high after init; **PD15/PA12/PA15, PB3/9/10/15,
 PD10/11/12/13, PE2/3/5** driven as power/LED rails; **PE2** = amp enable, **PD5**

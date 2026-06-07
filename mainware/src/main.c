@@ -138,7 +138,7 @@ extern int      sspm_rx_reply_handler(void);                  /* 0x0803A42C */
 extern int      sspm_tx_queue_pump(void);                     /* 0x0803A278 */
 extern void     led_matrix_render_frame_region(uint16_t frame_ticks); /* 0x0803B7E0 */
 extern void     led_matrix_overlay_frame_region(void);        /* 0x0803B988 */
-extern int      dsp_recovery_telemetry_pump(void);            /* 0x0803BB40 */
+extern uint32_t led_matrix_transmit_step(void);              /* 0x0803BB40 (I2C-DMA frame pump) */
 extern void     charger_and_pc1_sense_debounce(void *ctx_state); /* 0x08040788 */
 extern void     status_process(void *ctx);                    /* 0x0802AAF8 */
 extern uint16_t supply_voltage_sample_step(void);             /* 0x08029B24 */
@@ -600,7 +600,7 @@ __attribute__((weak)) int main(void)
 
         led_matrix_render_frame_region(U16(0x354));
         led_matrix_overlay_frame_region();
-        if (dsp_recovery_telemetry_pump() != 0) {
+        if (led_matrix_transmit_step() != 0) {
             g_log_func("ERR Display\r\n");
         }
 
