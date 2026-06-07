@@ -35,6 +35,10 @@ void battery_on_detect_step(int force);
 /* Advance the battery substate 0x0C -> 9 (shipping LiPo-charge transition). */
 void battery_substate_advance(void);
 
+/* Read the battery telemetry FSM state byte (G_BAT_STATE+3) — polled by
+ * status_process (OEM battery_telemetry_state_get, 0x0803E5F0). */
+uint8_t battery_telemetry_state_get(void);
+
 /* batteryware (BMS firmware) update hooks. */
 void    batteryware_update_arm(void);
 void    batteryware_update_set_pending(void);

@@ -115,6 +115,18 @@ int scheduler_slot_is_idle(uint8_t slot)
     return g_scheduler.counters[slot] == 0;
 }
 
+/* Return a slot's remaining-ticks countdown (0 for out-of-range ids). The raw
+ * counter twin of scheduler_slot_is_idle (OEM scheduler_slot_get_remaining,
+ * 0x08030858); callers compare it against a threshold (e.g. the battery driver's
+ * "1000 < remaining" charge-poll gate). */
+uint32_t scheduler_slot_get_remaining(uint8_t slot)
+{
+    if (slot >= SCHED_SLOTS) {
+        return 0;
+    }
+    return g_scheduler.counters[slot];
+}
+
 /* Timer/task name-register hook (OEM scheduler_set_timer_name, 0x08029B70).
  * Compiled out to a `bx lr` stub in this release build; the ~49 callers each
  * follow it with scheduler_start(slot, ticks, NULL). The name (a rodata literal

@@ -70,13 +70,11 @@ extern int bus_queue_push();   /* bus ring enqueue PDU */
 extern int bus_queue_pop();   /* bus ring peek/has-frame */
 extern int bus_queue_reset();   /* bus ring reset */
 extern int shift_aux_state_reset();
-extern int scheduler_slot_get_remaining();
-extern int status_clear_pulse_flag();
-extern int bus_queue_peek_status();
-extern int battery_fault_warning_report();
-extern int battery_charge_lookup();
-extern int battery_charge_complete_watchdog();
-extern int battery_set_charge_mode();
+extern uint32_t bus_queue_peek(void *q, uint16_t *out);  /* shifter.c (0x08037f34) */
+/* scheduler_slot_get_remaining: declared in scheduler.h.
+ * status_clear_pulse_flag, bus_queue_peek_status, battery_charge_lookup,
+ * battery_charge_complete_watchdog, battery_set_charge_mode,
+ * battery_telemetry_state_get and battery_fault_warning_report are DEFINED below. */
 
 /* ───────────────────────────────────────────────────────────────────────── */
 /*
@@ -106,6 +104,7 @@ extern int battery_set_charge_mode();
 /* battery state region (g_bat_state @ 0x200000E7); update record @ 0x20008A00 */
 #define G_BAT_STATE     ((uint8_t *)0x200000E7u)
 #define G_BATWARE_UPD   ((uint8_t *)0x20008A00u)
+#define G_STATUS_CLK    ((uint8_t *)0x200001D8u)   /* status/clock block (states.c G_CLK) */
 
 #define GPIOC_BASE      0x40020800u
 
@@ -113,6 +112,16 @@ extern int battery_set_charge_mode();
 int  modbus_bat_submit(void *frame);
 void bms_modbus_read(uint16_t reg, uint8_t count);
 void bms_modbus_write(uint16_t reg, uint32_t value);
+
+/* charge-policy + fault/status leaf helpers (defined at end of file) */
+int      battery_charge_lookup(uint32_t soc, uint16_t flags, int16_t temp_delta,
+                               uint16_t *out_rate, char *out_mode);
+void     battery_charge_complete_watchdog(int target_rate, uint16_t *out_rate);
+void     battery_set_charge_mode(uint8_t mode);
+uint8_t  battery_telemetry_state_get(void);
+void     battery_fault_warning_report(int ctx);
+uint16_t bus_queue_peek_status(void);
+void     status_clear_pulse_flag(void);
 
 
 /*
@@ -837,11 +846,11 @@ void battery_charge_display_step(int param_1)
     int16_t  charge_state;    /* ctx+0x3FC */
     uint32_t state_for_disp;
     int      tens;
-    int      ctx_charge_field; /* &ctx[0x3B2] */
+    uint16_t *ctx_charge_field; /* &ctx[0x3B2] */
     int      charge_state_i;
     char     disp_code[5];    /* local_21: latched display code uint8_t */
 
-    ctx_charge_field = param_1 + 0x3b2;
+    ctx_charge_field = (uint16_t *)(param_1 + 0x3b2);
     aux_flags        = *(uint16_t *)(param_1 + 0x442);
     level_raw        = *(int16_t  *)(param_1 + 0x3f8);
     charge_state     = *(int16_t  *)(param_1 + 0x3fc);
@@ -1523,5 +1532,167 @@ void battery_state_process(int param_1, int param_2)
     }
 
     return;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * Charge-policy lookup + charge/fault display leaves
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+/*
+ * battery_charge_lookup @ 0x0803E314
+ * Linear search of the 18-row charge-policy table (OEM flash 0x0804F47C) for the
+ * row matching the pack's SoC, charge flags and temperature. A row matches when
+ *   soc <= row.soc_max && (temp_delta <= row.temp_max || (row.flag_mask & flags))
+ * (SoC compared unsigned, temperature signed, flags ORed). On a match it emits
+ * the row's charge rate (-> out_rate) and mode (-> out_mode) and returns the row
+ * index; returns -1 if no row matches. Driven by battery_charge_display_step.
+ */
+static const struct bat_charge_row {
+    uint16_t soc_max;     /* +0 SoC ceiling (unsigned compare)               */
+    int16_t  temp_max;    /* +2 temperature-delta ceiling (signed compare)   */
+    uint16_t flag_mask;   /* +4 charge-flag override (ANDed against `flags`)  */
+    uint16_t rate;        /* +6 -> out_rate (charge current limit)           */
+    uint8_t  mode;        /* +8 -> out_mode (display/charge mode)            */
+    uint8_t  _pad;        /* +9                                              */
+} g_battery_charge_table[18] = {
+    {   3, 32767, 0x0000,   0, 1, 0 }, {   5, 32767, 0x0000,   0, 2, 0 },
+    {  13,     0, 0x4000, 100, 3, 0 }, {  18,     0, 0x4000, 100, 3, 0 },
+    {  22,     0, 0x4000, 100, 3, 0 }, { 100,     0, 0x4000, 100, 5, 0 },
+    {  13,    50, 0x0020, 100, 3, 0 }, {  18,    50, 0x0020, 100, 3, 0 },
+    {  22,    50, 0x0020, 150, 3, 0 }, { 100,    50, 0x0020, 200, 5, 0 },
+    {  13,   600, 0x0000, 100, 4, 0 }, {  18,   600, 0x0000, 150, 4, 0 },
+    {  22,   600, 0x0000, 200, 4, 0 }, { 100,   600, 0x0000, 300, 6, 0 },
+    {  13, 32767, 0x8000, 100, 3, 0 }, {  18, 32767, 0x8000, 100, 3, 0 },
+    {  22, 32767, 0x8000, 150, 3, 0 }, { 100, 32767, 0x8000, 200, 5, 0 },
+};
+
+int battery_charge_lookup(uint32_t soc, uint16_t flags, int16_t temp_delta,
+                          uint16_t *out_rate, char *out_mode)
+{
+    int i;
+
+    for (i = 0; i <= 0x11; i++) {
+        const struct bat_charge_row *e = &g_battery_charge_table[i];
+        if ((soc <= e->soc_max) &&
+            ((temp_delta <= e->temp_max) || ((e->flag_mask & flags) != 0))) {
+            *out_rate = e->rate;
+            *out_mode = (char)e->mode;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * battery_charge_complete_watchdog @ 0x0803E414
+ * Runs in the "full" charge policy (mode 6): a two-stage scheduler timeout
+ * (2 s then 10 s, slots at G_BAT_STATE+1/+2) that forces the displayed charge
+ * rate to the 0xFA sentinel and then releases both timer slots. Only arms while
+ * target_rate is below -24999 (and not exactly -32000).
+ */
+void battery_charge_complete_watchdog(int target_rate, uint16_t *out_rate)
+{
+    uint8_t *bs = G_BAT_STATE;   /* timer slots: +1 (2 s), +2 (10 s) */
+
+    if ((target_rate < -24999) && (target_rate != -32000) && (bs[1] == 0xFA)) {
+        bs[1] = scheduler_alloc();
+        scheduler_start(bs[1], 2000, (sched_cb_t)0);
+    }
+    if (scheduler_slot_is_idle(bs[1]) != 0) {
+        *out_rate = 0xFA;
+        if (bs[2] == 0xFA) {
+            bs[2] = scheduler_alloc();
+            scheduler_start(bs[2], 10000, (sched_cb_t)0);
+        }
+    }
+    if (scheduler_slot_is_idle(bs[2]) != 0) {
+        scheduler_release(&bs[1]);
+        scheduler_release(&bs[2]);
+    }
+}
+
+/*
+ * battery_set_charge_mode @ 0x0803E4AC
+ * Store the resolved charge-mode byte into the app/session context at +0x341 —
+ * reached through the pointer held in the batteryware-update record
+ * (*(uint8_t**)G_BATWARE_UPD). This is the field the BMS charge setpoint is
+ * driven from.
+ */
+void battery_set_charge_mode(uint8_t mode)
+{
+    *(*(uint8_t **)G_BATWARE_UPD + 0x341) = mode;
+}
+
+/*
+ * battery_telemetry_state_get @ 0x0803E5F0
+ * Return the battery telemetry FSM state byte (G_BAT_STATE+3, the selector
+ * battery_telemetry_step switches on). Read by status_process.
+ */
+uint8_t battery_telemetry_state_get(void)
+{
+    return G_BAT_STATE[3];
+}
+
+/*
+ * battery_fault_warning_report @ 0x0803EA88
+ * Fold the BMS fault word (ctx+0x3F6) into the 32-bit state-flags mirror
+ * (ctx+0x3B8): 0xFFFF latches the global fault flag (state_flags_set 0x10000),
+ * 0 clears the low 16 bits, else ORs the fault bits in. When the charger GPIO
+ * (GPIOC PC4) is asserted the charge-enable bits (& ~0x3000) are cleared. Logs
+ * "BMS fault"/"BMS warning" on each edge-change vs the last-seen cache in the
+ * batteryware-update record (G_BATWARE_UPD+0x3A fault / +0x3C warning).
+ * ctx == the app/session telemetry context.
+ */
+void battery_fault_warning_report(int ctx)
+{
+    uint16_t fault = *(uint16_t *)(ctx + 0x3f6);
+
+    if (fault == 0xFFFF) {
+        state_flags_set(0x10000, 0);
+    } else if (fault == 0) {
+        *(uint32_t *)(ctx + 0x3b8) &= 0xFFFF0000u;
+    } else {
+        *(uint32_t *)(ctx + 0x3b8) |= fault;
+    }
+
+    if (HAL_GPIO_ReadPin((void *)GPIOC_BASE, 0x10) != 0) {   /* PC4 charger present */
+        *(uint32_t *)(ctx + 0x3b8) &= 0xFFFFCFFFu;
+    }
+
+    if (*(int16_t *)(ctx + 0x3f6) != *(int16_t *)(G_BATWARE_UPD + 0x3a)) {
+        *(int16_t *)(G_BATWARE_UPD + 0x3a) = *(int16_t *)(ctx + 0x3f6);
+        log_print_timestamp_prefix();
+        g_log_func("BMS fault 0x%04X\r\n", *(uint16_t *)(ctx + 0x3f6));
+    }
+    if (*(int16_t *)(ctx + 0x442) != *(int16_t *)(G_BATWARE_UPD + 0x3c)) {
+        *(int16_t *)(G_BATWARE_UPD + 0x3c) = *(int16_t *)(ctx + 0x442);
+        log_print_timestamp_prefix();
+        g_log_func("BMS warning 0x%04X\r\n", *(uint16_t *)(ctx + 0x442));
+    }
+}
+
+/*
+ * bus_queue_peek_status @ 0x08039DF8
+ * Peek the head of the BMS bus ring (handle at g_bat_modbus_ctx+0xE74) without
+ * consuming, returning its first 16-bit word — used by battery_state_process as
+ * a "queue drained / no pending item" probe.
+ */
+uint16_t bus_queue_peek_status(void)
+{
+    uint16_t v[3];
+    bus_queue_peek(*(void **)(g_bat_modbus_ctx + 0xE74), v);
+    return v[0];
+}
+
+/*
+ * status_clear_pulse_flag @ 0x0802AAD8
+ * Clear the one-shot "BMS pulse" status flag at the status/clock block +0x7C
+ * (states.c G_CLK @ 0x200001D8); called by battery_state_process.
+ */
+void status_clear_pulse_flag(void)
+{
+    G_STATUS_CLK[0x7c] = 0;
 }
 
