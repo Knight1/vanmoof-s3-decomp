@@ -99,6 +99,13 @@ soft float for now.
 | `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` | UART/bus driver context; `+0xB3C` = TX ring-buffer pointer (`uart_send_byte`), `+0xB40` = RX ring-buffer pointer (`ssp_rx_byte`). |
 | `0x20007E14` | 16×24 | `g_msg_tx_table` | (link) | second outbound message table (`maybe_enqueue_tx_message`): 16 slots × 24 B (`[0]`=type, `[1]`=in-use marker, `[3]`=handle, `[4..5]`=arg, `[6..7]`=len, `[8..23]`=payload). Distinct from the BLE/SSP `tx_queue` at `0x20008A40`. |
 | `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | pointer-to-pointer to the UART/bus peripheral block. `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TX-int); `ssp_rx_byte` masks/sets bit 5 of `(*(*g_uart_dev_pp))+0xC` (RX-int — a second deref hop). |
+| `0x2000001C` | ≥0x3A | `g_shifter_sm` | `shifter.c` | shifter control-SM slot-record: `+1` step, `+3/4/5/7/9/0xA` scheduler slots, `+6` substate, `+8` current gear, `+0x34/0x35` retries. |
+| `0x2000008C` | 4 | `g_modbus_crc` | `shifter.c` | shifter Modbus CRC-16 accumulator (u16, init `0xFFFF`, poly `0xA001`); `+2` (`0x2000008E`) = the queue / RX-flush scheduler slot (`0xFA`=none). |
+| `0x2000019C` | ≥0x4C | `g_shifter_ctx` | `shifter.c` | shifter subsystem state: `+0` update step, `+1` commit, `+2` result, `+4` active flag, `+8` staged pack header, `+0x14` image len, `+0x30` prog offset, `+0x37` seq-poll step, `+0x38` link-fail, `+0x39` comm-fail. |
+| `0x20005E3C` | ≥0xE80 | `g_shift_modbus_ctx` | `shifter.c` | shifter Modbus-RTU master context (USART3, slave 0x20): master byte-SM state `+0`, RX counter `+2`, ring handle `+0xE74`, txn-pump state `+0xE78`, PDU frame `+0xE7C`, func `+0xE7D`. Twin of `g_bat_modbus_ctx`. |
+| `0x20006E00` | ≥0x40 | `g_bus_ring_slots` | `shifter.c` | shared 4-entry frame-ring descriptor pool (16 B each; both battery + shifter Modbus masters draw handles from it via `bus_queue_init`). |
+| `0x20009824` | 8 | `g_usart3_handle` | `shifter.c` | USART3 device handle ([0] → USART3 `0x40004800`, [4] baud cfg `0x2580`=9600); shifter byte I/O masks CR1 RXNEIE/TXEIE at `+0xC`. |
+| `0x2000094C` | ≥0xC22 | `g_usart3_rings` | `shifter.c` | USART3 byte rings: `+0xC1C` TX ring ptr, `+0xC20` RX ring ptr. |
 | `0x200099E4` | — | `g_rtc_handle` | (rtc) | STM32 HAL `RTC_HandleTypeDef` used by `rtc_fill_time_fields`. |
 | `0x20009D90` | — | `g_crc_handle` | `crc.c` | STM32 CRC HAL handle (`CRC_HandleTypeDef`); field[0] → `CRC->DR`. Used by `crc32_hw_feed` and `HAL_CRC_Accumulate` (and passed by `flash_config_bank_write`). |
 | `0x20037000` | ≥10 | `g_log_buffer_hdr` | `log.c` | circular SRAM log-buffer control header (just above `_estack`): 8-byte body + `u16` CRC-16 at `+8`, read/write cursors at `+0xC`/`+0x10`. `log_buffer_crc_check` validates it. |
