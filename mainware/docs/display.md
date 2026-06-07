@@ -89,6 +89,33 @@ flash request descriptors. `lowest_set_bit_index` maps the 64-bit state-flag
 bitset to an alert-icon index; `led_driver_set_shipping_mode` is invoked from the
 ship-mode case. `set_mode_state_byte`/`display_mode_set_if_changed` advance the SM.
 
+## Request descriptors (`display_requests.c`)
+
+The presenter and `matrix_draw_speed` pick *what* to animate by handing the render
+pipeline a pointer to a **request descriptor** in flash rodata, via
+`maybe_set_pending_request()` (→ `g_request_ctx+0x134`, the render source) or
+`display_request_set()` (→ `+0x138`, the overlay source). `led_matrix_render_frame_region`
+then walks it; `matrix_glyph_src_addr` / `matrix_glyph_frame_delay` index it.
+
+A descriptor is a `uint32` array:
+
+| word | field |
+| --- | --- |
+| `[0]` | origin column |
+| `[1]` | width (columns) |
+| `[2]` | frame count `F` |
+| `[3 .. 3+F-1]` | per-frame delay (ticks, low 16 bits) |
+| `[3+F ..]` | packed 3-bit/pixel bitmap — `F` frames × `width` columns |
+
+Total length = `3 + F·(1 + width)` words. The OEM stores 38 of these (a few small
+glyphs, several full-width multi-frame animations up to ~6 KB). They were
+**materialized** as byte-faithful named C arrays in `src/display_requests.c`
+(`g_disp_req_<oem-addr>`) — extracted from `mainware_1.07.06.bin` (image base
+`0x08020000`), the length formula verified across the whole contiguous
+`0x0804c104`→`0x0804da64` descriptor chain — replacing the bare magic addresses
+the call sites used to pass. The data gc-sections out of the linked image, so the
+build stays `text 1996`.
+
 ## Notes
 
 - `led_matrix_transmit_step` was previously mislabelled `dsp_recovery_telemetry_pump`
