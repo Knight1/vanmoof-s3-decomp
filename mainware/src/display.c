@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "display.h"
+#include "display_requests.h"
 #include "app.h"        /* set_mode_state_byte, maybe_set_pending_request, reset_dual_buffers_and_flags */
 #include "scheduler.h"  /* scheduler_alloc/release/start/slot_is_idle/set_timer_name */
 #include "systick.h"    /* systick_now, systick_delay */
@@ -178,7 +179,7 @@ void display_mode_sm_step(uint8_t *ctx)
         break;
     case 4:
         if ((ctx[0x3c9] != 0) && (iVar4 = is_display_bus_ready(), iVar4 != 0)) {
-            maybe_set_pending_request((int32_t)0x0804c930); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c930);
         }
         iVar5 = scheduler_slot_is_idle(g_mode_sm[7]);
         if (iVar5 != 0) {
@@ -188,7 +189,7 @@ void display_mode_sm_step(uint8_t *ctx)
         }
         break;
     case 5:
-        maybe_set_pending_request((int32_t)0x0804da64); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804da64);
         set_mode_state_byte(0);
         break;
     case 6:
@@ -199,7 +200,7 @@ void display_mode_sm_step(uint8_t *ctx)
                         (*(char *)(g_disp_flags + 3) == '\0')) {
                         iVar4 = is_display_bus_ready();
                         if (iVar4 != 0) {
-                            maybe_set_pending_request((int32_t)0x0804cb1c); /* request descriptor */
+                            maybe_set_pending_request((int)g_disp_req_0804cb1c);
                             matrix_set_corner_led(ctx[0x3cc]);
                         }
                     } else {
@@ -223,11 +224,11 @@ void display_mode_sm_step(uint8_t *ctx)
         }
         if (*(char *)(g_disp_flags + 5) != '\0') {
             g_disp_flags[5] = 0;
-            display_request_set((int32_t)0x0804a4ec); /* request descriptor */
+            display_request_set((int)g_disp_req_0804a4ec);
         }
         if (*(char *)(g_disp_flags + 6) != '\0') {
             g_disp_flags[6] = 0;
-            display_request_set((int32_t)0x0804a2b8); /* request descriptor */
+            display_request_set((int)g_disp_req_0804a2b8);
         }
         if (*(int16_t *)(ctx + 0x3fc) != -1) {
             matrix_draw_speed((char)*(int16_t *)(ctx + 0x3fc), *(uint32_t *)(ctx + 0x3d4),
@@ -253,7 +254,7 @@ void display_mode_sm_step(uint8_t *ctx)
                 if (g_mode_sm[6] == 0xFA) {
                     bVar3 = scheduler_alloc();
                     g_mode_sm[6] = bVar3;
-                    scheduler_set_timer_name(bVar3, 10, (const char *)0x0805080c); /* "slow_show_speed_tmr" */
+                    scheduler_set_timer_name(bVar3, 10, "slow_show_speed_tmr");
                     scheduler_start(g_mode_sm[6], 10, (void *)0x0);
                 }
                 iVar5 = scheduler_slot_is_idle(g_mode_sm[6]);
@@ -275,11 +276,11 @@ void display_mode_sm_step(uint8_t *ctx)
         }
         if (*(char *)(g_disp_flags + 5) != '\0') {
             g_disp_flags[5] = 0;
-            display_request_set((int32_t)0x0804a4ec); /* request descriptor */
+            display_request_set((int)g_disp_req_0804a4ec);
         }
         if (*(char *)(g_disp_flags + 6) != '\0') {
             g_disp_flags[6] = 0;
-            display_request_set((int32_t)0x0804a2b8); /* request descriptor */
+            display_request_set((int)g_disp_req_0804a2b8);
         }
         if (*(int16_t *)(ctx + 0x3fc) != -1) {
             matrix_draw_speed((char)*(int16_t *)(ctx + 0x3fc), *(uint32_t *)(ctx + 0x3d4),
@@ -299,17 +300,17 @@ void display_mode_sm_step(uint8_t *ctx)
                 }
                 if (*(char *)(g_disp_flags + 5) != '\0') {
                     g_disp_flags[5] = 0;
-                    maybe_set_pending_request((int32_t)0x08047fcc); /* request descriptor */
-                    display_request_set((int32_t)0x0804a4ec);       /* request descriptor */
+                    maybe_set_pending_request((int)g_disp_req_08047fcc);
+                    display_request_set((int)g_disp_req_0804a4ec);
                 }
                 if (*(char *)(g_disp_flags + 6) != '\0') {
                     g_disp_flags[6] = 0;
-                    display_request_set((int32_t)0x0804a2b8);       /* request descriptor */
+                    display_request_set((int)g_disp_req_0804a2b8);
                 }
                 if (ctx[0x3e0] == 1) {
                     iVar4 = is_display_bus_ready();
                     if (iVar4 != 0) {
-                        maybe_set_pending_request((int32_t)0x08047e30); /* request descriptor */
+                        maybe_set_pending_request((int)g_disp_req_08047e30);
                     }
                 } else {
                     iVar4 = display_request_get();
@@ -322,19 +323,19 @@ void display_mode_sm_step(uint8_t *ctx)
                             g_disp_flags[7] = 0;
                             iVar4 = is_display_bus_ready();
                             if (iVar4 != 0) {
-                                maybe_set_pending_request((int32_t)0x0804c368); /* request descriptor */
+                                maybe_set_pending_request((int)g_disp_req_0804c368);
                             }
                         } else if ((*(int16_t *)(ctx + 0x3fc) < 0x5a) ||
                                    (10 < *(int16_t *)(ctx + 0x3fe))) {
                             g_disp_flags[7] = 0;
                             iVar4 = is_display_bus_ready();
                             if (iVar4 != 0) {
-                                maybe_set_pending_request((int32_t)0x0804c368); /* request descriptor */
+                                maybe_set_pending_request((int)g_disp_req_0804c368);
                             }
                         } else if (*(char *)(g_disp_flags + 7) == '\0') {
                             g_disp_flags[7] = 1;
                             reset_dual_buffers_and_flags();
-                            maybe_set_pending_request((int32_t)0x0804c1f4); /* request descriptor */
+                            maybe_set_pending_request((int)g_disp_req_0804c1f4);
                         }
                     }
                 }
@@ -347,7 +348,7 @@ void display_mode_sm_step(uint8_t *ctx)
         }
         if (*(int16_t *)(ctx + 0x3fc) == -1) {
             if ((ctx[0x3e0] == 1) && (iVar4 = ctx_flag_0x131_is_clear(), iVar4 != 0)) {
-                display_request_set((int32_t)0x0804ac3c); /* request descriptor */
+                display_request_set((int)g_disp_req_0804ac3c);
             }
         } else {
             matrix_draw_speed((char)*(int16_t *)(ctx + 0x3fc), *(uint32_t *)(ctx + 0x3d4),
@@ -363,7 +364,7 @@ void display_mode_sm_step(uint8_t *ctx)
     case 9:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804693c); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804693c);
         }
         if ((*(uint32_t *)(ctx + 0x3b8) & 0x200000) == 0) {
             set_mode_state_byte(8);
@@ -373,7 +374,7 @@ void display_mode_sm_step(uint8_t *ctx)
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
             led_driver_set_shipping_mode(0x14);
-            maybe_set_pending_request((int32_t)0x0804c368); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c368);
         }
         iVar4 = (int)*(int16_t *)(ctx + 0x3d2);
         if (iVar4 != -1) {
@@ -389,12 +390,12 @@ void display_mode_sm_step(uint8_t *ctx)
             (0xa46 < *(int16_t *)(ctx + 0x3f8)) ||
             (*(int16_t *)(ctx + 0x3f8) < 0x6c4)) {
             display_request_clear();
-            maybe_set_pending_request((int32_t)0x0804c1d0); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c1d0);
             uVar6 = lowest_set_bit_index(*(uint32_t *)(ctx + 0x3b8), *(uint32_t *)(ctx + 0x3bc));
             matrix_draw_number(uVar6, 4);
         } else {
             display_request_clear();
-            maybe_set_pending_request((int32_t)0x0804693c); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804693c);
         }
         g_disp_flags[8] = g_disp_flags[4];
         set_mode_state_byte(1);
@@ -402,7 +403,7 @@ void display_mode_sm_step(uint8_t *ctx)
     case 0xd:
         display_request_clear();
         if (ctx[0x3c9] != 0) {
-            maybe_set_pending_request((int32_t)0x0804c930); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c930);
         }
         matrix_draw_icon(ctx[0x3c9], 0xb);
         set_mode_state_byte(2);
@@ -410,7 +411,7 @@ void display_mode_sm_step(uint8_t *ctx)
     case 0xe:
         iVar4 = is_display_bus_ready();
         if ((iVar4 != 0) && (ctx[0x3ca] != 0)) {
-            maybe_set_pending_request((int32_t)0x0804c930); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c930);
         }
         matrix_draw_icon(ctx[0x3ca], 0xb);
         *(uint16_t *)(g_mode_sm + 4) = 0;
@@ -440,7 +441,7 @@ void display_mode_sm_step(uint8_t *ctx)
         }
         break;
     case 0x10:
-        maybe_set_pending_request((int32_t)0x0804c1d0); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804c1d0);
         uVar6 = lowest_set_bit_index(0, 0x10000000);
         matrix_draw_number(uVar6, 4);
         set_mode_state_byte(2);
@@ -448,127 +449,127 @@ void display_mode_sm_step(uint8_t *ctx)
     case 0x11:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804ac3c); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804ac3c);
         }
         break;
     case 0x12:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804bf58); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804bf58);
         }
         break;
     case 0x13:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804bbbc); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804bbbc);
         }
         break;
     case 0x14:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804bb84); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804bb84);
         }
         break;
     case 0x15:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x080455c8); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_080455c8);
         }
         break;
     case 0x16:
         set_mode_state_byte(2);
         break;
     case 0x17:
-        maybe_set_pending_request((int32_t)0x080491f0); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_080491f0);
         set_mode_state_byte(2);
         break;
     case 0x18:
-        maybe_set_pending_request((int32_t)0x08048518); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_08048518);
         break;
     case 0x19:
         display_request_clear();
-        maybe_set_pending_request((int32_t)0x0804cfd8); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804cfd8);
         set_mode_state_byte(2);
         break;
     case 0x1a:
-        maybe_set_pending_request((int32_t)0x08046658); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_08046658);
         set_mode_state_byte(2);
         break;
     case 0x1b:
-        maybe_set_pending_request((int32_t)0x0804c104); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804c104);
         set_mode_state_byte(2);
         break;
     case 0x1c:
-        maybe_set_pending_request((int32_t)0x08048158); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_08048158);
         set_mode_state_byte(2);
         break;
     case 0x1d:
-        maybe_set_pending_request((int32_t)0x080491f0); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_080491f0);
         set_mode_state_byte(2);
         break;
     case 0x1e:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804c88c); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c88c);
         }
         break;
     case 0x1f:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804c7e8); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c7e8);
         }
         break;
     case 0x20:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x0804c734); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_0804c734);
         }
         break;
     case 0x21:
-        maybe_set_pending_request((int32_t)0x0804c5f4); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804c5f4);
         set_mode_state_byte(2);
         break;
     case 0x22:
-        maybe_set_pending_request((int32_t)0x080466d4); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_080466d4);
         set_mode_state_byte(2);
         break;
     case 0x23:
-        maybe_set_pending_request((int32_t)0x08046690); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_08046690);
         set_mode_state_byte(2);
         break;
     case 0x24:
         display_request_clear();
-        maybe_set_pending_request((int32_t)0x0804c1d0); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_0804c1d0);
         uVar6 = lowest_set_bit_index(*(uint32_t *)(ctx + 0x3b8), *(uint32_t *)(ctx + 0x3bc));
         matrix_draw_number(uVar6, 4);
         set_mode_state_byte(2);
         break;
     case 0x25:
-        maybe_set_pending_request((int32_t)0x080464ec); /* request descriptor */
+        maybe_set_pending_request((int)g_disp_req_080464ec);
         set_mode_state_byte(2);
         break;
     case 0x26:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x080471ac); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_080471ac);
         }
         break;
     case 0x27:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x08046ce4); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_08046ce4);
         }
         break;
     case 0x28:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x08046f60); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_08046f60);
         }
         break;
     case 0x29:
         iVar4 = is_display_bus_ready();
         if (iVar4 != 0) {
-            maybe_set_pending_request((int32_t)0x08046ac8); /* request descriptor */
+            maybe_set_pending_request((int)g_disp_req_08046ac8);
         }
         break;
     }
@@ -770,9 +771,9 @@ uint32_t display_panel_reset(void)
     while (tries < 3) {
         if (led_driver_panel_config(0x60) == 0)
             break;
-        /* DAT_0803b520 = 0x20009D98 -> shared SRAM object; its first word is a
-         * function pointer (output/print sink). DAT_0803b524 = 0x08052D08 = "NAK\r\n". */
-        (*(void (**)(const char *))0x20009D98)((const char *)0x08052D08);
+        /* 0x20009D98 -> shared SRAM object; its first word is a
+         * function pointer (output/print sink). */
+        (*(void (**)(const char *))0x20009D98)("NAK\r\n");
         tries++;
     }
     if (tries >= 3)
@@ -783,7 +784,7 @@ uint32_t display_panel_reset(void)
     while (tries < 3) {
         if (led_driver_panel_config(0x66) == 0)
             break;
-        (*(void (**)(const char *))0x20009D98)((const char *)0x08052D08);
+        (*(void (**)(const char *))0x20009D98)("NAK\r\n");
         tries++;
     }
     if (tries >= 3)
@@ -1291,8 +1292,7 @@ uint32_t led_matrix_transmit_step(void)
 
         /* log " ERR dsp freeze\r\n" via the runtime log fn-ptr */
         log_print_timestamp_prefix();
-        (*(void (**)(const char *))log_obj)(
-            (const char *)0x08052d10 /* " ERR dsp freeze\r\n" */);
+        (*(void (**)(const char *))log_obj)(" ERR dsp freeze\r\n");
 
         /* tear down I2C2 and bit-bang a clock-recovery on the bus */
         FUN_0803c8d4();   /* I2C2 deinit */
@@ -1476,25 +1476,25 @@ void matrix_draw_speed(uint32_t speed, char param_2, uint32_t param_3,
         bright_obj[5] = 100;
         matrix_draw_level_bar(0);
         /* DAT_0803be68 -> 0x0804aad4 (static glyph/region descriptor) */
-        display_request_set((int32_t)0x0804aad4);
+        display_request_set((int)g_disp_req_0804aad4);
     }
     else if (speed < 0xe) {
         bright_obj[5] = 100;
         matrix_draw_level_bar(0);
         /* DAT_0803be6c -> 0x0804a990 (static glyph/region descriptor) */
-        display_request_set((int32_t)0x0804a990);
+        display_request_set((int)g_disp_req_0804a990);
     }
     else if (speed < 0x13) {
         bright_obj[5] = 100;
         matrix_draw_level_bar(0);
         /* DAT_0803be70 -> 0x0804a84c (static glyph/region descriptor) */
-        display_request_set((int32_t)0x0804a84c);
+        display_request_set((int)g_disp_req_0804a84c);
     }
     else if (speed < 0x17) {
         bright_obj[5] = 100;
         matrix_draw_level_bar(0);
         /* DAT_0803be64 -> 0x0804a708 (static glyph/region descriptor) */
-        display_request_set((int32_t)0x0804a708);
+        display_request_set((int)g_disp_req_0804a708);
     }
     else {
         /* Animated running-speed branch: one update per systick tick. */
@@ -1516,23 +1516,23 @@ void matrix_draw_speed(uint32_t speed, char param_2, uint32_t param_3,
                 if (param_2 < 6) {
                     if (*(char *)(G_DISP + 0x12f) == 0) {
                         /* DAT_0803be7c -> 0x0804ac3c (running-bar region descriptor) */
-                        display_request_set((int32_t)0x0804ac3c);
+                        display_request_set((int)g_disp_req_0804ac3c);
                     }
                     else {
                         bright_obj[5] = 0;
                         /* DAT_0803be78 -> 0x0804ac18 (running-bar region descriptor, blank phase) */
-                        display_request_set((int32_t)0x0804ac18);
+                        display_request_set((int)g_disp_req_0804ac18);
                     }
                 }
                 else {
                     /* DAT_0803be7c -> 0x0804ac3c (running-bar region descriptor) */
-                    display_request_set((int32_t)0x0804ac3c);
+                    display_request_set((int)g_disp_req_0804ac3c);
                 }
                 matrix_draw_level_bar_blink((uint8_t)level);
             }
             else {
                 /* DAT_0803be7c -> 0x0804ac3c (running-bar region descriptor) */
-                display_request_set((int32_t)0x0804ac3c);
+                display_request_set((int)g_disp_req_0804ac3c);
                 matrix_draw_level_bar((uint8_t)level);
             }
 
