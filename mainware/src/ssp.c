@@ -308,3 +308,69 @@ int ssp_ble_seq_id_in_use(uint8_t seq)
     }
     return 0;
 }
+
+/* ── generic outbound-message table (distinct from the BLE/SSP tx_queue) ─────
+ * A 16-slot x 24-byte table at SRAM 0x20007E14, drained by sspm_tx_queue_pump
+ * (0x0803A278) and shared by the battery/motor/BLE/telemetry/console subsystems
+ * for inter-module messages. */
+typedef struct {
+    uint8_t  type;        /* [0]  message type/opcode (param `type`)        */
+    uint8_t  state;       /* [1]  slot state: 0 = free, 2 = pending         */
+    uint8_t  _resv;       /* [2]  committed from uninitialized stack         */
+    uint8_t  handle;      /* [3]  rolling unique handle                      */
+    uint16_t id;          /* [4]  message id / arg (param `id`)             */
+    uint16_t len;         /* [6]  payload length in bytes                    */
+    uint8_t  payload[16]; /* [8]  payload bytes                              */
+} tx_msg_record_t;
+
+#define TX_MSG_TABLE       ((volatile tx_msg_record_t *)0x20007e14u)
+#define TX_MSG_SLOTS       16
+#define TX_MSG_HANDLE_CTR  (*(volatile uint8_t *)0x200000c8u)
+
+extern uint8_t update_mode_get(void);              /* 0x080313d8: link state, 2 = ready */
+extern int     tx_table_handle_in_use(uint8_t h);  /* 0x08039fe0: scan table for handle */
+
+/* Enqueue one outbound message into the table, gated on the inter-module link
+ * being connected (OEM maybe_enqueue_tx_message, 0x0803a1c4). Picks a free slot
+ * (state == 0) and a non-colliding rolling handle from the 0x200000c8 counter;
+ * on a handle collision it bumps the counter and advances to the next slot
+ * (NOT a same-slot retry). Returns the slot index 0..15, 0 if not connected,
+ * 0xFD if len > 16, 0xFF if the table is full. */
+unsigned int maybe_enqueue_tx_message(uint16_t id, uint32_t len,
+                                      const void *payload, uint8_t type)
+{
+    if (update_mode_get() != 2) {
+        return 0;
+    }
+    if (len > 0x10u) {
+        return 0xFD;
+    }
+
+    for (unsigned int slot = 0; slot < TX_MSG_SLOTS; slot++) {
+        if (TX_MSG_TABLE[slot].state != 0) {
+            continue;                       /* slot in use */
+        }
+
+        uint8_t handle = TX_MSG_HANDLE_CTR;
+        if (tx_table_handle_in_use(handle) != 0) {
+            TX_MSG_HANDLE_CTR = (uint8_t)(handle + 1);
+            continue;                       /* handle collision -> next slot */
+        }
+
+        tx_msg_record_t rec;
+        rec.type   = type;
+        rec.state  = 2;                     /* pending */
+        rec.handle = handle;
+        rec.id     = id;
+        rec.len    = (uint16_t)len;
+        if (len != 0) {
+            memcpy(rec.payload, payload, len);
+        }
+
+        TX_MSG_HANDLE_CTR = (uint8_t)(handle + 1);
+        TX_MSG_TABLE[slot] = rec;
+        return slot;
+    }
+
+    return 0xFF;                            /* table full */
+}

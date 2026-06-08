@@ -412,3 +412,17 @@ void led_channel3_set_brightness(uint32_t duty)
 {
     *(volatile uint32_t *)(*(volatile uint32_t *)0x20009A84u + 0x3c) = duty;
 }
+
+/* Pack the three lamp-channel on/off bits for the BLE 0x5582 read (OEM
+ * ble_get_led_channel_state, 0x08037a68). Byte +0x0d of each 0x14-byte channel
+ * record (ch0/ch1/ch2 at G_LIGHTS +0/+0x14/+0x28) is the current PWM level;
+ * non-zero == lit. Returns bit0=ch0, bit1=ch1, bit2=ch2. The 0x5582 reader calls
+ * this three times and peels off one bit per response byte. */
+uint8_t ble_get_led_channel_state(void)
+{
+    uint8_t bit0 = (G_LIGHTS[0x0d] != 0) ? 0x01u : 0x00u;   /* ch0 +0x0d */
+    uint8_t bit1 = (G_LIGHTS[0x21] != 0) ? 0x02u : 0x00u;   /* ch1 +0x14+0x0d */
+    uint8_t bit2 = (G_LIGHTS[0x35] != 0) ? 0x04u : 0x00u;   /* ch2 +0x28+0x0d */
+
+    return (uint8_t)(bit2 | bit1 | bit0);
+}

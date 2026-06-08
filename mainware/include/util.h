@@ -31,4 +31,8 @@ uint32_t ringbuf_push_byte(ringbuf_t *rb, uint8_t b);
  * buffer is empty. OEM ringbuf_get_byte at 0x080318AE. */
 uint32_t ringbuf_get_byte(ringbuf_t *rb, uint8_t *out);
 
+/* Linear-map v in [a,b] onto [c,d], clamping first (unsigned clamp + divide).
+ * OEM telemetry_map_clamp 0x0803a588 (BLE 0x5541 SoC scale, speed bar). */
+uint8_t telemetry_map_clamp(uint8_t v, uint32_t a, uint32_t b, int32_t c, int32_t d);
+
 #endif

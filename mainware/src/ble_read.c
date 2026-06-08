@@ -4,9 +4,15 @@
 
 #include "app.h"
 #include "app_state.h"
+#include "crc.h"
+#include "gpio.h"
+#include "lighting.h"
 #include "log.h"
+#include "rtc.h"
+#include "sensor.h"
 #include "ssp.h"
 #include "stm32f413_gpio.h"
+#include "util.h"
 
 /* ------------------------------------------------------------------ *
  * ble_read_request_dispatch (OEM 0x08034D20) — the BLE read/telemetry
@@ -35,31 +41,103 @@
 /* libc / CubeF4 HAL helpers, supplied by the vendored upstream at link time. */
 extern int HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin);
 
-/* Telemetry / state helpers already decoded elsewhere. */
-extern int      bike_status_coarse_get(void);          /* coarse app status enum */
-extern uint8_t  ble_lock_state_get(void);              /* 0 unlocked / 1 locked / 2 pin-lock */
-extern uint8_t  ble_unlock_state_get(void);            /* unlock/alarm coarse state */
-extern int      bike_state_is_standby(void);           /* alarm-armed (state 0x0E) test */
-extern int      hw_version_lookup(uint8_t *out);       /* fills HW version byte, 0 = not found */
-extern uint16_t supply_voltage_read(void);             /* supply rail in mV */
-extern uint8_t  maybe_get_bike_state(void);            /* fine bike-state byte */
-
-/* The motor/battery Modbus block poll (0x14/0x19) returns a status compared
- * < 0x11 (the normal packed-response ack ssp_ble_enqueue_tx_packet returns a
- * byte compared < 0x81). OEM 0x0803FB6C-ish enqueue twin. */
+/* Telemetry / state getters are now sourced in their home modules (headers
+ * included above):
+ *   app.h      bike_status_coarse_get / bike_state_is_standby /
+ *              ble_lock_state_get / ble_unlock_state_get / maybe_get_bike_state
+ *   sensor.h   supply_voltage_read / charge_level_adc_get / hw_version_lookup
+ *   gpio.h     gpio_pc0_is_low / gpio_pc1_is_low
+ *   lighting.h ble_get_led_channel_state / light_sensor_read_step
+ *   util.h     telemetry_map_clamp
+ *   rtc.h      rtc_now_epoch_seconds
+ * ble_get_charge_plug_state and ble_build_testmode_versions_blob are defined
+ * below (this is their home).
+ *
+ * The motor/battery Modbus block poll (0x14/0x19) enqueues via the shared
+ * outbound-message table (OEM maybe_enqueue_tx_message, 0x0803a1c4, in ssp.c)
+ * and returns a status compared < 0x11. Kept as a local extern — no header,
+ * since several callers pass the payload arg as a raw address. */
 extern unsigned int maybe_enqueue_tx_message(uint16_t id, int kind, uint32_t src, int flags);
 
-/* Helpers still to be decoded — kept as opaque externs so we call them at
- * the right address for behavioural equivalence. */
-extern uint8_t  telemetry_map_clamp(uint8_t v, int a, int b, int c, int d); /* SoC scale/clamp -> % */
-extern uint8_t  ble_get_charge_plug_state(void);                    /* BMS sw-version byte (0x5542) */
-extern uint8_t  charge_level_adc_get(void);                    /* charger state (0x5543) */
-extern void    *ble_build_testmode_versions_blob(int arg);                 /* testmode blob, 0x60 B (0x5551) */
-extern uint32_t rtc_now_epoch_seconds(void);                    /* tracking/modem field (0x5567) */
-extern uint8_t  gpio_pc0_is_low(void);                    /* button state A (0x5568) */
-extern uint8_t  gpio_pc1_is_low(void);                    /* button state B (0x5568) */
-extern int      ble_get_led_channel_state(void);                    /* LED channel state (0x5582) */
-extern int      light_sensor_read_step(void);                    /* light-sensor reading (0x5584) */
+/* GPIOC charger-detect pin (PC10). */
+#define GPIO_PIN_10   0x0400u
+
+/* Bike-state context block (0x20000029): +0x13 = charge sub-state flag (the
+ * state byte at +4 is read via maybe_get_bike_state). */
+#define BLE_BIKE_CTX  ((volatile uint8_t *)0x20000029u)
+
+/* Charger-plug / BMS charge state byte for the BLE 0x5542 read (OEM
+ * ble_get_charge_plug_state, 0x0802a87c). Charger-detect line (PC10) low -> 4
+ * (charger absent). Otherwise only state 0x15 (charging) consults the +0x13 flag
+ * to pick sub-state 1 (set) vs 2 (clear); any other state reports 0. */
+uint8_t ble_get_charge_plug_state(void)
+{
+    if (HAL_GPIO_ReadPin((void *)GPIOC_BASE, GPIO_PIN_10) == 0) {
+        return 4;
+    }
+    if (maybe_get_bike_state() == 0x15u) {
+        return BLE_BIKE_CTX[0x13] == 0 ? 2 : 1;
+    }
+    return 0;
+}
+
+/* Build the 0x60-byte testmode/versions ASCII blob for the BLE 0x5551 read (OEM
+ * ble_build_testmode_versions_blob, 0x0802a9dc). Six 0x10-byte fields are carved
+ * into the scratch at 0x200001D8 + 0x1C; per-module info comes through the
+ * session-context pointer (CTX_PTR_HOLDER), this firmware's version from the
+ * image header. The blob's hardware CRC-32 is returned through *out_crc — the
+ * OEM stores it unconditionally and the 0x5551 reader passes NULL, relying on
+ * the resulting write to flash-alias address 0 being benign; we guard it
+ * instead. The other two callers (ble_telemetry_change_broadcast) pass a real
+ * pointer. Returns the blob pointer. */
+uint32_t *ble_build_testmode_versions_blob(uint32_t *out_crc)
+{
+    char    *buf = (char *)(0x200001d8u + 0x1c);
+    uint8_t *dev = CTX_PTR_HOLDER;          /* session/module info struct */
+    uint32_t v;
+
+    memset(buf, 0, 0x60);
+
+    /* field 0: this firmware's version word (image header + 4) */
+    v = *(const uint32_t *)(APP_IMAGE_HEADER + 4);
+    snprintf(buf, 0x10, "%d.%02d.%02d",
+             (int)(v >> 0x18), (int)((v >> 0x10) & 0xff), (int)((v >> 8) & 0xff));
+
+    /* field 1: shifter/sub fw (dev + 0x38c) */
+    v = *(const uint32_t *)(dev + 0x38c);
+    snprintf(buf + 0x10, 0x10, "%d.%d.%02d",
+             (int)((v >> 0x10) & 0xff), (int)((v >> 8) & 0xff), (int)(v & 0xff));
+
+    /* field 2: BMSWare fw (dev + 0x388), leading byte as %c */
+    v = *(const uint32_t *)(dev + 0x388);
+    snprintf(buf + 0x20, 0x10, "%c.%d.%02d.%02d\r\n",
+             (int)(v >> 0x18), (int)((v >> 0x10) & 0xff),
+             (int)((v >> 8) & 0xff), (int)(v & 0xff));
+
+    /* field 3: name string at *(dev + 0x3e8) + 0x20 */
+    snprintf(buf + 0x30, 0x10, "%s",
+             (const char *)(*(const uint32_t *)(dev + 0x3e8) + 0x20));
+
+    /* field 4: hw/board rev (u16 @ dev + 0x52a), hi.lo */
+    {
+        uint16_t hw = *(const uint16_t *)(dev + 0x52a);
+        snprintf(buf + 0x40, 0x10, "%d.%d", (int)(hw >> 8), (int)(uint8_t)hw);
+    }
+
+    /* field 5: signed byte @ dev+0x409 (%X, sign-extended), low byte of u16 @ dev+0x408 */
+    {
+        int8_t  hi8 = *(const int8_t   *)(dev + 0x409);
+        uint8_t lo8 = (uint8_t)*(const uint16_t *)(dev + 0x408);
+        snprintf(buf + 0x50, 0x10, "%X.%02X", (unsigned)hi8, (unsigned)lo8);
+    }
+
+    /* CRC-32 over the whole 0x18-word (0x60-byte) blob via the HW CRC unit. */
+    v = crc32_hw_feed((crc_dev_t *)0x20009d90u, (const uint32_t *)buf, 0x18);
+    if (out_crc != 0) {
+        *out_crc = v;
+    }
+    return (uint32_t *)buf;
+}
 
 /* The OEM log calls take two shapes: (*log[2])(fmt) for the plain label form
  * and (*log[0])(fmt, arg) for the formatted form. Both resolve to the same

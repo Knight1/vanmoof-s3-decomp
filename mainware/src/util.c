@@ -68,3 +68,21 @@ uint32_t ringbuf_get_byte(ringbuf_t *rb, uint8_t *out)
     rb->count = (int16_t)(rb->count - 1);
     return 1;
 }
+
+/* Linear-map v from input range [a,b] onto output range [c,d], clamping v to
+ * [a,b] first (OEM telemetry_map_clamp, 0x0803a588). Used by the BLE 0x5541 SoC
+ * scale (telemetry_map_clamp(soc, 0, 0x61, 0, 100)) and matrix_draw_speed. The
+ * clamp comparisons and the divide are UNSIGNED in the OEM (bcs/bls/udiv); only
+ * (d-c) and the final + c are signed. Pure leaf — no globals, no callees. */
+uint8_t telemetry_map_clamp(uint8_t v, uint32_t a, uint32_t b, int32_t c, int32_t d)
+{
+    uint32_t x = v;
+
+    if (x < a) {
+        x = a;
+    }
+    if (x > b) {
+        x = b;
+    }
+    return (uint8_t)((uint32_t)((d - c) * (int32_t)(x - a)) / (b - a) + (uint32_t)c);
+}

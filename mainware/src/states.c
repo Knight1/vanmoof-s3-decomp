@@ -85,7 +85,8 @@ extern int matrix_draw_icon();
 extern int clear_flag_00e5();
 extern int app_ctx_clear_field_328();
 extern int battery_telemetry_state_get();
-extern int announce_records_reset();
+void announce_records_reset();   /* sourced at end of file; one call site (status_process)
+                                  * relies on the OEM's K&R arg-less form, so keep it unspecified */
 extern int gpio_pc0_is_low();
 
 /* Map an alarm/bike state code (0..0x3D) to its name (OEM alarm_state_name,
@@ -2511,4 +2512,77 @@ LAB_0802d668:
     }
   }
   return;
+}
+
+/* ── scheduler-arming helpers for the status / display state machines ────────
+ * announce_records_reset is called throughout status_process; the other three
+ * are driven from the BLE command surface (ble_cmd_dispatch). */
+
+/* Selectively reset the three button/announce state machines sharing the 6-byte
+ * record block at SRAM 0x20009360 (OEM announce_records_reset, 0x0804031c). The
+ * arg is a 3-bit mask: machine A (bit 0) resets to its re-arm state 5, B/C to 0;
+ * dispatch-state bytes [3..5], phase bytes [0..2]. */
+void announce_records_reset(int flags)
+{
+    volatile uint8_t *rec = (volatile uint8_t *)0x20009360u;
+
+    if (flags & 1) { rec[3] = 5; rec[0] = 0; }   /* machine A -> idle/re-arm */
+    if (flags & 2) { rec[4] = 0; rec[1] = 0; }   /* machine B */
+    if (flags & 4) { rec[5] = 0; rec[2] = 0; }   /* machine C */
+}
+
+/* Enter the display "announce" mode 4 (OEM display_announce_enter, 0x0802f16c) —
+ * the sibling of app.c's enter_mode3_arm_show_timer (same 0x20000068 state block
+ * and "ssp_show_tmr" 4000-tick timer). Save the current mode as "previous"
+ * (unless already 3/4), lazily allocate+name the timer, (re)start it, force the
+ * display to mode 4, then clear the dual display buffers. 0xFA = unallocated slot
+ * (ARM char is unsigned). */
+void display_announce_enter(void)
+{
+    volatile uint8_t *st   = (volatile uint8_t *)0x20000068u;   /* [0]=mode, [7]=slot */
+    volatile uint8_t *prev = (volatile uint8_t *)0x20000288u;   /* [4]=previous mode */
+    uint8_t mode = st[0];
+
+    if ((uint8_t)(mode - 3u) > 1u) {        /* mode not in {3,4} */
+        prev[4] = mode;
+    }
+    if (st[7] == 0xFAu) {                    /* no slot allocated yet */
+        uint8_t slot = scheduler_alloc();
+        st[7] = slot;
+        scheduler_set_timer_name(slot, 4000u, (const char *)0x08050820u);  /* "ssp_show_tmr" */
+    }
+    scheduler_start(st[7], 4000u, 0);
+    st[0] = 4;                              /* announce mode */
+    reset_dual_buffers_and_flags();
+}
+
+/* Arm/disarm the display-timeout scheduler task (OEM display_timeout_timer_set,
+ * 0x0802e3d0). ticks==0 releases the slot; otherwise lazily allocate it and arm
+ * for ticks*1000 scheduler ticks (seconds -> ms) with no callback. Slot byte at
+ * the status ctx 0x20000029 + 0x16. */
+void display_timeout_timer_set(uint16_t ticks)
+{
+    volatile uint8_t *slot = (volatile uint8_t *)(0x20000029u + 0x16u);
+
+    if (ticks == 0) {
+        scheduler_release((uint8_t *)slot);
+        return;
+    }
+    if (*slot == 0xFAu) {
+        *slot = scheduler_alloc();
+    }
+    scheduler_start(*slot, (uint32_t)ticks * 1000u, 0);
+}
+
+/* (Re)arm the lock-poll scheduler task (OEM lock_poll_timer_arm, 0x0802a03c).
+ * Slot byte at the status ctx 0x20000029 + 8; lazily allocated, then started to
+ * fire 100 ticks later (status_process polls the slot itself). */
+void lock_poll_timer_arm(void)
+{
+    volatile uint8_t *slot = (volatile uint8_t *)(0x20000029u + 8u);
+
+    if (*slot == 0xFAu) {
+        *slot = scheduler_alloc();
+    }
+    scheduler_start(*slot, 100u, 0);
 }

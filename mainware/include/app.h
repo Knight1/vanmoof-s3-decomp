@@ -65,4 +65,11 @@ uint8_t update_mode_get(void);
 /* Reset the request-context dual buffers + flags at 0x20008230 (OEM 0x0803B780). */
 void reset_dual_buffers_and_flags(void);
 
+/* Bike-state derivations off the FSM state object (0x20000029+4), feeding the
+ * BLE read surface. */
+uint8_t bike_status_coarse_get(void);  /* coarse status enum (OEM 0x08029bac) */
+int     bike_state_is_standby(void);   /* state == 0x0E alarm-armed (OEM 0x08029b74) */
+uint8_t ble_lock_state_get(void);      /* 0 unlocked / 1 locked / 2 pin-lock (OEM 0x0802a8e8) */
+uint8_t ble_unlock_state_get(void);    /* coarse unlock/alarm state (OEM 0x0802a90c) */
+
 #endif

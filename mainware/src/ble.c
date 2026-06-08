@@ -88,10 +88,17 @@ extern const uint8_t REQ_LIGHT_ON[];       /* light on   (0x5581 p1) */
 extern const uint8_t REQ_LIGHT_OFF[];      /* light off  (0x5581 p2) */
 extern const uint8_t REQ_LIGHT_AUTO[];     /* light auto (0x5581 p0) */
 
-/* case 0x5564 1 s wheel-size poll task body (OEM 0x08033935, Thumb). */
-extern void sspm5_tx_timeout_cb(void);   /* matches sched_cb_t (void(void)) */
+/* Shared generic outbound-message enqueue (OEM 0x0803a1c4, sourced in ssp.c) —
+ * used by the wheel-size 1 s poll callback (sspm5_tx_timeout_cb) defined below. */
+extern unsigned int maybe_enqueue_tx_message(uint16_t id, uint32_t len,
+                                             const void *payload, uint8_t type);
 
-/* ── still-auto-named callees (kept as FUN_ externs; meaning undecided) ─────*/
+/* ── callees decoded/sourced in their home modules (forward decls) ──────────
+ * announce_records_reset / display_announce_enter / display_timeout_timer_set /
+ * lock_poll_timer_arm -> states.c; app_ctx_clear_field_328 / clear_flag_00e5 ->
+ * app.c; rtc_set_from_unix_time -> rtc.c; obj_set_field34/38 +
+ * led_channel3_set_brightness -> lighting.c. (count_active_2bit_groups,
+ * sspm5_tx_timeout_cb, post_request_with_arg are defined just below — their home.) */
 extern void announce_records_reset(int);
 extern void shifter_mode_command_dispatch(uint8_t);
 extern void lock_poll_timer_arm(void);
@@ -104,13 +111,52 @@ extern void region_speed_preset_table_load(uint32_t base, uint8_t v);
 extern void shifter_sm_set_step_3(void);
 extern void shifter_send_gear(uint8_t);
 extern void clear_flag_00e5(void);
-extern void post_request_with_arg(uint8_t);
 extern void rtc_set_from_unix_time(uint32_t);
-extern char count_active_2bit_groups(uint32_t);    /* digit/popcount of a 32-bit word */
 extern void obj_set_field38(int);
 extern void obj_set_field34(int);
 extern void led_channel3_set_brightness(int);
 extern void app_log_sink_enable(void);
+
+/* Count the non-zero 2-bit groups in a 32-bit word (base-4 set-digit count) for
+ * the backup-code strength compare in cmd 0x5572 (OEM count_active_2bit_groups,
+ * 0x08033914). Sole caller is ble_cmd_dispatch, so static. */
+static uint8_t count_active_2bit_groups(uint32_t w)
+{
+    uint8_t count = 0;
+
+    for (int32_t shift = 0; shift < 0x20; shift += 2) {
+        if (((w >> shift) & 3u) != 0u) {
+            count = (uint8_t)(count + 1);
+        }
+    }
+    return count;
+}
+
+/* Wheel-size 1 s deferred-send callback for BLE 0x5564 (OEM sspm5_tx_timeout_cb,
+ * 0x08033934). Frees its own scheduler slot (scheduler_release rewrites
+ * g_wheelsize_timer back to the 0xFA "free" sentinel), then enqueues a generic
+ * type-0x0A message; an enqueue result > 0x10 (0xFD/0xFF) means the table is full
+ * or the link is down. */
+void sspm5_tx_timeout_cb(void)
+{
+    scheduler_release((uint8_t *)&g_wheelsize_timer);
+
+    if (maybe_enqueue_tx_message(0x0A, 0, (void *)0, 1) > 0x10u) {
+        g_log_func("  ERROR SSPM5 place\r\n");
+    }
+}
+
+/* Queue a factory-reset / power-cycle sub-step into the reset state-machine
+ * control block at SRAM 0x20006E44 (OEM post_request_with_arg, 0x08038ec4). The
+ * sub-step byte is written first, then main_state := 4, so the cooperatively
+ * scheduled SM never observes state 4 paired with a stale sub-step. */
+void post_request_with_arg(uint8_t arg)
+{
+    volatile uint8_t *reset_req = (volatile uint8_t *)0x20006e44u;
+
+    reset_req[1] = arg;   /* sub-step selector (0..6) */
+    reset_req[0] = 4;     /* main_state = 4: kick the reset SM */
+}
 
 void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
 {

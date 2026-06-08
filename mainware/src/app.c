@@ -302,3 +302,93 @@ void reset_dual_buffers_and_flags(void)
     *(volatile uint8_t *)(base + 0x132) = 1;
     display_request_clear();
 }
+
+/* ── bike-state derivations ──────────────────────────────────────────────────
+ * All read the FSM state object at SRAM 0x20000029 (state byte at +4) that
+ * maybe_get/set_bike_state and status_process share, and feed the BLE read
+ * surface (ble_read_request_dispatch / ble_telemetry_change_broadcast). */
+
+extern int bike_is_locked(void);   /* physical lock-pin sense, decoded elsewhere */
+
+/* Collapse the fine state byte into the coarse status enum reported over BLE
+ * (OEM bike_status_coarse_get, 0x08029bac — a TBB jump table on state-3).
+ * State 0x0D maps to 3 only while a subsystem update is in progress
+ * (app-ctx +0x32C via the pointer at 0x20000944), else 0. */
+uint8_t bike_status_coarse_get(void)
+{
+    uint8_t state = ((volatile uint8_t *)0x20000029u)[4];
+
+    switch (state) {
+    case 3:
+    case 4:    return 2;
+    case 6:
+    case 7:    return 4;
+    case 0x0c: return 1;
+    case 0x0d:
+        if (((const uint8_t *)(*(void **)0x20000944u))[0x32c] != 0) {
+            return 3;
+        }
+        return 0;
+    case 0x0e:
+    case 0x15:
+    case 0x1b:
+    case 0x1d: return 0;
+    case 0x0f: return 6;
+    case 0x19:
+    case 0x1a: return 3;
+    default:   return 7;
+    }
+}
+
+/* 1 iff the bike state byte == 0x0E (alarm-armed / standby) (OEM 0x08029b74). */
+int bike_state_is_standby(void)
+{
+    return ((volatile uint8_t *)0x20000029u)[4] == 0x0Eu ? 1 : 0;
+}
+
+/* Coarse lock state for BLE: 0 unlocked / 1 locked / 2 pin-lock (OEM 0x0802a8e8).
+ * States 0x28..0x37 are the pin-lock window (the OEM (uint8_t)(state-0x28) <= 0xF
+ * unsigned-wrap test); otherwise defer to the physical lock sense. */
+uint8_t ble_lock_state_get(void)
+{
+    uint8_t state = ((volatile uint8_t *)0x20000029u)[4];
+
+    if ((uint8_t)(state - 0x28u) <= 0x0Fu) {
+        return 2;
+    }
+    return bike_is_locked() != 0 ? 1 : 0;
+}
+
+/* Coarse unlock/alarm state for BLE (OEM ble_unlock_state_get, 0x0802a90c).
+ * While the readiness byte (0x20000029+4) is < 2 the module is still booting (2);
+ * otherwise map the app-ctx fine state at +0x310 through a small jump table. */
+uint8_t ble_unlock_state_get(void)
+{
+    if (((volatile uint8_t *)0x20000029u)[4] < 2u) {
+        return 2;
+    }
+    switch ((*(volatile uint8_t **)0x20000944u)[0x310]) {
+    case 0:
+    case 1:    return 2;
+    case 2:    return 3;
+    case 3:
+    case 4:    return 4;
+    case 0x0b: return bike_is_locked() ? 1 : 0;
+    default:   return 0;
+    }
+}
+
+/* Zero the app-context word at 0x200083A8 + 0x328 on the state-4 transition
+ * (OEM app_ctx_clear_field_328, 0x0803dbb8). No header decl: ble.c/states.c keep
+ * their own externs for it. */
+void app_ctx_clear_field_328(void)
+{
+    *(volatile uint32_t *)(0x200083a8u + 0x328u) = 0;
+}
+
+/* Reset the SMS/GSM tracking-state flag byte at SRAM 0x200000E5 (OEM
+ * clear_flag_00e5, 0x0803ce08). Byte access; a standalone flag, not a ctx field. */
+void clear_flag_00e5(void)
+{
+    *(volatile uint8_t *)0x200000E5u = 0;
+}

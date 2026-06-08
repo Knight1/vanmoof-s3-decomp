@@ -33,6 +33,7 @@ typedef struct {
 
 extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state); /* 0x08026AC6 */
 extern void HAL_GPIO_Init(void *GPIOx, gpio_init_record_t *init);         /* 0x080267D0 */
+extern int  HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);             /* 0x08026AB8 */
 
 void gpio_init(void)
 {
@@ -87,4 +88,18 @@ void gpio_init(void)
 
     gi.Pin = 0x400; gi.Mode = GPIO_MODE_AF_C; gi.Field2 = 2;     /* GPIOC AF idx 2 */
     HAL_GPIO_Init(GPIOC_BASE, &gi);
+}
+
+/* PC0 / PC1 sense lines: return 1 when the pin reads LOW, else 0 (OEM
+ * gpio_pc0_is_low 0x08040350 / gpio_pc1_is_low 0x08040368 — the two button-state
+ * bytes of the BLE 0x5568 read). The OEM calls HAL_GPIO_ReadPin (1 = high) and
+ * inverts the result through the branchless clz/lsr#5 "== 0" idiom. */
+int gpio_pc0_is_low(void)
+{
+    return HAL_GPIO_ReadPin(GPIOC_BASE, 0x1) == 0;   /* PC0 */
+}
+
+int gpio_pc1_is_low(void)
+{
+    return HAL_GPIO_ReadPin(GPIOC_BASE, 0x2) == 0;   /* PC1 */
 }

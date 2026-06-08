@@ -31,4 +31,8 @@ void obj_set_field34(uint32_t duty);            /* CCR1 */
 void obj_set_field38(uint32_t duty);            /* CCR2 */
 void led_channel3_set_brightness(uint32_t duty);/* CCR3 */
 
+/* Pack the three lamp-channel on/off bits (bit0=ch0..bit2=ch2) for the BLE
+ * 0x5582 lighting-state read. OEM ble_get_led_channel_state 0x08037a68. */
+uint8_t ble_get_led_channel_state(void);
+
 #endif

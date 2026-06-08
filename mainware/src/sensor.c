@@ -51,3 +51,57 @@ uint16_t supply_voltage_read(void)
 
     return moving_avg10_push(scaled);   /* smoothed reading */
 }
+
+/* Charger-level byte for the BLE 0x5543 read (OEM charge_level_adc_get,
+ * 0x08037160). The raw 12-bit charger ADC sample lives at +0x10 of the lipo/charge
+ * context (0x20005DB4, the object lipo_charge_state_monitor maintains). 0xFFF is
+ * the 12-bit full-scale "no reading / sensor invalid" sentinel — reported as the
+ * 0xFF byte; otherwise the sample is scaled by /10 (OEM signed magic-multiply)
+ * and truncated to a byte. Callers consume only the low byte. */
+#define CHARGE_CTX_ADC_SAMPLE  (*(volatile int32_t *)(0x20005DB4u + 0x10u))
+
+uint8_t charge_level_adc_get(void)
+{
+    int32_t sample = CHARGE_CTX_ADC_SAMPLE;
+
+    if (sample == 0xFFF) {
+        return 0xFF;
+    }
+    return (uint8_t)(sample / 10);
+}
+
+/* Identify the board HW revision 0..15 from the HW-ID resistor-divider voltage
+ * sensed on an ADC channel (OEM hw_version_lookup, 0x08032ce4). The latest
+ * 10-sample moving average (raw 12-bit code at ADC_CTX+0x24) is converted to mV
+ * as (code*3300)>>12, then matched against a 16-entry table of divider pairs at
+ * flash rodata 0x08044f9c: each entry's band centre is r_high*3300/(r_high+r_low)
+ * mV and a +/-80 mV window selects it. The matched index is cached at ADC_CTX+0x22
+ * and written to *out; returns 1 on a match (index < 16), else 0 (out = 16). */
+#define HW_ID_TABLE   ((const float (*)[2])0x08044f9cu)  /* 16 x {r_low, r_high} */
+#define HW_VERSION_BYTE  (*(volatile uint8_t  *)(ADC_CTX + 0x22))
+#define HW_ADC_AVG       (*(volatile uint16_t *)(ADC_CTX + 0x24))
+
+int hw_version_lookup(uint8_t *out)
+{
+    float measured_mv = (float)(uint32_t)(((uint32_t)HW_ADC_AVG * 3300u) >> 12);
+    uint8_t i;
+
+    HW_VERSION_BYTE = 0;
+
+    for (i = 0; i < 16u; i = (uint8_t)(i + 1)) {
+        float r_low  = HW_ID_TABLE[i][0];
+        float r_high = HW_ID_TABLE[i][1];
+        float band   = (r_high * 3300.0f) / (r_high + r_low);
+
+        if (measured_mv < band - 80.0f) {
+            continue;
+        }
+        if (measured_mv > band + 80.0f) {
+            continue;
+        }
+        break;
+    }
+
+    *out = i;
+    return i < 16u;
+}

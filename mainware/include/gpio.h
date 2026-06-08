@@ -7,4 +7,9 @@
  * the CubeF4 HAL_GPIO_Init. This is the mainware pin map — see hardware.md. */
 void gpio_init(void);
 
+/* PC0 / PC1 sense lines: 1 if the pin reads LOW, else 0 (OEM 0x08040350 /
+ * 0x08040368). The two button-state bytes of the BLE 0x5568 read. */
+int gpio_pc0_is_low(void);
+int gpio_pc1_is_low(void);
+
 #endif
