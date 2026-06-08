@@ -176,3 +176,24 @@ uint32_t pack_validate(uint32_t *out_hdr, uint32_t *pack)
 
     return (pack[2] == crc) ? 0 : 1;
 }
+
+/* Dual-bank config persistence (OEM config_persist_dual_bank, 0x08031728): write
+ * the 0xD0-byte config record ([a][b][c][d][0xC0 payload]) to both redundant banks
+ * so a power loss mid-write can't brick the stored config. Bank A = 0x08008000
+ * (sector 2), bank B = 0x0800C000 (sector 3), each a single 16 KB sector. The
+ * load twin (flash_read_config_with_crc_restore) reads bank A and falls back to
+ * bank B on a CRC failure. Returns the OR of the two per-bank status bytes
+ * (0 = both ok; 1 erase / 2 write / 3 verify — see flash_config_bank_write). */
+#define CONFIG_BANK_A_ADDR  0x08008000u   /* sector 2 */
+#define CONFIG_BANK_B_ADDR  0x0800C000u   /* sector 3 */
+#define CONFIG_BANK_SIZE    0x4000u       /* 16 KB */
+
+uint8_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                 struct boot_cfg_block payload)
+{
+    uint8_t b1 = flash_config_bank_write(a, b, c, d, payload,
+                                         CONFIG_BANK_A_ADDR, CONFIG_BANK_SIZE);
+    uint8_t b2 = flash_config_bank_write(a, b, c, d, payload,
+                                         CONFIG_BANK_B_ADDR, CONFIG_BANK_SIZE);
+    return (uint8_t)(b1 | b2);
+}

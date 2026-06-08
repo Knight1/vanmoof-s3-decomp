@@ -31,4 +31,24 @@ uint32_t flash_addr_to_sector(uint32_t flash_addr);
  * OEM pack_validate at 0x0803CFD8. */
 uint32_t pack_validate(uint32_t *out_hdr, uint32_t *pack);
 
+/* The persisted config record body: 4 "header" words (ctx+0xF4..0x103) passed in
+ * registers, then a 0xC0-byte block (ctx+0x104..0x1C3) passed BY VALUE on the
+ * stack — matching the OEM's memcpy-then-call ABI. */
+struct boot_cfg_block { uint8_t bytes[0xC0]; };
+
+/* Commit the running config record to BOTH redundant internal-flash banks
+ * (A @ 0x08008000, B @ 0x0800C000, each one 16 KB sector), so a power loss
+ * mid-write can't brick the stored config. Returns the OR of the two per-bank
+ * status bytes (0 = both ok). OEM config_persist_dual_bank at 0x08031728. */
+uint8_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                 struct boot_cfg_block payload);
+
+/* Commit one config record to a single bank: erase -> CRC -> program -> verify.
+ * Stack-aliasing ABI (the 0xD0-byte record is split across the 4 reg args + the
+ * by-value payload; bank_dest/size follow). Name+document only (not sourced to C).
+ * OEM flash_config_bank_write at 0x080316D0. */
+extern uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                       struct boot_cfg_block payload,
+                                       uint32_t bank_dest, uint32_t size);
+
 #endif

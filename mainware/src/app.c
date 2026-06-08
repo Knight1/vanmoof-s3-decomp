@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "app.h"
 #include "audio.h"
+#include "flash.h"      /* struct boot_cfg_block, config_persist_dual_bank */
 #include "i2c.h"
 #include "log.h"
 #include "scheduler.h"
@@ -391,4 +393,103 @@ void app_ctx_clear_field_328(void)
 void clear_flag_00e5(void)
 {
     *(volatile uint8_t *)0x200000E5u = 0;
+}
+
+/* ── region speed-preset loader (OEM region_speed_preset_table_load, 0x0803FC24).
+ * Copies a 6-word (24-byte) speed-preset record for the selected region into *out
+ * (the caller passes out = ctx+0x1C4, the active speed-preset block). Each record
+ * is 6 little-endian 32-bit words (functionally u16 ramp/limit pairs, copied raw).
+ * Three flash source tables (OEM 0x0804F54C/0x0804F564/0x0804F57C) materialised
+ * here as named arrays; region 0/2/default => EU/JP, 1 => US, 3 => OffRoad. */
+static const uint32_t k_region_preset_eu_jp[6] = {   /* OEM 0x0804F54C */
+    0x00000000u, 0x0064001Eu, 0x0082001Eu, 0x00BE001Eu, 0x0109001Eu, 0x01090064u,
+};
+static const uint32_t k_region_preset_us[6] = {      /* OEM 0x0804F564 */
+    0x00000000u, 0x00A0001Eu, 0x00DC001Eu, 0x010E001Eu, 0x0140001Eu, 0x01400065u,
+};
+static const uint32_t k_region_preset_offroad[6] = { /* OEM 0x0804F57C */
+    0x00000000u, 0x00A0001Eu, 0x00DC001Eu, 0x010E001Eu, 0x0168001Eu, 0x017C0065u,
+};
+
+void region_speed_preset_table_load(void *out, int region)
+{
+    uint32_t *dst = (uint32_t *)out;
+    const uint32_t *src;
+
+    switch (region) {
+    case 1:  src = k_region_preset_us;      break;
+    case 3:  src = k_region_preset_offroad; break;
+    case 0:
+    case 2:
+    default: src = k_region_preset_eu_jp;   break;
+    }
+
+    /* OEM copies 4 words then 2 words via two ldmia; a 6-word copy is equivalent. */
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = src[3];
+    dst[4] = src[4];
+    dst[5] = src[5];
+}
+
+/* ── load factory defaults into the config block (OEM settings_factory_reset,
+ * 0x0803FAD8). When mode==1 it wipes the 0xD0-byte config region (ctx+0xF4) and
+ * seeds the base fields; it always rewrites the four region speed-preset rows
+ * (ctx+0x10E.. / +0x126..), the audio-group defaults, the backup code, and the
+ * schema word, then persists the record to both flash banks. */
+extern void backup_code_init_default(void *cfg);   /* OEM 0x0803FC50 */
+
+void settings_factory_reset(void *ctx_, int mode)
+{
+    uint8_t *ctx = (uint8_t *)ctx_;
+
+    if (mode == 1) {
+        memset(ctx + 0xf4, 0, 0xd0);
+        *(uint16_t *)(ctx + 0x100) = 0xff;
+        ctx[0x10b] = 1;
+        ctx[0x10a] = 0;
+        ctx[0x109] = 0;
+        *(uint16_t *)(ctx + 0x102) = 200;
+    }
+    *(uint16_t *)(ctx + 0x10e) = 100;
+    *(uint16_t *)(ctx + 0x110) = 0xbe;
+    *(uint16_t *)(ctx + 0x112) = 0xf0;
+    *(uint16_t *)(ctx + 0x126) = 0x50;
+    *(uint16_t *)(ctx + 0x128) = 0xaa;
+    *(uint16_t *)(ctx + 0x12a) = 0xdc;
+    *(uint16_t *)(ctx + 0x114) = 100;
+    *(uint16_t *)(ctx + 0x116) = 0xbe;
+    *(uint16_t *)(ctx + 0x118) = 0xf0;
+    *(uint16_t *)(ctx + 0x12c) = 0x50;
+    *(uint16_t *)(ctx + 0x12e) = 0xaa;
+    *(uint16_t *)(ctx + 0x130) = 0xdc;
+    *(uint16_t *)(ctx + 0x11a) = 100;
+    *(uint16_t *)(ctx + 0x11c) = 0xbe;
+    *(uint16_t *)(ctx + 0x11e) = 0x118;
+    *(uint16_t *)(ctx + 0x132) = 0x50;
+    *(uint16_t *)(ctx + 0x134) = 0xaa;
+    *(uint16_t *)(ctx + 0x136) = 0xfa;
+    *(uint16_t *)(ctx + 0x120) = 100;
+    *(uint16_t *)(ctx + 0x122) = 0xbe;
+    *(uint16_t *)(ctx + 0x124) = 0xf0;
+    *(uint16_t *)(ctx + 0x138) = 0x50;
+    *(uint16_t *)(ctx + 0x13a) = 0xaa;
+    *(uint16_t *)(ctx + 0x13c) = 0xdc;
+    ctx[0x10c] = 1;
+    ctx[0x108] = 0;
+    ctx[0x104] = 0;
+    ctx[0x105] = 0x14;
+    ctx[0x106] = 0x1e;
+    ctx[0x107] = 0x26;
+    backup_code_init_default(ctx + 0xf4);
+    *(uint32_t *)(ctx + 0x140) = 0;
+
+    {
+        uint8_t res = config_persist_dual_bank(
+            *(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
+            *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100),
+            *(const struct boot_cfg_block *)(ctx + 0x104));
+        g_log_func("res: %s\r\n", res ? "ERROR" : "OK");
+    }
 }

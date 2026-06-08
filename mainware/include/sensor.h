@@ -21,4 +21,7 @@ uint8_t charge_level_adc_get(void);
  * 16-entry flash table; fills *out, returns 1 on match else 0. OEM 0x08032ce4. */
 int hw_version_lookup(uint8_t *out);
 
+/* STC3115 LiPo fuel-gauge: enter run mode (set MODE register bit 0). OEM 0x080398B8. */
+void stc_gas_gauge_set_run(void);
+
 #endif

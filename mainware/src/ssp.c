@@ -5,7 +5,9 @@
 #include "crc.h"
 #include "log.h"
 #include "panic.h"
+#include "scheduler.h"
 #include "ssp.h"
+#include "systick.h"
 #include "uart.h"
 #include "util.h"
 
@@ -28,6 +30,14 @@ static int  ble_command(uint8_t id);
 
 /* TX side. */
 extern uint8_t g_ssp_tx_seq;   /* rolling TX sequence id (OEM 0x200000F0 + 0x10) */
+
+/* ── outbound-pump dependencies (sourced in their home modules) ── */
+extern void    state_flags_set(uint32_t set_mask, uint32_t clear_mask);
+extern uint8_t maybe_get_bike_state(void);
+extern void    update_mode_request(uint8_t mode);
+extern void    shifter_mode_command_dispatch(uint8_t cmd);
+extern void    sspm_bus_send_frame(const uint8_t *buf, uint16_t len);  /* OEM 0x0803A008 */
+extern void    HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 
 /* One outbound packet descriptor (12 bytes); type == 5 means the slot is in use. */
 typedef struct {
@@ -328,7 +338,19 @@ typedef struct {
 #define TX_MSG_HANDLE_CTR  (*(volatile uint8_t *)0x200000c8u)
 
 extern uint8_t update_mode_get(void);              /* 0x080313d8: link state, 2 = ready */
-extern int     tx_table_handle_in_use(uint8_t h);  /* 0x08039fe0: scan table for handle */
+
+/* Scan the 16-slot table for a rolling handle (OEM 0x08039fe0). The OEM compares
+ * the handle byte (+3) of every slot regardless of occupancy; returns 1 on the
+ * first match, else 0. Used by maybe_enqueue_tx_message to avoid a duplicate handle. */
+int tx_table_handle_in_use(uint8_t h)
+{
+    for (int i = 0; i < TX_MSG_SLOTS; i++) {
+        if (TX_MSG_TABLE[i].handle == h) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* Enqueue one outbound message into the table, gated on the inter-module link
  * being connected (OEM maybe_enqueue_tx_message, 0x0803a1c4). Picks a free slot
@@ -373,4 +395,252 @@ unsigned int maybe_enqueue_tx_message(uint16_t id, uint32_t len,
     }
 
     return 0xFF;                            /* table full */
+}
+
+/*
+ * sspm_tx_queue_pump @ 0x0803A278 — inter-module-bus (SSP) outbound pump. Round-
+ * robin drains the 16-entry x 0x18 outbound message table (g_msg_tx_table @
+ * 0x20007E14, addressed here as flat bytes). Each slot: +0 type (1 => type-A
+ * short frame, else type-B w/ payload), +1 state (2 = fresh, 0 = empty, else
+ * retry countdown), +3 handle, +4 u16 arg, +6 u16 len, +8 payload. Trailing:
+ * +0x181 committed counter (>4 trips the backlog path), +0x182 scan index (wraps
+ * at 0x10), +0x184 frame staging buffer. Two scheduler timer slots @ 0x200000C8
+ * pace it: [1] "retry_tmr" (0x32), [2] "between_pack_tmr" (0xF); a frame is only
+ * emitted while BOTH are idle. Returns 1 when a slot's countdown reached 0.
+ */
+#define SSPM_TX_TABLE   ((uint8_t *)0x20007E14u)         /* == TX_MSG_TABLE, flat */
+#define SSPM_TX_FRAME   ((uint8_t *)0x20007F98u)         /* == SSPM_TX_TABLE + 0x184 */
+#define SSPM_TX_TIMERS  ((uint8_t *)0x200000C8u)         /* [1]=retry [2]=between */
+
+#define SSPM_TBL_COMMITTED  0x181
+#define SSPM_TBL_SCANIDX    0x182
+#define SSPM_TBL_STRIDE     0x18
+#define SSPM_RETRY_TICKS    0x32
+#define SSPM_BETWEEN_TICKS  0x0F
+
+static const char SSPM_RETRY_TMR_NAME[]   = "retry_tmr";
+static const char SSPM_BETWEEN_TMR_NAME[] = "between_pack_tmr";
+
+uint8_t sspm_tx_queue_pump(void)
+{
+    uint8_t *tbl    = SSPM_TX_TABLE;
+    uint8_t *timers = SSPM_TX_TIMERS;
+    uint8_t  idx;
+    uint8_t *slot;
+    uint8_t  state;
+
+    /* Backlog overflow: too many committed frames unacknowledged. */
+    if (tbl[SSPM_TBL_COMMITTED] > 4) {
+        state_flags_set(0x400000u, 0u);
+        if (maybe_get_bike_state() == 0x0Eu) {
+            update_mode_request(0x03u);
+        }
+    }
+
+    /* Lazily allocate the two scheduler timer slots (0xFA == SCHED_SLOT_NONE). */
+    if (timers[1] == 0xFAu) {
+        timers[1] = scheduler_alloc();
+        scheduler_set_timer_name(timers[1], SSPM_RETRY_TICKS, SSPM_RETRY_TMR_NAME);
+        scheduler_start(timers[1], SSPM_RETRY_TICKS, (sched_cb_t)0);
+    }
+    if (timers[2] == 0xFAu) {
+        timers[2] = scheduler_alloc();
+        scheduler_set_timer_name(timers[2], SSPM_BETWEEN_TICKS, SSPM_BETWEEN_TMR_NAME);
+        scheduler_start(timers[2], SSPM_BETWEEN_TICKS, (sched_cb_t)0);
+    }
+
+    /* Advance round-robin scan index (wrap at 0x10). */
+    idx = (uint8_t)(tbl[SSPM_TBL_SCANIDX] + 1);
+    tbl[SSPM_TBL_SCANIDX] = idx;
+    if (idx > 0x0Fu) {
+        tbl[SSPM_TBL_SCANIDX] = 0;
+    }
+
+    idx  = tbl[SSPM_TBL_SCANIDX];
+    slot = tbl + (uint32_t)idx * SSPM_TBL_STRIDE;
+
+    state = slot[1];
+    if (state != 0x02u) {
+        if (state == 0x00u) {
+            return 0;                                   /* empty slot */
+        }
+        if (scheduler_slot_is_idle(timers[1]) == 0) {   /* mid-retry: wait */
+            return 0;
+        }
+    }
+
+    if (scheduler_slot_is_idle(timers[2]) == 0) {       /* inter-packet pacing */
+        return 0;
+    }
+
+    /* Both timers idle => emit. Restart both. */
+    scheduler_start(timers[1], SSPM_RETRY_TICKS,   (sched_cb_t)0);
+    scheduler_start(timers[2], SSPM_BETWEEN_TICKS, (sched_cb_t)0);
+
+    idx  = tbl[SSPM_TBL_SCANIDX];
+    slot = tbl + (uint32_t)idx * SSPM_TBL_STRIDE;
+
+    if (slot[1] != 0) {
+        slot[1] = (uint8_t)(slot[1] - 1);
+    }
+
+    if (slot[1] == 0) {
+        tbl[SSPM_TBL_COMMITTED] = (uint8_t)(tbl[SSPM_TBL_COMMITTED] + 1);
+        return 1;
+    }
+
+    /* Build the bus frame into the staging buffer (tbl + 0x184). */
+    tbl[0x184] = 1;
+    if (slot[0] == 0x01u) {
+        /* type-A: opcode 6, handle + u16 arg, no payload. frame_len = 5. */
+        tbl[0x185] = 6;
+        tbl[0x186] = slot[3];
+        {
+            uint16_t arg = *(uint16_t *)(slot + 4);
+            tbl[0x187] = (uint8_t)arg;
+            tbl[0x188] = (uint8_t)(arg >> 8);
+        }
+        sspm_bus_send_frame(SSPM_TX_FRAME, 5);
+    } else {
+        /* type-B: opcode 7, handle + u16 arg + u16 len + payload. */
+        uint16_t arg;
+        uint16_t len;
+        tbl[0x185] = 7;
+        tbl[0x186] = slot[3];
+        arg = *(uint16_t *)(slot + 4);
+        tbl[0x187] = (uint8_t)arg;
+        tbl[0x188] = (uint8_t)(arg >> 8);
+        len = *(uint16_t *)(slot + 6);
+        tbl[0x189] = (uint8_t)len;
+        tbl[0x18a] = (uint8_t)(len >> 8);
+        memcpy(tbl + 0x18b, slot + 8, len);
+        sspm_bus_send_frame(SSPM_TX_FRAME, (uint16_t)(len + 7));
+    }
+    return 0;
+}
+
+/*
+ * ssp_ble_tx_queue_pump @ 0x0803F6B4 — BLE-side outbound SLIP pump. Drains the
+ * 128-entry transmit queue @ 0x20008A40 (0xC-byte slots; control bytes +0x601
+ * stall counter, +0x602 scan index, +0x604.. SLIP frame staging) toward the BLE
+ * co-processor, pacing with two timers in the pair @ 0x200000F0 ([0]=retry 100t,
+ * [1]=packet 1t) and rebooting the BLE module (GPIOC pin5 pulse) if the queue
+ * stalls (>2 unacked pumps). Payload pointers are malloc'd and free()d on send.
+ * Returns 2 when a slot is consumed / blocked-state, else 0.
+ */
+#define g_ssp_ble_tx_timers ((uint8_t *)0x200000F0u)   /* [0]=retry_tmr [1]=packet_tmr */
+#define g_ssp_ble_tx_queue  ((uint8_t *)0x20008A40u)   /* 128 x 0xC + control + frame */
+
+uint8_t ssp_ble_tx_queue_pump(void)
+{
+    /* Lazily allocate the two pacing timers on first run. */
+    if (g_ssp_ble_tx_timers[0] == SCHED_SLOT_NONE) {
+        g_ssp_ble_tx_timers[0] = scheduler_alloc();
+        scheduler_set_timer_name(g_ssp_ble_tx_timers[0], 100, "retry_tmr");
+        scheduler_start(g_ssp_ble_tx_timers[0], 100, (sched_cb_t)0);
+    }
+    if (g_ssp_ble_tx_timers[1] == SCHED_SLOT_NONE) {
+        g_ssp_ble_tx_timers[1] = scheduler_alloc();
+        scheduler_set_timer_name(g_ssp_ble_tx_timers[1], 1, "packet_tmr");
+        scheduler_start(g_ssp_ble_tx_timers[1], 1, (sched_cb_t)0);
+    }
+
+    /* Queue stalled (>2 unacked pumps): reset counter and recover. */
+    if (g_ssp_ble_tx_queue[0x601] > 2) {
+        g_ssp_ble_tx_queue[0x601] = 0;
+        if (maybe_get_bike_state() == 0x1A) {
+            shifter_mode_command_dispatch(4);
+        } else if (maybe_get_bike_state() == 0x08 ||
+                   maybe_get_bike_state() == 0x09) {
+            return 2;
+        } else {
+            state_flags_set(0x800000, 0);
+            g_log_func("Reboot BLE\r\n");
+            HAL_GPIO_WritePin((void *)0x40021000, 0x20, 1);   /* GPIOC pin5 reset */
+            systick_delay(10);
+            HAL_GPIO_WritePin((void *)0x40021000, 0x20, 0);
+        }
+    }
+
+    /* Advance the scan index, wrapping 0..127 (bit7 set => wrap). */
+    g_ssp_ble_tx_queue[0x602] = (uint8_t)(g_ssp_ble_tx_queue[0x602] + 1);
+    if ((g_ssp_ble_tx_queue[0x602] & 0x80) != 0) {
+        g_ssp_ble_tx_queue[0x602] = 0;
+    }
+
+    {
+        uint8_t  idx  = g_ssp_ble_tx_queue[0x602];
+        uint8_t *slot = &g_ssp_ble_tx_queue[idx * 0xC];
+
+        if (slot[1] != 5) {                 /* not freshly queued */
+            if (slot[1] == 0) {             /* empty slot */
+                return 0;
+            }
+            if (scheduler_slot_is_idle(g_ssp_ble_tx_timers[0]) == 0) {
+                return 0;
+            }
+        }
+
+        if (scheduler_slot_is_idle(g_ssp_ble_tx_timers[1]) == 0) {
+            return 0;
+        }
+        scheduler_start(g_ssp_ble_tx_timers[1], 1, (sched_cb_t)0);
+        scheduler_start(g_ssp_ble_tx_timers[0], 100, (sched_cb_t)0);
+
+        idx  = g_ssp_ble_tx_queue[0x602];   /* OEM re-reads here */
+        slot = &g_ssp_ble_tx_queue[idx * 0xC];
+
+        if (slot[1] != 0) {
+            slot[1] = (uint8_t)(slot[1] - 1);
+        }
+
+        if (g_ssp_ble_tx_queue[idx * 0xC + 1] == 0) {
+            /* Retry budget exhausted: report, free payload, drop slot. */
+            g_log_func("BLE remove id %X nr %X\r\n",
+                       *(uint16_t *)&slot[4], slot[3]);
+            free(*(void **)&g_ssp_ble_tx_queue[g_ssp_ble_tx_queue[0x602] * 0xC + 8]);
+            g_ssp_ble_tx_queue[0x601]++;
+            return 2;
+        }
+
+        /* Build the SLIP frame in the +0x604 staging buffer. */
+        {
+            uint8_t *frame = &g_ssp_ble_tx_queue[0x604];
+            int len;
+
+            frame[0] = 1;
+            if (slot[0] == 1) {                 /* short frame */
+                frame[1] = 6;
+                frame[2] = slot[3];
+                {
+                    uint16_t v = *(uint16_t *)&slot[4];
+                    frame[3] = (uint8_t)v;
+                    frame[4] = (uint8_t)(v >> 8);
+                }
+                len = 5;
+            } else {
+                if (slot[0] != 0) {
+                    muco_assert_fail("src/ssp_ble.c", 200);
+                }
+                frame[1] = 7;
+                frame[2] = slot[3];
+                {
+                    uint16_t v = *(uint16_t *)&slot[4];
+                    frame[3] = (uint8_t)v;
+                    frame[4] = (uint8_t)(v >> 8);
+                }
+                {
+                    uint16_t plen = *(uint16_t *)&slot[6];
+                    frame[5] = (uint8_t)plen;
+                    frame[6] = (uint8_t)(plen >> 8);
+                    memcpy(&frame[7], *(void **)&slot[8], plen);
+                    len = plen + 7;
+                }
+            }
+            /* OEM loads 0x20009044 (== &queue[0x604]) as an address immediate and
+             * passes it directly — there is no separate pointer variable there. */
+            slip_send_frame(&g_ssp_ble_tx_queue[0x604], len);
+            return 0;
+        }
+    }
 }

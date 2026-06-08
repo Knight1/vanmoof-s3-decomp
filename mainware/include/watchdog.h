@@ -22,4 +22,8 @@ int wwdg_hw_init(uint32_t *desc);
 /* Enable the WWDG peripheral clock (OEM 0x08031474). */
 void wwdg_clk_enable(uint32_t *desc);
 
+/* Disable the WWDG APB1 peripheral clock — clears RCC_APB1ENR.WWDGEN (bit 11)
+ * (OEM 0x080314A4). Used on the shipping/stop-mode powerdown paths. */
+void wwdg_apb_clk_disable(void);
+
 #endif

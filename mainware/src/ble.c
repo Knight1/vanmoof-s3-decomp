@@ -28,6 +28,7 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "flash.h"     /* struct boot_cfg_block, config_persist_dual_bank */
 #include "log.h"       /* g_log_func — printf-style fn ptr @ SRAM 0x20009D98 */
 #include "scheduler.h" /* scheduler_alloc / scheduler_start / sched_cb_t */
 
@@ -58,7 +59,7 @@ extern void systick_delay(uint32_t ms);
 extern void    log_print_timestamp_prefix(void);
 extern void    channel_notify_with_status(int status);
 extern void    enter_mode3_arm_show_timer(void);
-extern void    config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+/* config_persist_dual_bank + struct boot_cfg_block come from flash.h. */
 extern int     save_state_record_to_eeprom(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
 extern uint8_t ssp_ble_enqueue_tx_packet(uint16_t cmd, uint8_t len, const void *data, char flag);
 extern void    maybe_set_state_if_unlocked(char state);
@@ -305,7 +306,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                            ((unsigned)payload[0] + payload[1] + payload[2]) * 2 + 0x7b0);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 if (ssp_ble_enqueue_tx_packet(0x5503, 1, payload, '\0') > 0x80) {
                     g_log_func("  ERROR SSP place\r\n");
                 }
@@ -435,7 +436,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 g_log_func("Write 0x5533 %d\r\n", *payload);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 if (ssp_ble_enqueue_tx_packet(0x5533, 1, payload, '\0') > 0x80) {
                     g_log_func("  ERROR SSP place\r\n");
                 }
@@ -499,7 +500,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 g_log_func("Write 0x5535 %d\r\n", *payload);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 enter_mode3_arm_show_timer();
                 switch (ctx[0x109]) {
                 case 0: maybe_set_pending_request(REQ_REGION_EU); break;
@@ -560,7 +561,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                            payload[3], payload[4], payload[5]);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 channel_notify_with_status(1);
                 return;
 
@@ -574,7 +575,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     g_log_func("Write 0x5538 %d\r\n");
                     memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                     config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                             *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                             *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                     channel_notify_with_status(1);
                     return;
                 }
@@ -655,7 +656,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 g_log_func("Write 0x5564 %d\r\n", *payload);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 channel_notify_with_status(1);
                 if (ctx[0x10b] == 1) {
                     HAL_GPIO_WritePin(GPIOG_BASE, 8, 1);
@@ -736,7 +737,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                            *(uint32_t *)(ctx + 0xfc));
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 if (ssp_ble_enqueue_tx_packet(0x5572, 0xc, payload, '\0') > 0x80) {
                     g_log_func("  ERROR SSP place\r\n");
                 }
@@ -789,7 +790,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                 g_log_func("Write 0x5581 %d\r\n", *payload);
                 memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                 config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                         *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                 channel_notify_with_status(1);
                 enter_mode3_arm_show_timer();
                 if (*payload == 1) {
@@ -820,7 +821,7 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     g_log_func("Write 0x5584 %d\r\n", *(int16_t *)payload);
                     memcpy(cfg_scratch, ctx + 0x104, 0xC0);
                     config_persist_dual_bank(*(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-                                             *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100));
+                                             *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100), *(const struct boot_cfg_block *)cfg_scratch);
                     return;
                 }
                 g_log_func("  ERROR invalid value 0..65535\r\n");

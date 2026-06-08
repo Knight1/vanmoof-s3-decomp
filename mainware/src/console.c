@@ -6,6 +6,7 @@
 #include "app_state.h"
 #include "audio.h"
 #include "console.h"
+#include "flash.h"
 #include "log.h"
 #include "scheduler.h"
 #include "sensor.h"
@@ -28,7 +29,7 @@ extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 /* Helpers we have not decoded yet — kept as opaque extern declarations
  * so we can call them at the right addresses for behavioural
  * equivalence without committing to a name we'd have to revise. */
-extern uint32_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+/* config_persist_dual_bank + struct boot_cfg_block come from flash.h. */
 
 /* Hard-coded fallback password. Reading the OEM rodata at 0x080547EC.
  * Accepted in addition to whatever the user has stored in
@@ -172,7 +173,8 @@ static void volume_set_common(char *input, uint8_t *target)
             g_app_state.ctx_sub->audio_engine_cfg[0],
             g_app_state.ctx_sub->audio_engine_cfg[1],
             g_app_state.ctx_sub->audio_engine_cfg[2],
-            g_app_state.ctx_sub->audio_engine_cfg[3]);
+            g_app_state.ctx_sub->audio_engine_cfg[3],
+            *(const struct boot_cfg_block *)snapshot);
         g_log_func("res: %d\r\n", res);
     }
 
@@ -186,8 +188,6 @@ static void volume_set_common(char *input, uint8_t *target)
         HAL_GPIO_WritePin((void *)GPIOD_BASE, AUDIO_AMP_MUTE_PIN,   1);
         g_log_func("Audio off\r\n");
     }
-
-    (void)snapshot;  /* keep snapshot live across the apply call */
 }
 
 /* The `vollow` / `volmid` / `volhigh` console commands write ctx_sub +0x105 /
@@ -264,10 +264,10 @@ void console_region_set(char *input)
                     g_app_state.ctx_sub->audio_engine_cfg[0],
                     g_app_state.ctx_sub->audio_engine_cfg[1],
                     g_app_state.ctx_sub->audio_engine_cfg[2],
-                    g_app_state.ctx_sub->audio_engine_cfg[3]);
+                    g_app_state.ctx_sub->audio_engine_cfg[3],
+                    *(const struct boot_cfg_block *)snapshot);
                 g_log_func("Set region and lock, res: %d\r\n", res);
             }
-            (void)snapshot;
         } else {
             g_log_func("Parameter 0..3 0..2\r\n");
         }
@@ -373,9 +373,9 @@ void console_cmd_wheelsize(char *args)
         }
         memcpy(snapshot, CTXB + CTX_AUDIO_CFG_BLOCK, sizeof snapshot);
         uint32_t res = config_persist_dual_bank(*(uint32_t *)(CTXB + CTX_AUDIO_GROUP_LOW), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_MED),
-                                    *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_HIGH), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP3));
+                                    *(uint32_t *)(CTXB + CTX_AUDIO_GROUP_HIGH), *(uint32_t *)(CTXB + CTX_AUDIO_GROUP3),
+                                    *(const struct boot_cfg_block *)snapshot);
         g_log_func("res: %d\r\n", res);
-        (void)snapshot;
     }
     g_log_func("Wheel: %s\r\n", CTXB[CTX_WHEELSIZE] == 0 ? "24 inch" : "28 inch");
 }
@@ -553,8 +553,7 @@ extern void     led_channel3_set_brightness(int);
 extern void     display_send_init_cmd(void);
 extern int      lis3dh_powerdown(void);
 extern void     led_driver_enter_shipping_mode(void);
-extern void     stc_gas_gauge_set_run(void);
-extern void     wwdg_apb_clk_disable(void);
+/* stc_gas_gauge_set_run (sensor.h) / wwdg_apb_clk_disable (watchdog.h). */
 
 void console_cmd_factory_shipping(char *args)
 {
@@ -745,14 +744,58 @@ void console_cmd_shifterstatus(char *args)
     }
 }
 
+/* The one-shot 500 ms scheduler callback armed by console_cmd_motorstatus (OEM
+ * 0x08040DE0; the timer is named "motor_get_tmr"). Releases the motor-poll
+ * scheduler slot, then prints the motor-controller telemetry the four Modbus
+ * requests populated. Fields live in the session context (CTXB) at byte offsets
+ * +0x364..+0x388. If the drive-temp cell (+0x36C) is still zero the motor never
+ * answered, so it logs "Motor no resp".
+ *
+ * The poll slot byte is SCHED_SLOT_REC (0x2000010E), NOT the battery dump's
+ * SCHED_SLOT_TELEMETRY (0x20000110) — verified against [0x08040EB0] in the OEM
+ * literal pool.
+ *
+ * Field encodings (from the disassembly):
+ *   - +0x364/+0x366/+0x368/+0x370/+0x376/+0x36E/+0x372/+0x374 are zero-extended
+ *     u16 (ldrh); the printf widths just differ (%04X vs %d);
+ *   - m_tmp/+0x36A and d_tmp/+0x36C are sign-extended s16 (ldrsh);
+ *   - fw/+0x388 is a packed u32 version printed as four octets
+ *     major.minor.build.rev (major as %c). */
+void motor_get_timer_cb(void)
+{
+    uint8_t *ctx;
+
+    scheduler_release((uint8_t *)SCHED_SLOT_REC);
+    ctx = CTXB;
+
+    if (*(short *)(ctx + 0x36C) == 0) {
+        g_log_func("Motor no resp\r\n");
+        return;
+    }
+
+    g_log_func("error 0x%04X\r\n", *(uint16_t *)(ctx + 0x364));
+    g_log_func("speed %d\r\n",     *(uint16_t *)(ctx + 0x366));
+    g_log_func("I     %d\r\n",     *(uint16_t *)(ctx + 0x368));
+    g_log_func("m_tmp %d\r\n",     (int)*(short *)(ctx + 0x36A));
+    g_log_func("d_tmp %d\r\n",     (int)*(short *)(ctx + 0x36C));
+    g_log_func("Ubat  %d\r\n",     *(uint16_t *)(ctx + 0x370));
+    {
+        uint32_t fw = *(uint32_t *)(ctx + 0x388);
+        g_log_func("fw    %c.%d.%02d.%02d\r\n",
+                   fw >> 24, (fw >> 16) & 0xFF, (fw >> 8) & 0xFF, fw & 0xFF);
+    }
+    g_log_func("io    %04X\r\n",   *(uint16_t *)(ctx + 0x376));
+    g_log_func("wlsp  %d\r\n",     *(uint16_t *)(ctx + 0x36E));
+    g_log_func("Pdsp  %d\r\n",     *(uint16_t *)(ctx + 0x372));
+    g_log_func("Pdtrq %d\r\n",     *(uint16_t *)(ctx + 0x374));
+}
+
 /* `motorstatus` — arm a 500 ms "motor_get_tmr" poll task, clear the motor-status
  * accumulators (ctx+0x364..0x376), and enqueue four motor Modbus requests
  * (cmd 0x0C/0x0A/0x0B/0x0D) (OEM 0x08042E54). */
-extern void motor_get_timer_cb(void);   /* 0x08040DE0 */
-
 void console_cmd_motorstatus(char *args)
 {
-    uint8_t *slot = (uint8_t *)SCHED_SLOT_TELEMETRY;
+    uint8_t *slot = (uint8_t *)SCHED_SLOT_REC;   /* OEM 0x08042F08 = 0x2000010E */
     (void)args;
 
     if (*slot == SCHED_SLOT_NONE) {

@@ -105,3 +105,18 @@ int hw_version_lookup(uint8_t *out)
     *out = i;
     return i < 16u;
 }
+
+/* STC3115 LiPo fuel-gauge register I/O over I2C (sourced elsewhere). read returns
+ * the byte value or 0xFFFFFFFF on bus error; write takes (reg, value). */
+extern uint32_t stc3115_read_reg(uint32_t reg);             /* OEM 0x080393DC */
+extern void     stc3115_write_reg(uint32_t reg, uint8_t value); /* OEM 0x080394A6 */
+
+/* Put the STC3115 into operating ("run") mode: set bit 0 of the MODE register
+ * (reg 0) (OEM stc_gas_gauge_set_run, 0x080398B8). The OEM does not check the
+ * read result — a -1 bus error becomes 0xFF and still has bit 0 set; the value is
+ * truncated to a byte before the write (uxtb). */
+void stc_gas_gauge_set_run(void)
+{
+    uint8_t mode = (uint8_t)stc3115_read_reg(0);
+    stc3115_write_reg(0, (uint8_t)(mode | 1u));
+}

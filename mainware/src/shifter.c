@@ -2017,3 +2017,66 @@ void shifterstatus_dump_v201(void)
                     (uint32_t)*(uint16_t *)(ctx + 0x5A0 + 4 * g));
     }
 }
+
+/* ── shifter/OAD mode-command dispatch (OEM shifter_mode_command_dispatch,
+ * 0x08029C0C). Translates the 8 OAD/update-status codes the app sends (BLE cmd
+ * 0x10E, also reached from the SSP BLE-TX pump) into the mode-state machine.
+ * Drives two pieces of state: the mode-state record @ 0x20000029 (== G_STATE;
+ * byte +4 = next mode-state code 0x18..0x1c, +5 = saved previous code) and, for
+ * cases 4..7, a single request bit stamped into the session-context state-flag
+ * word at ctx+0x3B8 (high word ctx+0x3BC cleared), committed via
+ * set_mode_state_byte(0x18). Cases 1/2 also poke the update SM (0x08032990 /
+ * 0x080329B8). The session ctx is reached by dereferencing the holder @ 0x20000944. */
+#define G_OAD_MODE_SM    ((uint8_t *)0x20000029u)     /* == G_STATE; +4 mode-state, +5 saved */
+#define APP_CTX_HOLDER   (*(uint8_t **)0x20000944u)    /* -> session ctx (G_APP_CTX) */
+
+/* set_mode_state_byte(uint8_t) comes from app.h (included above). */
+extern void update_sm_request_start(void);             /* OEM 0x08032990 */
+extern void update_sm_kickoff(void);                   /* OEM 0x080329B8 */
+
+void shifter_mode_command_dispatch(uint8_t cmd)
+{
+    uint8_t *rec = G_OAD_MODE_SM;
+    uint8_t *ctx;
+
+    switch (cmd) {
+    case 0:
+        rec[5] = rec[4];            /* save previous mode-state */
+        rec[4] = 0x1a;
+        break;
+    case 1:
+        update_sm_request_start();
+        break;
+    case 2:
+        rec[4] = 0x19;
+        update_sm_kickoff();
+        break;
+    case 3:
+        rec[4] = 0x1c;
+        break;
+    case 4:
+    case 7:
+        ctx = APP_CTX_HOLDER;
+        *(uint32_t *)(ctx + 0x3b8) = 0x1000000u;   /* OEM STRD: low word ... */
+        *(uint32_t *)(ctx + 0x3bc) = 0;            /* ... high word cleared  */
+        set_mode_state_byte(0x18);
+        rec[4] = 0x1b;
+        break;
+    case 5:
+        ctx = APP_CTX_HOLDER;
+        *(uint32_t *)(ctx + 0x3b8) = 0x2000000u;
+        *(uint32_t *)(ctx + 0x3bc) = 0;
+        set_mode_state_byte(0x18);
+        rec[4] = 0x1b;
+        break;
+    case 6:
+        ctx = APP_CTX_HOLDER;
+        *(uint32_t *)(ctx + 0x3b8) = 0x8000000u;
+        *(uint32_t *)(ctx + 0x3bc) = 0;
+        set_mode_state_byte(0x18);
+        rec[4] = 0x1b;
+        break;
+    default:
+        break;
+    }
+}

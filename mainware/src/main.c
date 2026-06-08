@@ -29,6 +29,7 @@
 
 #include "main.h"
 #include "app.h"        /* clock_pulse_gpioa8_until_pc9 */
+#include "flash.h"      /* struct boot_cfg_block, config_persist_dual_bank */
 #include "gpio.h"       /* gpio_init */
 #include "i2c.h"        /* i2c3_handle_init */
 #include "log.h"        /* g_log_func, log_print_timestamp_prefix, log_buffer_crc_check */
@@ -177,14 +178,12 @@ extern int  audio_amp_init(void);                     /* 0x08039174 (MAX9768) */
 extern void amp_volume_brownout_apply(const uint8_t *p);
 extern int  hw_version_lookup(char *out);
 
-/* Stack-passed EEPROM/flash record writers: 4 register args + a trailing
- * by-value block placed on the stack (matching the OEM's memcpy-then-call). */
+/* Stack-passed EEPROM record writer: 4 register args + a trailing by-value block
+ * on the stack (matching the OEM's memcpy-then-call). config_persist_dual_bank +
+ * struct boot_cfg_block come from flash.h. */
 struct boot_state_tail { uint8_t bytes[0x2C]; };   /* ctx[0x320..0x34B] = 11 words */
-struct boot_cfg_block  { uint8_t bytes[0xC0]; };   /* ctx[0x104..0x1C3] = 48 words */
 extern unsigned save_state_record_to_eeprom(uint32_t a, uint32_t b, uint32_t c,
                                             uint32_t d, struct boot_state_tail tail); /* 0x0803E2CC */
-extern uint8_t  config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c,
-                                         uint32_t d, struct boot_cfg_block tail);     /* 0x08031728 */
 
 static void boot_init_cold(void);
 static void boot_init_warm(void);
