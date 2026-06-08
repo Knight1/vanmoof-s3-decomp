@@ -167,7 +167,7 @@ extern int  eeprom_read_id_block(uint8_t *out6);      /* 0x0803E138 */
 extern int  eeprom_read_config_with_crc_fallback(void *out); /* 0x0803E1A8 */
 extern void settings_factory_reset(void *ctx, int mode);
 extern int  flash_read_config_with_crc_restore(void *out);   /* 0x08031784 */
-extern void backup_code_init_default(void *cfg);      /* 0x0803FAC0 */
+extern void sound_groups_init_default(void *cfg);     /* 0x0803FAC0 (seeds sound-group masks ctx+0xF4/F8/FC) */
 extern void region_speed_preset_table_load(void *out, int region_index); /* 0x0803FC24 */
 extern int  display_write_reg20_init(void);           /* 0x0803B248 (light-sensor bring-up) */
 extern int  stc3115_wake(void);                       /* 0x080398CE */
@@ -381,7 +381,7 @@ static void mainware_boot_init_sequence(uint8_t *ctx)
             U16(0x102) = 200;
             U8(0x108) = 0;
             U8(0x107) = 0x26;
-            backup_code_init_default(ctx + 0xf4);
+            sound_groups_init_default(ctx + 0xf4);
             uint8_t res = config_persist_dual_bank(U32(0xf4), U32(0xf8), U32(0xfc),
                                                    U32(0x100),
                                                    *(const struct boot_cfg_block *)(ctx + 0x104));

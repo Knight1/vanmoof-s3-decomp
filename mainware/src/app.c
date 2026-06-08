@@ -434,11 +434,23 @@ void region_speed_preset_table_load(void *out, int region)
 }
 
 /* ── load factory defaults into the config block (OEM settings_factory_reset,
- * 0x0803FAD8). When mode==1 it wipes the 0xD0-byte config region (ctx+0xF4) and
- * seeds the base fields; it always rewrites the four region speed-preset rows
- * (ctx+0x10E.. / +0x126..), the audio-group defaults, the backup code, and the
- * schema word, then persists the record to both flash banks. */
-extern void backup_code_init_default(void *cfg);   /* OEM 0x0803FC50 */
+ * 0x0803FAD8). mode==1 wipes the 0xD0-byte config region (ctx+0xF4), clears the
+ * backup code (ctx+0x100 = 0x00FF "not set"), and seeds wheel/unit/region +
+ * light threshold (ctx+0x102). It always rewrites the four region speed-preset
+ * rows (ctx+0x10E.. / +0x126..), re-seeds the sound-group masks (via
+ * sound_groups_init_default), stamps the schema word, then persists the record
+ * to both flash banks.
+ *
+ * The backup code itself is the uint16 at ctx+0x100: a 3-digit owner code
+ * (value = d0 + d1*10 + d2*100, range 0..999) programmed over BLE
+ * (CMD_BLE_SECURITY_BACKUP_CODE); 0x00FF is the "no backup code" sentinel, so
+ * the factory default is *unset* — there is no built-in default code. */
+
+/* Seed the three sound-group volume-tier bitmasks ("Group low/medium/high" at
+ * cfg+0/+4/+8 == ctx+0xF4/F8/FC): low={}, medium=0x383F33FE, high=0x47C0CC00
+ * (medium|high partition sound bits 1..30 disjointly). OEM 0x0803FAC0 — seeds
+ * the audio groups, NOT the backup code despite this call site's neighbours. */
+extern void sound_groups_init_default(void *cfg);
 
 void settings_factory_reset(void *ctx_, int mode)
 {
@@ -482,7 +494,7 @@ void settings_factory_reset(void *ctx_, int mode)
     ctx[0x105] = 0x14;
     ctx[0x106] = 0x1e;
     ctx[0x107] = 0x26;
-    backup_code_init_default(ctx + 0xf4);
+    sound_groups_init_default(ctx + 0xf4);
     *(uint32_t *)(ctx + 0x140) = 0;
 
     {
