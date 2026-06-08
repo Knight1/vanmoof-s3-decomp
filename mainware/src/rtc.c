@@ -19,16 +19,6 @@
 
 #define RTC_HANDLE  ((void *)0x200099e4u)
 
-/* Wide broken-down calendar (0x18 bytes) produced by both converters. */
-typedef struct {
-    uint8_t hours;        /* +0x00 */
-    uint8_t minutes;      /* +0x01 */
-    uint8_t seconds;      /* +0x02 */
-    uint8_t _pad[0x12];   /* +0x03..+0x14 */
-    uint8_t month;        /* +0x15 */
-    uint8_t day;          /* +0x16 */
-    uint8_t year;         /* +0x17  (2-digit, +2000) */
-} rtc_calendar_t;
 
 /* RTC_DateTypeDef / RTC_TimeTypeDef heads (RTC_FORMAT_BIN: fields are binary). */
 typedef struct { uint8_t weekday, month, date, year; } rtc_date_bin_t;
@@ -46,9 +36,6 @@ extern void rtc_fill_time_fields(uint8_t *buf);
 extern uint32_t rtc_calendar_to_epoch(uint32_t w0, uint32_t w1, uint32_t w2,
                                       uint32_t w3, uint32_t w4, uint32_t w5,
                                       uint32_t w6);
-
-/* Epoch seconds -> broken-down calendar (wide layout). OEM converter at 0x08038110. */
-extern void rtc_epoch_to_calendar(rtc_calendar_t *out, uint32_t epoch);
 
 /* CubeF4 RTC HAL date/time setters (RTC_FORMAT_BIN == 0). OEM HAL_RTC_SetDate
  * (0x08023042) / HAL_RTC_SetTime (0x08022F44). Return 0 on success. */

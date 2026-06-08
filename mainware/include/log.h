@@ -24,4 +24,12 @@ void log_buffer_reset(void);
  * byte count or 0xFFFFFFFF if too long (OEM 0x0802963C). */
 uint32_t log_emit_string(const char *s);
 
+/* Enable the "log to APP sink" path: set the flag at SRAM 0x200001D6 = 1, read by
+ * the log-upload state machine (OEM app_log_sink_enable, 0x080298DC). */
+void app_log_sink_enable(void);
+
+/* Dump the whole circular log buffer to the console, reformatting each line's
+ * leading epoch into ">DD/HH:MM:SS " (OEM log_buffer_dump, 0x080296B8). */
+void log_buffer_dump(void);
+
 #endif

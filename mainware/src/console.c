@@ -615,7 +615,85 @@ extern int  HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);     /* 0x08026AB8 
  * 0x00..0x30 and 0x47..0x56), and arm a one-shot 1 s scheduler task that dumps
  * the populated telemetry to the console (OEM 0x08042F28). */
 extern void battery_request_telemetry(void);   /* 0x0803EA74 — the two BMS reads */
-extern void console_battery_dump(void);        /* 0x0804175C — periodic telemetry printer */
+
+/* The one-shot 1 s scheduler callback armed by console_cmd_battery (OEM
+ * 0x0804175C). Releases its own scheduler slot, then prints the BMS telemetry
+ * shadow battery_request_telemetry() populated. All fields live in the session
+ * context (CTXB == g_app_state.ctx_sub) at byte offsets +0x3F2..+0x49E.
+ *
+ * Field encodings (from the disassembly):
+ *   - the plain "%d" cells are sign-extended s16 (ldrsh);
+ *   - the three temperatures (+0x43C/+0x43E/+0x440) are s16 minus 0xAAB: the BMS
+ *     reports tenths of a Kelvin, so -2731 maps 0.1 K -> 0.1 degC;
+ *   - "I"/+0x3FE is scaled x10;
+ *   - HW_VER/+0x406 and FW_VER/+0x408 print as two args (hi = u16>>8, lo = u16&0xFF);
+ *   - the raw-hex cells (+0x3F6 FAULT, +0x3FA UBAT, +0x452 FSR) are zero-extended u16.
+ * The PDOCP/+0x498 and PDSCP/+0x49A format strings live in a separate rodata
+ * island (0x080507C8/0x080507D4), not the contiguous 0x080542DC block. */
+void console_battery_dump(void)
+{
+    uint8_t *ctx;
+
+    scheduler_release((uint8_t *)SCHED_SLOT_TELEMETRY);
+    ctx = CTXB;
+
+    g_log_func("BAT_ID  0x%X\r\n", (int)*(short *)(ctx + 0x3F2));
+    g_log_func("FAULT   0x%X\r\n", *(uint16_t *)(ctx + 0x3F6));
+    g_log_func("BAT_TP1 %d\r\n",   *(short *)(ctx + 0x43C) - 0xAAB);
+    g_log_func("BAT_TP2 %d\r\n",   *(short *)(ctx + 0x43E) - 0xAAB);
+    g_log_func("MOS_TMP %d\r\n",   *(short *)(ctx + 0x440) - 0xAAB);
+    g_log_func("UBAT    %d\r\n",   *(uint16_t *)(ctx + 0x3FA));
+    g_log_func("RSOC    %d\r\n",   (int)*(short *)(ctx + 0x3FC));
+    g_log_func("I       %d\r\n",   *(short *)(ctx + 0x3FE) * 10);
+    g_log_func("CHARGE  %d\r\n",   (int)*(short *)(ctx + 0x400));
+    g_log_func("DSG_PRT %d\r\n",   (int)*(short *)(ctx + 0x402));
+    g_log_func("TST_DBG %d\r\n",   (int)*(short *)(ctx + 0x404));
+    {
+        uint16_t hw = *(uint16_t *)(ctx + 0x406);
+        g_log_func("HW_VER  %X.%02X\r\n", hw >> 8, (char)hw);
+    }
+    {
+        uint16_t fw = *(uint16_t *)(ctx + 0x408);
+        g_log_func("FW_VER  %X.%02X\r\n", fw >> 8, (char)fw);
+    }
+    g_log_func("DATE_1  %d\r\n",   (int)*(short *)(ctx + 0x418));
+    g_log_func("DATE_2  %d\r\n",   (int)*(short *)(ctx + 0x41A));
+    g_log_func("NOM_CAP %d\r\n",   (int)*(short *)(ctx + 0x41C));
+    g_log_func("FUL_CAP %d\r\n",   (int)*(short *)(ctx + 0x41E));
+    g_log_func("REM_CAP %d\r\n",   (int)*(short *)(ctx + 0x420));
+    g_log_func("ABS_SOC %d\r\n",   (int)*(short *)(ctx + 0x422));
+    g_log_func("CYL_CNT %d\r\n",   (int)*(short *)(ctx + 0x424));
+    g_log_func("CHG_ON  %d\r\n",   (int)*(short *)(ctx + 0x426));
+    g_log_func("U_1 %d\r\n",       (int)*(short *)(ctx + 0x428));
+    g_log_func("U_2 %d\r\n",       (int)*(short *)(ctx + 0x42A));
+    g_log_func("U_3 %d\r\n",       (int)*(short *)(ctx + 0x42C));
+    g_log_func("U_4 %d\r\n",       (int)*(short *)(ctx + 0x42E));
+    g_log_func("U_5 %d\r\n",       (int)*(short *)(ctx + 0x430));
+    g_log_func("U_6 %d\r\n",       (int)*(short *)(ctx + 0x432));
+    g_log_func("U_7 %d\r\n",       (int)*(short *)(ctx + 0x434));
+    g_log_func("U_8 %d\r\n",       (int)*(short *)(ctx + 0x436));
+    g_log_func("U_9 %d\r\n",       (int)*(short *)(ctx + 0x438));
+    g_log_func("U_A %d\r\n",       (int)*(short *)(ctx + 0x43A));
+    g_log_func("U_MAX %d\r\n",     (int)*(short *)(ctx + 0x444));
+    g_log_func("U_MIN %d\r\n",     (int)*(short *)(ctx + 0x446));
+    g_log_func("FSR   0x%04X\r\n", *(uint16_t *)(ctx + 0x452));
+    g_log_func("DOTP  %d\r\n",     (int)*(short *)(ctx + 0x480));
+    g_log_func("DUTP  %d\r\n",     (int)*(short *)(ctx + 0x482));
+    g_log_func("COTP  %d\r\n",     (int)*(short *)(ctx + 0x484));
+    g_log_func("CUTP  %d\r\n",     (int)*(short *)(ctx + 0x486));
+    g_log_func("DOCP1 %d\r\n",     (int)*(short *)(ctx + 0x488));
+    g_log_func("DOCP2 %d\r\n",     (int)*(short *)(ctx + 0x48A));
+    g_log_func("COCP1 %d\r\n",     (int)*(short *)(ctx + 0x48C));
+    g_log_func("COCP2 %d\r\n",     (int)*(short *)(ctx + 0x48E));
+    g_log_func("OVP1  %d\r\n",     (int)*(short *)(ctx + 0x490));
+    g_log_func("OVP2  %d\r\n",     (int)*(short *)(ctx + 0x492));
+    g_log_func("UVP1  %d\r\n",     (int)*(short *)(ctx + 0x494));
+    g_log_func("UVP2  %d\r\n",     (int)*(short *)(ctx + 0x496));
+    g_log_func("PDOCP %d\r\n",     (int)*(short *)(ctx + 0x498));
+    g_log_func("PDSCP %d\r\n",     (int)*(short *)(ctx + 0x49A));
+    g_log_func("MOTP  %d\r\n",     (int)*(short *)(ctx + 0x49C));
+    g_log_func("SCP   %d\r\n",     (int)*(short *)(ctx + 0x49E));
+}
 
 void console_cmd_battery(char *args)
 {
@@ -758,9 +836,8 @@ void console_cmd_batware(char *args)
 }
 
 /* `logprn` — dump the whole circular log buffer between "LOG:"/"<EOF>" markers,
- * suppressing live logging during the dump via the state flag (OEM 0x08041F88). */
-extern void log_buffer_dump(void);   /* 0x080296B8 */
-
+ * suppressing live logging during the dump via the state flag (OEM 0x08041F88).
+ * log_buffer_dump is declared in log.h. */
 void console_cmd_logprn(char *args)
 {
     (void)args;
@@ -947,7 +1024,7 @@ extern int  save_state_record_to_eeprom(uint32_t f0, uint32_t f1, uint32_t f2, u
                                          uint32_t f4, uint32_t f5, uint32_t f6, uint32_t f7,
                                          uint32_t f8, uint32_t f9, uint32_t f10, uint32_t f11,
                                          uint32_t f12, uint32_t f13, uint32_t f14); /* 0x0803E2CC */
-extern void app_log_sink_enable(void);   /* enable the APP-log sink */
+/* app_log_sink_enable is declared in log.h. */
 
 void console_cmd_logapp(char *args)
 {

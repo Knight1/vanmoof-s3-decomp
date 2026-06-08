@@ -115,7 +115,6 @@ extern void rtc_set_from_unix_time(uint32_t);
 extern void obj_set_field38(int);
 extern void obj_set_field34(int);
 extern void led_channel3_set_brightness(int);
-extern void app_log_sink_enable(void);
 
 /* Count the non-zero 2-bit groups in a 32-bit word (base-4 set-digit count) for
  * the backup-code strength compare in cmd 0x5572 (OEM count_active_2bit_groups,

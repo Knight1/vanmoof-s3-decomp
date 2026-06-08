@@ -3,6 +3,8 @@
 #include "app.h"
 #include "crc.h"
 #include "log.h"
+#include "rtc.h"
+#include "watchdog.h"
 
 /* The console-printf function pointer (SRAM 0x20009D98). Set once during
  * application init (the initialiser is not yet decoded) and then used by
@@ -57,6 +59,7 @@ typedef struct {
 
 #define LOG_CTRL    ((volatile log_ctrl_t *)0x20037000u)
 #define LOG_PAYLOAD ((uint8_t *)0x2003700Cu)
+#define LOG_END     ((uint8_t *)0x2004FC00u)   /* dump-side wrap threshold */
 
 extern void         *memset(void *dst, int c, unsigned int n);  /* newlib (vendor) */
 extern unsigned int  strlen(const char *s);                     /* newlib (vendor) */
@@ -163,4 +166,70 @@ uint32_t log_emit_string(const char *s)
 
     log_buffer_header_crc_update();
     return len;
+}
+
+/* OEM string helpers used by the buffer dump. parse_leading_decimal (0x08020ddc)
+ * is a one-arg strtol wrapper — strtol(s, NULL, 10); first_index_of_set
+ * (0x080216fc) is strcspn — the index of the first char of s that occurs in set,
+ * else strlen(s). The OEM ships its own copies, so call them at their addresses
+ * rather than aliasing newlib. */
+extern int parse_leading_decimal(const char *s);                /* OEM 0x08020ddc */
+extern int first_index_of_set(const char *s, const char *set);  /* OEM 0x080216fc */
+
+/* "log to APP sink" enable flag @ SRAM 0x200001D6 — read by the log-upload state
+ * machine, written here and from the BLE / console `logapp` paths. */
+#define LOG_APP_SINK_ENABLE_FLAG (*(volatile uint8_t *)0x200001D6u)
+
+/* Enable the APP-log sink: a single byte store of 1 (OEM app_log_sink_enable,
+ * 0x080298DC). */
+void app_log_sink_enable(void)
+{
+    LOG_APP_SINK_ENABLE_FLAG = 1;
+}
+
+/* Dump the SRAM circular log buffer to the console (OEM log_buffer_dump,
+ * 0x080296B8). Walks the ring from read_cursor up to (not including) write_cursor
+ * — re-reading write_cursor each pass since it can advance during the dump —
+ * assembling one line at a time into a 256-byte stack buffer (the uint8_t index
+ * wraps at 256, so over-long lines overwrite, matching the OEM). Each completed
+ * line is reformatted: its leading decimal is the epoch timestamp; when present it
+ * is rendered as ">DD/HH:MM:SS " followed by the message from the first space on,
+ * otherwise the raw line is echoed verbatim. */
+void log_buffer_dump(void)
+{
+    char line[256];
+    const char *src = (const char *)LOG_CTRL->read_cursor;
+    uint8_t idx = 0;
+
+    memset(line, 0, 0x100);
+
+    while ((const char *)LOG_CTRL->write_cursor != src) {
+        watchdog_kick();                       /* per byte */
+
+        if ((const char *)LOG_END < src) {     /* wrap once past the buffer end */
+            src = (const char *)LOG_PAYLOAD;
+        }
+
+        char c = *src;
+        line[idx] = c;
+        idx++;
+
+        if (c == '\n') {
+            int epoch = parse_leading_decimal(line);   /* 0 -> no timestamp */
+            if (epoch == 0) {
+                g_log_func(">%s", line);
+            } else {
+                rtc_calendar_t cal;
+                rtc_epoch_to_calendar(&cal, (uint32_t)epoch);
+                g_log_func(">%d/%02d:%02d:%02d",
+                           cal.day, cal.hours, cal.minutes, cal.seconds);
+                int off = first_index_of_set(line, " ");   /* skip the epoch field */
+                g_log_func("%s", line + off);
+            }
+            memset(line, 0, 0x100);
+            idx = 0;
+        }
+
+        src++;
+    }
 }
