@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "app.h"
@@ -433,18 +434,42 @@ void region_speed_preset_table_load(void *out, int region)
     dst[5] = src[5];
 }
 
-/* ── load factory defaults into the config block (OEM settings_factory_reset,
- * 0x0803FAD8). mode==1 wipes the 0xD0-byte config region (ctx+0xF4), clears the
- * backup code (ctx+0x100 = 0x00FF "not set"), and seeds wheel/unit/region +
- * light threshold (ctx+0x102). It always rewrites the four region speed-preset
- * rows (ctx+0x10E.. / +0x126..), re-seeds the sound-group masks (via
- * sound_groups_init_default), stamps the schema word, then persists the record
- * to both flash banks.
- *
- * The backup code itself is the uint16 at ctx+0x100: a 3-digit owner code
- * (value = d0 + d1*10 + d2*100, range 0..999) programmed over BLE
- * (CMD_BLE_SECURITY_BACKUP_CODE); 0x00FF is the "no backup code" sentinel, so
- * the factory default is *unset* — there is no built-in default code. */
+/* Persisted bike-configuration block, living at session_ctx + 0xF4 (0xD0 bytes).
+ * Field meanings are those printed by the `show` console command (docs/console.md).
+ * config_persist_dual_bank takes the first 16 bytes as four scalar words and the
+ * remaining 0xC0 bytes (from +0x104, the embedded boot_cfg_block) by value. */
+typedef struct {
+    uint32_t sound_group_low;       /* +0xF4  "Group low"    sound-effect mask, quiet volume tier */
+    uint32_t sound_group_medium;    /* +0xF8  "Group medium"                                       */
+    uint32_t sound_group_high;      /* +0xFC  "Group high"                                         */
+    uint16_t backup_code;           /* +0x100 owner unlock code (d0+d1*10+d2*100); 0x00FF="not set"*/
+    uint16_t dark_threshold_lux;    /* +0x102 "Dark %d Lx" auto-light turn-on threshold            */
+    /* ── boot_cfg_block begins here (+0x104), persisted by value ───────────────*/
+    uint8_t  cfg_byte_104;          /* +0x104 (unidentified; always 0)                            */
+    uint8_t  volume_low;            /* +0x105 "Volume Low"                                        */
+    uint8_t  volume_medium;         /* +0x106 "Volume Medium"                                     */
+    uint8_t  volume_high;           /* +0x107 "Volume High"                                       */
+    uint8_t  transmission_mode;     /* +0x108 e-shifter auto/manual                               */
+    uint8_t  region;                /* +0x109 legal region — selects the assist row used at runtime*/
+    uint8_t  units;                 /* +0x10A 0 = metric (km/h)                                   */
+    uint8_t  wheel_size;            /* +0x10B wheel-size index                                    */
+    uint8_t  light_mode;            /* +0x10C 0 = off, 1 = auto, 2 = on                           */
+    uint8_t  _pad_10d;              /* +0x10D                                                     */
+    uint16_t assist_up_hmh  [4][3]; /* +0x10E region[4] × moment[3]: assist *engage*  speed (0.1 km/h) */
+    uint16_t assist_down_hmh[4][3]; /* +0x126 region[4] × moment[3]: assist *release* speed (0.1 km/h) */
+    uint8_t  _pad_13e[2];           /* +0x13E                                                     */
+    uint32_t saved_schema_version;  /* +0x140 config schema/version stamp                         */
+    uint8_t  persisted_rest[0x80];  /* +0x144 remainder of boot_cfg_block (not touched here)      */
+} bike_config_t;                    /* total 0xD0 bytes (== ctx+0xF4 .. ctx+0x1C3) */
+
+/* Pin the overlay to the OEM byte offsets — a future field edit that shifts the
+ * layout fails the build instead of silently corrupting persisted config. */
+_Static_assert(sizeof(bike_config_t) == 0xD0,                          "config block is 0xD0 bytes");
+_Static_assert(offsetof(bike_config_t, backup_code)         == 0x0c,   "backup_code @ ctx+0x100");
+_Static_assert(offsetof(bike_config_t, cfg_byte_104)        == 0x10,   "boot_cfg_block @ ctx+0x104");
+_Static_assert(offsetof(bike_config_t, assist_up_hmh)       == 0x1a,   "assist_up @ ctx+0x10E");
+_Static_assert(offsetof(bike_config_t, assist_down_hmh)     == 0x32,   "assist_down @ ctx+0x126");
+_Static_assert(offsetof(bike_config_t, saved_schema_version) == 0x4c,  "schema @ ctx+0x140");
 
 /* Seed the three sound-group volume-tier bitmasks ("Group low/medium/high" at
  * cfg+0/+4/+8 == ctx+0xF4/F8/FC): low={}, medium=0x383F33FE, high=0x47C0CC00
@@ -452,56 +477,61 @@ void region_speed_preset_table_load(void *out, int region)
  * the audio groups, NOT the backup code despite this call site's neighbours. */
 extern void sound_groups_init_default(void *cfg);
 
+/* Load factory defaults into the config block (OEM settings_factory_reset,
+ * 0x0803FAD8). mode==1 is a full wipe — clear the whole block and reset every
+ * owner-settable preference (backup code → 0x00FF "not set", so there is no
+ * built-in default code; region/units/wheel/dark-threshold to defaults). mode!=1
+ * only refreshes the per-region speed presets, volumes, sound groups and schema,
+ * leaving the user's code/region/units/wheel intact. Either way it persists the
+ * record to both flash banks.
+ *
+ * The backup code (ctx+0x100) is a 3-digit owner code programmed over BLE
+ * (CMD_BLE_SECURITY_BACKUP_CODE); value = d0 + d1*10 + d2*100, range 0..999. */
 void settings_factory_reset(void *ctx_, int mode)
 {
-    uint8_t *ctx = (uint8_t *)ctx_;
+    bike_config_t *cfg = (bike_config_t *)((uint8_t *)ctx_ + 0xf4);
+
+    /* Per-region pedal-assist "moment" presets (4 legal regions × 3 power
+     * moments), in 0.1 km/h. up = speed the motor engages assist, down = speed
+     * it releases it (hysteresis). Region 2 carries the raised speed cap. */
+    static const uint16_t k_assist_up_hmh[4][3] = {
+        { 100, 190, 240 },   /* region 0 */
+        { 100, 190, 240 },   /* region 1 */
+        { 100, 190, 280 },   /* region 2 — raised cap */
+        { 100, 190, 240 },   /* region 3 */
+    };
+    static const uint16_t k_assist_down_hmh[4][3] = {
+        {  80, 170, 220 },
+        {  80, 170, 220 },
+        {  80, 170, 250 },   /* region 2 */
+        {  80, 170, 220 },
+    };
 
     if (mode == 1) {
-        memset(ctx + 0xf4, 0, 0xd0);
-        *(uint16_t *)(ctx + 0x100) = 0xff;
-        ctx[0x10b] = 1;
-        ctx[0x10a] = 0;
-        ctx[0x109] = 0;
-        *(uint16_t *)(ctx + 0x102) = 200;
+        memset(cfg, 0, sizeof *cfg);
+        cfg->backup_code        = 0x00ff;   /* "not set" — no factory default code */
+        cfg->dark_threshold_lux = 200;
+        cfg->region             = 0;
+        cfg->units              = 0;        /* metric */
+        cfg->wheel_size         = 1;
     }
-    *(uint16_t *)(ctx + 0x10e) = 100;
-    *(uint16_t *)(ctx + 0x110) = 0xbe;
-    *(uint16_t *)(ctx + 0x112) = 0xf0;
-    *(uint16_t *)(ctx + 0x126) = 0x50;
-    *(uint16_t *)(ctx + 0x128) = 0xaa;
-    *(uint16_t *)(ctx + 0x12a) = 0xdc;
-    *(uint16_t *)(ctx + 0x114) = 100;
-    *(uint16_t *)(ctx + 0x116) = 0xbe;
-    *(uint16_t *)(ctx + 0x118) = 0xf0;
-    *(uint16_t *)(ctx + 0x12c) = 0x50;
-    *(uint16_t *)(ctx + 0x12e) = 0xaa;
-    *(uint16_t *)(ctx + 0x130) = 0xdc;
-    *(uint16_t *)(ctx + 0x11a) = 100;
-    *(uint16_t *)(ctx + 0x11c) = 0xbe;
-    *(uint16_t *)(ctx + 0x11e) = 0x118;
-    *(uint16_t *)(ctx + 0x132) = 0x50;
-    *(uint16_t *)(ctx + 0x134) = 0xaa;
-    *(uint16_t *)(ctx + 0x136) = 0xfa;
-    *(uint16_t *)(ctx + 0x120) = 100;
-    *(uint16_t *)(ctx + 0x122) = 0xbe;
-    *(uint16_t *)(ctx + 0x124) = 0xf0;
-    *(uint16_t *)(ctx + 0x138) = 0x50;
-    *(uint16_t *)(ctx + 0x13a) = 0xaa;
-    *(uint16_t *)(ctx + 0x13c) = 0xdc;
-    ctx[0x10c] = 1;
-    ctx[0x108] = 0;
-    ctx[0x104] = 0;
-    ctx[0x105] = 0x14;
-    ctx[0x106] = 0x1e;
-    ctx[0x107] = 0x26;
-    sound_groups_init_default(ctx + 0xf4);
-    *(uint32_t *)(ctx + 0x140) = 0;
 
-    {
-        uint8_t res = config_persist_dual_bank(
-            *(uint32_t *)(ctx + 0xf4), *(uint32_t *)(ctx + 0xf8),
-            *(uint32_t *)(ctx + 0xfc), *(uint32_t *)(ctx + 0x100),
-            *(const struct boot_cfg_block *)(ctx + 0x104));
-        g_log_func("res: %s\r\n", res ? "ERROR" : "OK");
-    }
+    memcpy(cfg->assist_up_hmh,   k_assist_up_hmh,   sizeof k_assist_up_hmh);
+    memcpy(cfg->assist_down_hmh, k_assist_down_hmh, sizeof k_assist_down_hmh);
+
+    cfg->cfg_byte_104      = 0;
+    cfg->volume_low        = 20;
+    cfg->volume_medium     = 30;
+    cfg->volume_high       = 38;
+    cfg->transmission_mode = 0;
+    cfg->light_mode        = 1;             /* auto */
+    sound_groups_init_default(cfg);         /* seed sound_group_low/medium/high */
+    cfg->saved_schema_version = 0;
+
+    /* arg 4 == the u32 at +0x100: backup_code (low half) | dark threshold (high). */
+    uint8_t res = config_persist_dual_bank(
+        cfg->sound_group_low, cfg->sound_group_medium, cfg->sound_group_high,
+        ((uint32_t)cfg->dark_threshold_lux << 16) | cfg->backup_code,
+        *(const struct boot_cfg_block *)&cfg->cfg_byte_104);
+    g_log_func("res: %s\r\n", res ? "ERROR" : "OK");
 }
