@@ -3127,3 +3127,16 @@ void factory_reset_sm_step(uint8_t *ctx)
         break;
     }
 }
+
+/* Invalidate the cached battery charge-time/range estimate and re-arm the 10 s
+ * BMS charge poll (OEM charge_time_estimate_reset, 0x0802E40C). The standalone
+ * form of the idiom inlined in status_process: arm the G_STATE[0x1d] poll slot
+ * for 10000 ticks (10 s) and force the estimate field at app-ctx+0x3FE to its
+ * "invalid / not yet measured" sentinel (0x8300 = -32000). Called from the
+ * staged-message / announce-mark dispatcher after a fresh announce lands, so
+ * the next status_process pass recomputes the estimate. */
+void charge_time_estimate_reset(void)
+{
+    scheduler_start((uint8_t)G_STATE[0x1d], 10000, (void *)0x0);
+    *(uint16_t *)(*(uint8_t **)0x20000944u + 0x3FE) = 0x8300;
+}

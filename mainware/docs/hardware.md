@@ -122,7 +122,9 @@ soft float for now.
 | `0x20000029` | ≥0x40 | `g_sound_rec` / `G_STATE` | `app.c` / `states.c` | sound/clocking record (`channel_notify_emit`): bike-state byte at `+4`, saved state `+5`, aux `+9`, scheduler timer-slot id `+0xA` (`0xFA` = none). **Also the per-state-machine object** (`status_process`'s `G_STATE`): `+4` is the `switch` selector (the `alarm_state_name` code) and `+0x14..+0x3E` is a bank of per-state scheduler-slot handles (`0xFA`/-6 = unallocated). |
 | `0x200001D8` | ≥0xB0 | `g_brownout_ctr` / `G_CLK` | `app.c` / `states.c` | brownout/clocking counter block; `+0xC` bumps on each amp-volume failure and triggers a `"Clocking %d"` log every third. `status_process` (`G_CLK`) also stores per-state flags + scratch here: `+0x7C/0x7D` shifter-on latches, `+0x80/0x84` last error-flag words, `+0x88` blink toggle, `+0x94` PC1 debounce, `+0xA1..0xAC` PIN-attempt counters + odometer-BCD digits. |
 | `0x20000068` | ≥8 | `g_mode_state` | `app.c` | mode/state block: byte[0] = mode/sub-mode (`aux_mode_byte_get`/`set_mode_state_byte`; `enter_mode3_arm_show_timer` writes 3), byte[7] = scheduler slot id (`0xFA` = none). |
-| `0x20009B04` | ~0x24 | `g_i2c3_handle` | `i2c.c`/`eeprom.c` | I2C3 HAL handle (`I2C_HandleTypeDef`, Instance `0x40005C00`); the EEPROM bus (`eeprom_write_region`) + the bit-bang recovery (`i2c3_handle_init`/`deinit`). |
+| `0x20009B04` | ~0x24 | `g_i2c3_handle` | `i2c.c`/`eeprom.c` | I2C3 HAL handle (`I2C_HandleTypeDef`, Instance `0x40005C00`); the EEPROM bus (`eeprom_write_region`) + the bit-bang recovery (`i2c3_handle_init`/`deinit`). The LIS3DH (`lis3dh_i2c_read`/`write`) and STC3115 also transact through it. |
+| `0x2000838C` | 0x10 | `g_lis3dh_dev` | `lis3dh.c` | LIS3DH accelerometer device handle: vtable `{write +0, read +4, wait +8}` (filled by `lis3dh_accel_init` with the I2C3 transport leaves) + WHO_AM_I scratch byte `+0xC`. See `docs/lis3dh.md`. |
+| `0x200001E0` | 1 | `g_lis3dh_int1_last_src` | `lis3dh.c` | last INT1_SRC byte seen by `lis3dh_int1_clear`; a change is logged once (`"Clear Lis 0x%02X"`). |
 | `0x20009728` | 0x14 | `g_wwdg_desc` | `watchdog.c` | WWDG refresh descriptor (built by `watchdog_init`): `{WWDG_CR 0x40002C00, 0x180, 0x7F, 0x7F, 0}`. `wwdg_hw_init` programs `WWDG_CR=0xFF` (T|WDGA) + `WWDG_CFR=0x1FF`; `watchdog_kick`→`wdg_reg_write_from_desc` reloads `WWDG_CR=0x7F` each loop. |
 | `0x20000101` | 1 | `g_boot_retry_budget` | `main.c` | boot self-test retry budget. `mainware_boot_init_sequence` decrements it after an I2C-bus-error recovery pass (≥3 device failures); the do/while loop exits when it reaches 0 (set 0 directly on a clean pass). |
 | `0x20009A84` | ≥0x40 | `g_led_pwm_obj` | `main.c`/`lighting.c` | TIM1 (`0x40010000`) handle / lamp-PWM object: `obj_set_field34/38` + `led_channel3_set_brightness` (`lighting.c`) write its `+0x34/+0x38/+0x3C` PWM-duty channels = the 3 front/rear lamp brightness outputs (driven by the `light_pattern_step` fade engine); `tim_channel_enable_output(&obj, 0/4/8)` enables TIM1 CH1/2/3 at boot. |
@@ -200,13 +202,24 @@ refreshed each loop by `watchdog_kick` (writes `0x7F` to `WWDG_CR`).
 ### Motion sensor — ST LIS3DH accelerometer
 
 The anti-theft motion sensor is an **ST LIS3DH** 3-axis accelerometer (confirmed
-by the `status_process` log strings `"LIS3DH high sense"` / `"LIS3DH low sense"`).
-`status_process` switches its sensitivity between a high-sensitivity standby/theft
-mode and a ride mode, and consumes its motion interrupt as the `"Mems trigger"`
-input to the alarm escalation (alongside the wheel-rotation sensor's `"Wheel
-trigger"`). **I2C address 0x33** (WHO_AM_I reads back 0x33), with auto-increment
-(`reg | 0x80`); brought up at boot by `lis3dh_accel_init` (`0x0803D0BC`, enables
-**NVIC IRQ 0x48 + 0x49** for the two INT lines) → `lis3dh_config_motion_int(0,6)`.
+by the `status_process` log strings `"LIS3DH high sense"` / `"LIS3DH low sense"`,
+the `WHO_AM_I == 0x33` probe, and the `"Error ID LIS3DH %d"` diagnostic). The
+full driver is decoded in **`src/lis3dh.c`** (`docs/lis3dh.md`): a vtable device
+model (`g_lis3dh_dev` @ SRAM **`0x2000838C`** = `{write, read, wait}` + WHO_AM_I
+scratch) over the **I2C3** transport, **8-bit address 0x33** (7-bit `0x19`,
+SA0=1) with auto-increment (`reg | 0x80`) and a 50 ms HAL timeout, plus 15
+register helpers and the high-level API.
+
+`status_process` switches sensitivity between a high-sensitivity standby/theft
+mode (`lis3dh_config_motion_int(0,6)`) and a ride mode (`(0,0x20)`), and consumes
+the motion interrupt as the `"Mems trigger"` input to the alarm escalation
+(alongside the wheel-rotation sensor's `"Wheel trigger"`); `lis3dh_int1_clear`
+drains the latched INT1 on the **GPIOC** line (IDR mask `0x08`). Brought up at
+boot by `lis3dh_accel_init` (`0x0803D0BC`), which **masks** the two INT EXTI
+lines via `NVIC_DisableIRQ(0x48)` / `(0x49)` (`0x080270FC`, writes `NVIC->ICER`)
+while it installs the transport and verifies WHO_AM_I — it does *not* enable
+them. The motion INT1 is the high-pass-filtered OR of X/Y/Z high events at ±2 g,
+100 Hz, routed to the INT1 pad via `CTRL_REG3.I1_IA1`.
 
 ### Cellular modem (u-blox SARA-G350) — power & control pins
 
