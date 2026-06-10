@@ -90,6 +90,59 @@ Response URCs parsed: `+CREG:`, `+CPIN:`, `+CSQ:`, `+UUHTTPCR:` (HTTP result).
 **Backend hosts** (rodata): `bikecomm.vanmoof.com`, `ublox1.vanmoof.com`,
 `m2m.vanmoof.com` (the APN). See also `net.c` (the cloud request builders).
 
+## Response handlers & command builders (the callback layer)
+
+Each script entry can carry a `.build_cb` (format a custom outgoing command) and
+a `.handle_cb` (post-process a matched reply). `modem_at_exec` calls them with
+`pkt = {buf-or-response, bufsize, fmt}`; `handle_cb` returns `0` done-OK, `2`
+alt-OK, `3` fail, `build_cb` returns `0`/`3`. They are sourced in `modem.c` on
+top of four parsing primitives:
+
+- `modem_skip_to_cr` / `modem_skip_to_space` (`0x0802F1DC` / `0x0802F1F0`) —
+  advance past the next `\r` / `' '`.
+- `modem_extract_field` (`0x0802F204`) — copy the next quoted/comma field
+  (skips a leading `+CMD ` token and quotes); `dst == NULL` = locate-only.
+- `modem_at_response_copy` (`0x0802F404`) — copy 0x80 bytes of the raw reply,
+  CR→space, into the working buffer before matching.
+
+| callback | OEM | AT cmd | what it does |
+| --- | --- | --- | --- |
+| `modem_parse_manufacturer` | `0x0802F36C` | `CGMI` | field → `g_modem_manufacturer` |
+| `modem_parse_model` | `0x0802F338` | `CGMM` | field → `g_modem_model_resp` (SARA/LARA select) |
+| `modem_parse_revision` | `0x0802F304` | `CGMR` | field → `g_modem_revision` |
+| `modem_parse_imei` | `0x0802F2D0` | `CGSN` | field → `g_modem_imei` |
+| `modem_parse_imsi` | `0x0802F29C` | `CIMI` | field → `g_modem_imsi` |
+| `modem_handle_ccid` | `0x0802F494` | `CCID` | field → `g_modem_iccid` (the SIM-lock serial) |
+| `modem_handle_cpin` | `0x0802F4D4` | `CPIN?` | `READY`→2, `SIM PIN`→0, else 3 |
+| `modem_handle_csq` | `0x0802F5FC` | `CSQ` | RSSI → `g_modem_csq`; accept < 99 |
+| `modem_handle_creg` | `0x0802F434` | `CREG?` | accept reg-state ∈ {1,5,6,7,9} |
+| `modem_handle_cmgf` | `0x0802F524` | `CMGF?` | `0` PDU→0, `1` text→2 |
+| `modem_handle_upsnd` | `0x0802F560` | `UPSND` | PSD activation flag (2nd field) |
+| `modem_handle_uuhttpcr` | `0x0802F5B0` | `+UUHTTPCR` | HTTP result code 0/1 |
+| `modem_handle_cpms` | `0x0802F644` | `CPMS?` | stored-SMS count → `g_modem_sms_used` |
+| `modem_handle_cmgl` | `0x0802F684` | `CMGL` | SMS index → `g_modem_sms_index` (1..0x130) |
+| `modem_handle_cmgr_sms` | `0x0802FC30` | `CMGR` | origin → `g_modem_sms_number`, body → SMS dispatcher |
+| `modem_handle_ugsrv` | `0x0802FC84` | `UGSRV` | AssistNow server config check (host/token) |
+| `modem_handle_ugaop` | `0x0802FD0C` | `UGAOP` | AssistNow aiding config check |
+| `modem_handle_upsd` | `0x0802FD68` | `UPSD` | APN-match check vs `g_pModemProvision[1]` |
+| `modem_handle_uuloc` | `0x0802F8D4` | `+UULOC` | build `imei=…&rmc=$…` into `g_modem_http_payload` |
+| `modem_build_cpin` | `0x0802F6D8` | `CPIN=` | `%s` = SIM PIN (`g_pModemProvision[0]`) |
+| `modem_build_cmgs` / `_sms_body` | `0x0802F7CC` / `0x0802F798` | `CMGS` | recipient `"%s"` then body `%s`+Ctrl-Z |
+| `modem_build_cmgr` / `_cmgd` | `0x0802F748` / `0x0802F710` | `CMGR`/`CMGD` | read/delete SMS slot `%d` |
+| `modem_build_upsd_apn` | `0x0802F800` | `UPSD=` | APN `%s` (`g_pModemProvision[1]`) |
+| `modem_build_uhttp_port` | `0x0802F86C` | `UHTTP` | port `"443"` |
+| `modem_build_uhttpc_payload` | `0x0802F838` | `UHTTPC` | body `%s` = `g_modem_http_payload` |
+| `modem_build_ugaop` | `0x0802F980` | `UGAOP=` | host `ublox1.vanmoof.com`, port `46434` |
+
+### Inbound SMS remote control
+
+`modem_handle_cmgr_sms` hands the SMS body to **`modem_sms_dispatch_command`**
+(`0x0803D668`): bodies of the form `#<8-char-code>*<cmd>` drive remote actions —
+unlock / factory-reset / bike-state change / location report (formats the BLE MAC
++ counters and POSTs) / bell (`ssp_ble_enqueue_tx_packet`). This is the SMS half
+of the anti-theft control surface (the BLE half is `ble_cmd_dispatch`). Mapped +
+named; the dispatcher body itself is not yet sourced.
+
 ## The SIM lock — ICCID / Vodafone-NL check
 
 `sim_iccid_check` (`0x0802E328`), run at the POWEROFF recycle, is VanMoof's
@@ -136,3 +189,26 @@ context (AT engine state, tx scratch buffer at `+0x18`, and a per-step
 `(substate,substep)` pair for each `modem_step_*`) is one struct at SRAM
 `0x20000294`. The parsed IMEI/IMSI/ICCID/CSQ land in the session context
 (`ctx+0x3E8` modem-info block; ICCID at `+0x50`).
+
+The response handlers first write into a block of fixed SRAM scratch buffers
+(the identity strings are a descending 16-byte run; the response handlers fill
+them, and the outer SM copies them into the session context):
+
+| SRAM | global | filled by |
+| --- | --- | --- |
+| `0x20009CC0` | `g_modem_manufacturer` (16) | `CGMI` |
+| `0x20009CD0` | `g_modem_model_resp` (16) | `CGMM` |
+| `0x20009CE0` | `g_modem_revision` (16) | `CGMR` |
+| `0x20009CF0` | `g_modem_imei` (16) | `CGSN` |
+| `0x20009D00` | `g_modem_imsi` (16) | `CIMI` |
+| `0x20009D10` | `g_modem_iccid` (0x15) | `CCID` |
+| `0x20009D25` | `g_modem_csq` (3) | `CSQ` |
+| `0x20009C0C` | `g_modem_sms_index` (u16) | `CMGL` (CMGR/CMGD operand) |
+| `0x20009D28` | `g_modem_sms_read_count` (u8) | bounded CMGR read progress |
+| `0x20009D8C` | `g_modem_sms_used` (u8) | `CPMS` stored count (read cap) |
+| `0x20009D2C` | `g_modem_sms_number` | recipient (CMGS) / origin (CMGR) |
+| `0x20009D3C` | `g_modem_sms_body` | SMS text (= number + 0x10) |
+| `0x20009C20` | `g_modem_http_payload` (0x80) | UHTTPC request body |
+
+Provisioning strings live in flash at `0x0804F440` (`g_pModemProvision`):
+`[0]` = SIM PIN (`""`), `[1]` = APN (`m2m.vanmoof.com`).

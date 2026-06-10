@@ -37,8 +37,15 @@ extern int   modem_uart_tx_byte(void *h, char b);    /* 0x08035C94: 0/2 status  
 extern void  modem_uart_flush(void *buf);            /* 0x08036130                  */
 extern void  modem_at_response_copy(void *dst, int src); /* 0x0802F404              */
 
-/* Bounded byte compare (OEM 0x0802181C — the GNU word-at-a-time strncmp). */
+/* Bounded byte compare (OEM 0x0802181C — the GNU word-at-a-time strncmp).
+ * Returns 0 when the two buffers are equal over `n` bytes. */
 extern int   bounded_strncmp(const void *a, const void *b, unsigned int n);
+
+/* libc string helpers used by the AT response/command callbacks. */
+extern char *strstr(const char *hay, const char *needle);   /* 0x08021BDC (match ptr / NULL) */
+extern char *strchr(const char *s, int c);                  /* 0x0802133C                    */
+extern unsigned strlen(const char *s);                      /* 0x08021740                    */
+extern int   parse_leading_decimal(const char *s);          /* 0x08020DDC (atoi of digits)   */
 
 /* Read the modem-supply rail Vgsm in mV (ADC); used to confirm power-down. */
 extern unsigned int adc_read_vgsm(void);
@@ -82,6 +89,36 @@ extern char g_modem_model_resp[];
  * shutdown guard at [3]; plus a separate guard slot (OEM DAT_080301B0). */
 extern uint8_t g_modem_pwroff[4];
 extern uint8_t g_modem_pwroff_guard;
+
+/* Parsed modem identity / SIM info — working buffers in SRAM, filled by the AT
+ * response handlers (see "AT response/command callbacks" below). They sit in a
+ * descending block in the AT-init order CGMI, CGMM, CGMR, CGSN, (CPIN), CIMI,
+ * CCID, CSQ. g_modem_model_resp (0x20009CD0) is declared above. */
+extern char     g_modem_manufacturer[16]; /* OEM 0x20009CC0 (AT+CGMI) */
+extern char     g_modem_revision[16];     /* OEM 0x20009CE0 (AT+CGMR) */
+extern char     g_modem_imei[16];         /* OEM 0x20009CF0 (AT+CGSN) */
+extern char     g_modem_imsi[16];         /* OEM 0x20009D00 (AT+CIMI) */
+extern char     g_modem_iccid[];          /* OEM 0x20009D10 (AT+CCID — the SIM-lock serial) */
+extern char     g_modem_csq[3];           /* OEM 0x20009D25 (AT+CSQ RSSI text) */
+
+/* SMS working state. The phone-number and body buffers are reused both ways:
+ * recipient/body on send (CMGS), origin/body on read (CMGR). */
+extern uint16_t g_modem_sms_index;        /* OEM 0x20009C0C (+CMGL index; CMGR/CMGD operand) */
+extern uint8_t  g_modem_sms_read_count;   /* OEM 0x20009D28 (bounded CMGR read progress)     */
+extern uint8_t  g_modem_sms_used;         /* OEM 0x20009D8C (+CPMS stored count; read cap)   */
+extern char     g_modem_sms_number[];     /* OEM 0x20009D2C (recipient on CMGS / origin on CMGR) */
+extern char     g_modem_sms_body[];       /* OEM 0x20009D3C (= g_modem_sms_number + 0x10)        */
+
+/* HTTP request scratch — the %s body substituted into AT+UHTTPC. */
+extern char     g_modem_http_payload[];   /* OEM 0x20009C20 */
+
+/* Inbound-SMS remote-command interpreter ("#<code>*<cmd>" bodies → unlock /
+ * factory-reset / state change / location report / bell). */
+extern void     modem_sms_dispatch_command(char *out, unsigned size, char *body); /* 0x0803D668 */
+
+/* Provisioning string table (flash): [0] = SIM PIN (""), [1] = APN
+ * ("m2m.vanmoof.com"). Read indirectly by the CPIN / UPSD callbacks. */
+extern const char *const g_modem_provision[]; /* OEM 0x0804F440 */
 
 /* The flash AT-command script (OEM 0x08043EDC). One flat table, carved into
  * per-state command arrays at fixed byte offsets; each entry is 0x20 bytes. */
@@ -704,4 +741,512 @@ void sim_iccid_check(void)
     }
     log_print_timestamp_prefix();
     g_log_func("iccid %s\r\n", iccid);
+}
+
+/* ================================================================== *
+ *  AT response-parsing primitives
+ * ================================================================== */
+
+/* modem_skip_to_cr (0x0802F1DC): advance to the char just past the next '\r';
+ * NULL if the string ends ('\0') first. */
+char *modem_skip_to_cr(char *p)
+{
+    for (;;) {
+        if (*p == '\r')
+            return p + 1;
+        if (*p == '\0')
+            return (char *)0;
+        p++;
+    }
+}
+
+/* modem_skip_to_space (0x0802F1F0): advance to the char just past the next ' ';
+ * NULL on '\0'. Used to step past the "+CMD:" tag to the value. */
+char *modem_skip_to_space(char *p)
+{
+    for (;;) {
+        if (*p == ' ')
+            return p + 1;
+        if (*p == '\0')
+            return (char *)0;
+        p++;
+    }
+}
+
+/* modem_extract_field (0x0802F204): copy the next response field from `src`
+ * into `dst[size]`. Skips a leading "+CMD " token and an opening quote, copies
+ * up to the closing quote / comma / CR / NUL, then steps past a trailing comma.
+ * dst == NULL → locate-only (no copy). Returns the cursor past the field (just
+ * past a trailing comma if present), or NULL if `src` begins at CR/NUL. */
+char *modem_extract_field(char *dst, unsigned size, char *src)
+{
+    char c = *src;
+
+    if (c == '\r')
+        return (char *)0;
+    if (c == '\0')
+        return (char *)0;
+
+    if (c == '+') {                       /* skip the "+CMD" token to its space */
+        while ((c = *src) != ' ' && c != '\r' && c != '\0')
+            src++;
+        if (c == ' ')
+            src++;
+    }
+
+    if (*src == '\"')                     /* strip an opening quote */
+        src++;
+
+    if (dst == (char *)0) {
+        while ((c = *src) != '\"' && c != ',' && c != '\r' && c != '\0')
+            src++;
+    } else {
+        while (size > 1 && (c = *src) != '\"' && c != ',' && c != '\r' && c != '\0') {
+            *dst++ = c;
+            size--;
+            src++;
+        }
+        *dst = '\0';
+    }
+
+    if (*src == '\"')                     /* strip a closing quote */
+        src++;
+
+    if (*src == ',')                      /* step past a field separator */
+        return src + 1;
+    return src;
+}
+
+/* modem_at_response_copy (0x0802F404): copy 0x80 bytes src→dst, translating CR
+ * to space; the dst index is masked to 8 bits each step. modem_at_exec calls
+ * this to normalize the raw reply before matching. */
+void modem_at_response_copy(void *dst, int src)
+{
+    char *d = (char *)dst;
+    const char *s = (const char *)src;
+    unsigned di = 0;
+    int si;
+
+    for (si = 0; si < 0x80; si++) {
+        d[di] = (s[si] == '\r') ? ' ' : s[si];
+        di = (di + 1) & 0xff;
+    }
+}
+
+/* ================================================================== *
+ *  AT response/command callbacks
+ *
+ *  These are the .build_cb / .handle_cb function-pointer targets in the flash
+ *  AT-script table (modem_at_entry_t). modem_at_exec invokes them with
+ *  pkt = {buf-or-response, bufsize, fmt}:
+ *    handle_cb: pkt[0] = received response text; return 0 done-OK, 2 alt-OK,
+ *               3 fail/no-match.
+ *    build_cb:  pkt[0]=txbuf, pkt[1]=bufsize, pkt[2]=fmt; snprintf the command;
+ *               return 0 ok / 3 fail.
+ * ================================================================== */
+
+/* --- identity handlers: skip the echo + blank line, copy the value field --- */
+
+/* modem_parse_manufacturer (0x0802F36C): AT+CGMI → g_modem_manufacturer. */
+int modem_parse_manufacturer(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q = modem_skip_to_cr(modem_skip_to_cr(resp));
+    return modem_extract_field(g_modem_manufacturer, 0x10, q) ? 0 : 3;
+}
+
+/* modem_parse_model (0x0802F338): AT+CGMM → g_modem_model_resp (matched vs
+ * "SARA"/"LARA" by modem_step_poweron). */
+int modem_parse_model(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q = modem_skip_to_cr(modem_skip_to_cr(resp));
+    return modem_extract_field(g_modem_model_resp, 0x10, q) ? 0 : 3;
+}
+
+/* modem_parse_revision (0x0802F304): AT+CGMR → g_modem_revision. */
+int modem_parse_revision(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q = modem_skip_to_cr(modem_skip_to_cr(resp));
+    return modem_extract_field(g_modem_revision, 0x10, q) ? 0 : 3;
+}
+
+/* modem_parse_imei (0x0802F2D0): AT+CGSN → g_modem_imei. */
+int modem_parse_imei(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q = modem_skip_to_cr(modem_skip_to_cr(resp));
+    return modem_extract_field(g_modem_imei, 0x10, q) ? 0 : 3;
+}
+
+/* modem_parse_imsi (0x0802F29C): AT+CIMI → g_modem_imsi. */
+int modem_parse_imsi(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q = modem_skip_to_cr(modem_skip_to_cr(resp));
+    return modem_extract_field(g_modem_imsi, 0x10, q) ? 0 : 3;
+}
+
+/* --- status handlers: locate the URC tag, classify/extract the value --- */
+
+/* modem_handle_creg (0x0802F434): AT+CREG? — accept registered/connected
+ * classes (leading digit ∈ {1,5,6,7,9}). */
+int modem_handle_creg(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *field;
+
+    if (strstr(resp, "+CREG:") == (char *)0)
+        return 3;
+    field = modem_extract_field((char *)0, 0, modem_skip_to_space(resp));
+    switch (field[0]) {
+    case '1': case '5': case '6': case '7': case '9':
+        return 0;
+    default:
+        return 3;
+    }
+}
+
+/* modem_handle_ccid (0x0802F494): AT+CCID → g_modem_iccid (the SIM serial the
+ * SIM lock checks). */
+int modem_handle_ccid(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+
+    if (strstr(resp, "+CCID:") == (char *)0)
+        return 3;
+    if (modem_extract_field(g_modem_iccid, 0x15, modem_skip_to_space(resp)) == (char *)0)
+        return 3;
+    return 0;
+}
+
+/* modem_handle_cpin (0x0802F4D4): AT+CPIN? — "READY" → 2 (no PIN needed),
+ * "SIM PIN" → 0 (enter PIN), else 3. */
+int modem_handle_cpin(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *field;
+
+    if (strstr(resp, "+CPIN:") == (char *)0)
+        return 3;
+    field = modem_skip_to_space(resp);
+    if (bounded_strncmp(field, "READY", 5) == 0)
+        return 2;
+    if (bounded_strncmp(field, "SIM PIN", 7) == 0)
+        return 0;
+    return 3;
+}
+
+/* modem_handle_cmgf (0x0802F524): AT+CMGF? — '0' PDU → 0, '1' text → 2. */
+int modem_handle_cmgf(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *field;
+
+    if (strstr(resp, "+CMGF:") == (char *)0)
+        return 3;
+    field = modem_skip_to_space(resp);
+    if (field[0] == '0')
+        return 0;
+    if (field[0] == '1')
+        return 2;
+    return 3;
+}
+
+/* modem_handle_upsnd (0x0802F560): AT+UPSND=0,8 — second CSV field is the PSD
+ * activation flag ('0' → 0, '1' → 2). */
+int modem_handle_upsnd(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *p, *field;
+
+    if (strstr(resp, "+UPSND:") == (char *)0)
+        return 3;
+    p     = modem_extract_field((char *)0, 0, modem_skip_to_space(resp));
+    field = modem_extract_field((char *)0, 0, p);
+    if (field[0] == '0')
+        return 0;
+    if (field[0] == '1')
+        return 2;
+    return 3;
+}
+
+/* modem_handle_uuhttpcr (0x0802F5B0): +UUHTTPCR URC — accept HTTP result code
+ * digit '0' or '1' (third CSV field). */
+int modem_handle_uuhttpcr(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *cur;
+
+    cur = strstr(resp, "+UUHTTPCR:");
+    if (cur == (char *)0)
+        return 3;
+    cur = modem_skip_to_space(cur);
+    cur = modem_extract_field((char *)0, 0, cur);
+    cur = modem_extract_field((char *)0, 0, cur);
+    return ((uint8_t)(*cur - '0') < 2) ? 0 : 3;
+}
+
+/* modem_handle_csq (0x0802F5FC): AT+CSQ → g_modem_csq; accept RSSI < 99 (99 =
+ * "not detectable"). */
+int modem_handle_csq(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *cur;
+
+    cur = strstr(resp, "+CSQ:");
+    if (cur == (char *)0)
+        return 3;
+    cur = modem_skip_to_space(cur);
+    modem_extract_field(g_modem_csq, 3, cur);
+    return (parse_leading_decimal(g_modem_csq) < 99) ? 0 : 3;
+}
+
+/* modem_handle_cpms (0x0802F644): AT+CPMS? → stored-SMS count into
+ * g_modem_sms_used; always OK once the tag is seen. */
+int modem_handle_cpms(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *cur;
+
+    cur = strstr(resp, "+CPMS:");
+    if (cur == (char *)0)
+        return 3;
+    cur = modem_extract_field((char *)0, 0, modem_skip_to_space(resp));
+    g_modem_sms_used = (uint8_t)parse_leading_decimal(cur);
+    return 0;
+}
+
+/* modem_handle_cmgl (0x0802F684): AT+CMGL → SMS index into g_modem_sms_index;
+ * accept index in 1..0x130. */
+int modem_handle_cmgl(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *cur;
+    char field[4];
+    uint16_t idx;
+
+    cur = strstr(resp, "+CMGL:");
+    if (cur == (char *)0)
+        return 3;
+    modem_extract_field(field, 4, modem_skip_to_space(cur));
+    idx = (uint16_t)parse_leading_decimal(field);
+    g_modem_sms_index = idx;
+    return ((uint16_t)(idx - 1) < 0x131) ? 0 : 3;
+}
+
+/* modem_handle_cmgr_sms (0x0802FC30): AT+CMGR — store the originating address
+ * into g_modem_sms_number, then hand the body (g_modem_sms_body) to the inbound
+ * remote-command interpreter. Cursors are threaded from the strstr match and
+ * the extract_field returns (NOT the response start), as the OEM does. */
+int modem_handle_cmgr_sms(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *m, *cursor;
+
+    m = strstr(resp, "+CMGR:");
+    if (m == (char *)0)
+        return 3;
+    cursor = modem_extract_field((char *)0, 0, modem_skip_to_space(m));
+    cursor = modem_extract_field(g_modem_sms_number, 0x10, cursor);
+    modem_sms_dispatch_command(g_modem_sms_body, 0x50, modem_skip_to_cr(cursor));
+    return 0;
+}
+
+/* modem_handle_ugsrv (0x0802FC84): +UGSRV AssistNow server config — 2 = both
+ * hosts + token already match the provisioned values, 0 = a field differs
+ * (reconfigure), 3 = tag absent. */
+int modem_handle_ugsrv(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q;
+
+    q = strstr(resp, "+UGSRV:");
+    if (q == (char *)0)
+        return 3;
+    q = strchr(q, '"');
+    if (bounded_strncmp(q + 1, "ublox1.vanmoof.com", 0x12) != 0)
+        return 0;
+    q = strchr(q + 1, ',');
+    q = strchr(q + 1, '"');
+    if (bounded_strncmp(q + 1, "ublox1.vanmoof.com", 0x12) != 0)
+        return 0;
+    q = strchr(q + 1, ',');
+    q = strchr(q + 1, '"');
+    if (bounded_strncmp(q + 1, "PBNjh0V46Eev8CcfS4LPJg", 0x16) == 0)
+        return 2;
+    return 0;
+}
+
+/* modem_handle_ugaop (0x0802FD0C): +UGAOP AssistNow aiding config — 2 = host
+ * == ublox1.vanmoof.com AND next field == "46434", else 0, 3 = tag absent. */
+int modem_handle_ugaop(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *q;
+
+    q = strstr(resp, "+UGAOP:");
+    if (q == (char *)0)
+        return 3;
+    q = strchr(q, '"');
+    if (bounded_strncmp(q + 1, "ublox1.vanmoof.com", 0x12) != 0)
+        return 0;
+    q = strchr(q + 1, ',');
+    if (bounded_strncmp(q + 1, "46434", 5) == 0)
+        return 2;
+    return 0;
+}
+
+/* modem_handle_upsd (0x0802FD68): +UPSD PSD profile — 2 = the quoted APN field
+ * matches the provisioned APN (g_modem_provision[1]), else 0, 3 = tag absent.
+ * The cursor is threaded from the strstr match, as the OEM does. */
+int modem_handle_upsd(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *m, *q;
+    const char *apn;
+
+    m = strstr(resp, "+UPSD:");
+    if (m == (char *)0)
+        return 3;
+    q = modem_extract_field((char *)0, 0, modem_skip_to_space(m));
+    q = strchr(q, '"');
+    apn = g_modem_provision[1];
+    return (bounded_strncmp(q + 1, apn, strlen(apn)) == 0) ? 2 : 0;
+}
+
+/* --- command builders: snprintf the outgoing AT command --- */
+
+/* modem_build_cpin (0x0802F6D8): AT+CPIN="%s" with the provisioned SIM PIN. */
+int modem_build_cpin(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], g_modem_provision[0]);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_cmgd (0x0802F710): AT+CMGD=%d — delete the current SMS slot. */
+int modem_build_cmgd(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], (int)g_modem_sms_index);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_cmgr (0x0802F748): AT+CMGR=%d — read the current SMS slot;
+ * advances the bounded read counter toward its limit first. */
+int modem_build_cmgr(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n;
+
+    if (g_modem_sms_read_count < g_modem_sms_used)
+        g_modem_sms_read_count++;
+    n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                 (const char *)p[2], (int)g_modem_sms_index);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_sms_body (0x0802F798): "%s\x1a" — the SMS text + Ctrl-Z that
+ * terminates the message after the ">" prompt. */
+int modem_build_sms_body(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], g_modem_sms_body);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_cmgs (0x0802F7CC): AT+CMGS="%s" — start an SMS to the recipient
+ * number (the entry's expect string is the ">" body prompt). */
+int modem_build_cmgs(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], g_modem_sms_number);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_upsd_apn (0x0802F800): AT+UPSD=0,1,"%s" — set the PDP APN. */
+int modem_build_upsd_apn(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], g_modem_provision[1]);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_uhttpc_payload (0x0802F838): AT+UHTTPC POST/GET whose %s is the
+ * pre-built request body g_modem_http_payload. */
+int modem_build_uhttpc_payload(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], g_modem_http_payload);
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_build_uhttp_port (0x0802F86C): AT+UHTTP=0,5,%s — HTTPS server port. */
+int modem_build_uhttp_port(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], "443");
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* modem_handle_uuloc (0x0802F8D4): +UULOC URC — build the location report body
+ * "imei=<IMEI>&rmc=$<+UULOC field>" into g_modem_http_payload. Returns 3 if the
+ * tag is absent or the assembled length is out of 1..0x7f. */
+int modem_handle_uuloc(void *pkt)
+{
+    char *resp = (char *)((void **)pkt)[0];
+    char *field;
+    int len;
+
+    field = strstr(resp, "+UULOC:");
+    if (field == (char *)0)
+        return 3;
+    len = snprintf(g_modem_http_payload, 0x80, "imei=%s&rmc=$", g_modem_imei);
+    if ((unsigned)(len - 1) >= 0x7f)
+        return 3;
+    for (;;) {
+        char c = *(++field);
+        if (c == '\r' || c == '\0')
+            break;
+        g_modem_http_payload[len++] = c;
+    }
+    g_modem_http_payload[len] = '\0';
+    return ((unsigned)(len - 1) < 0x7f) ? 0 : 3;
+}
+
+/* modem_build_ugaop (0x0802F980): AT+UGAOP="%s",%s,1000,0 — AssistNow aiding
+ * server (host "ublox1.vanmoof.com", port "46434"). */
+int modem_build_ugaop(void *pkt)
+{
+    void **p = (void **)pkt;
+    int n = snprintf((char *)p[0], (unsigned)(uintptr_t)p[1],
+                     (const char *)p[2], "ublox1.vanmoof.com", "46434");
+    if (n < 1)
+        return 3;
+    return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
 }
