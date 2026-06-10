@@ -11,6 +11,26 @@ Resource          ${RENODEKEYWORDS}
 ${ELF}            @${CURDIR}/../build/batteryware.elf
 ${REPL}           @${CURDIR}/batteryware.repl
 ${VTOR}           0x08005028
+# Scratch buffer + stack used by the direct-call (leaf function) tests. Both sit
+# inside the 20 KB SRAM (0x20000000..0x20005000) modelled in batteryware.repl.
+${SCRATCH}        0x20004000
+${STACKTOP}       0x20005000
+# All function entry points are resolved at run time with `sysbus GetSymbolAddress`
+# (see the 'Call Leaf Function' / 'Process Rx Ring' keywords) so the suite keeps
+# working after a rebuild shifts addresses — never hard-code flash addresses here.
+#
+# Modbus RX/TX SRAM map (from src/uart.c, src/modem.c, src/cmd.c):
+${RX_RING}        0x20004088      # USART1 RX ring buffer (uart_resp_handler drains it)
+${RX_HEAD}        0x20004540      # RX ring head (uint16)
+${RX_TAIL}        0x20004544      # RX ring tail (uint16)
+${RX_STATE}       0x200047D2      # uart_protocol_handler frame state machine (uint16)
+${TX_ENABLE}      0x2000453D      # uart_putchar gate — must be 1 to emit
+${TX_WR_IDX}      0x20004542      # TX ring write index (uint16)
+${RESP_BUF}       0x20004648      # assembled response frame (AA 03/06 ... CRC)
+${RESP_LEN}       0x200047D0      # response length so far (uint16)
+${TX_FIELD_CNT}   0x20004748      # # of fields emitted (non-zero ⇒ a response was built)
+${MODE_WORD}      0x20002C00      # 0 selects binary Modbus command mode
+${TESTMODE_FLAG}  0x200028D5      # cfg_blk+5: set by a 0x06 write to register 9
 
 *** Keywords ***
 Create Battery Machine
@@ -40,60 +60,182 @@ Create Battery Machine
     # Single-line body avoids the newline-over-TCP issue with triple-quote macros.
     # Flash content (ELF) persists through soft reset so no reload needed.
     Execute Command           macro reset "cpu VectorTableOffset ${VTOR}"
-    # rcc_osc_config (0x8008ff8): hook at function entry in case Renode fires it.
-    Execute Command           cpu AddHook 0x8008ff8 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    # rcc_osc_config mid-body hook at 0x800922C (last RCC_CSR read visible in the
-    # boot log — definitely executed).  Jump to 0x800909c, which is the compiler's
-    # own "PLLState==NONE → movs r0,#0 → b.n epilogue" path.  This exits before
-    # the PLL disable/enable timeout loops so tick_get=0 never causes an infinite
-    # loop.  With SWS=HSI (CFGR tag 0x4) the rcc_configure SWS poll then exits on
-    # its first read, so the whole clock-init path completes without any busy-wait.
-    Execute Command           cpu AddHook 0x800922c "self.SetRegisterUlong(0, 0); cpu.PC = 0x800909c"
-    # system_reset (0x8009470): safety net for SPI/modem/etc. failure paths.
-    # Hook fires before push {r4,lr} so LR holds the correct return address.
-    Execute Command           cpu AddHook 0x8009470 "cpu.PC = cpu.LR"
-    # nvic_system_reset_dup (0x8009476) called from fault_led_trigger bypasses the
-    # system_reset hook; return immediately to prevent unexpected SYSRESETREQ.
-    Execute Command           cpu AddHook 0x8009476 "cpu.PC = cpu.LR"
-    # SysTick_Handler (0x800dfd8) is the weak default ISR — normally a NOP.
-    # After rcc_configure calls hal_init_tick, SysTick fires at ~1-2 kHz.
-    # Increment the tick counter at 0x200047DC on every SysTick so all
-    # tick_get()-based timeout loops in SPI/BMS code fire within a few ms of
-    # virtual time (~2000 invocations per 2 virtual seconds = negligible overhead).
-    # SysTick_Handler (0x800dfd8): return from interrupt without doing anything.
-    # flash_page_erase (0x80061e4) configures SysTick at up to 8 kHz; at that
-    # rate the Python hook overhead dominates.  We skip flash_page_erase so
-    # SysTick is never enabled, and rely on our other stubs for correctness.
-    Execute Command           cpu AddHook 0x800dfd8 "cpu.PC = cpu.LR"
-    # flash_page_erase (0x80061e4): normally configures SysTick via the NVIC
-    # registers.  Skip it to prevent an 8 kHz SysTick that would make every
-    # Python hook invocation from the interrupt dominate wall-clock time.
-    Execute Command           cpu AddHook 0x80061e4 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    # dma_wait_for_ready (0x8005e48) polls FLASH_SR with a 50 000-tick timeout;
-    # each iteration calls tick_get, so 50 000 hook fires per call-site × many
-    # callers makes the test impractically slow.  Return 0 (ready) immediately.
-    Execute Command           cpu AddHook 0x8005e48 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    # delay_ms / delay_us poll a SysTick event flag that the real handler sets.
-    # Skip both so firmware does not block on timing delays.
-    Execute Command           cpu AddHook 0x8005aa8 "cpu.PC = cpu.LR"
-    Execute Command           cpu AddHook 0x8005ae4 "cpu.PC = cpu.LR"
-    # dma_flash_start.part.0 (0x8005b10) polls an uninitialised tick counter.
-    # Skip the function (set r0=0, return) so dma_init proceeds without reset.
-    Execute Command           cpu AddHook 0x8005b10 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    # bms_setup (0x80053a8): skips the initial BMS cell-communication setup
-    # (memcmp_verify → spi_register_write → dma_wait_for_ready iterates over a
-    # full flash page, generating millions of FLASH_SR reads and crashing Renode).
-    Execute Command           cpu AddHook 0x80053a8 "cpu.PC = cpu.LR"
-    # smbus_transmit (0x800873c), smbus_write_reg (0x800953c), smbus_read
-    # (0x8009754): all use SPI1/I2C peripherals not present in the .repl.
-    # smbus_transmit accesses SPI1 (0x40013000); bus_ready_check in the others
-    # reads an uninitialised I2C state byte.  Skip all three (return 0 = OK).
-    Execute Command           cpu AddHook 0x800873c "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    Execute Command           cpu AddHook 0x800953c "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    Execute Command           cpu AddHook 0x8009754 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
-    # memcmp_verify (0x8009514): byte-by-byte compare via SPI reads; each byte
-    # calls spi_register_write → dma_wait_for_ready in a tight loop.  Return 0.
-    Execute Command           cpu AddHook 0x8009514 "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
+    # --- Stub boot-path functions that would otherwise busy-wait on absent
+    # peripherals or run SysTick too fast for Python hooks. All addresses are
+    # resolved by symbol (Hook Return / Hook Return Zero) so a rebuild that shifts
+    # flash can't stale them — only the two mid-function rcc offsets are relative.
+    #
+    # rcc_osc_config: skip the oscillator config at entry, and also patch its
+    # mid-body PLL path. The last RCC_CSR read (+0x234) is rewritten to jump to the
+    # compiler's "PLLState==NONE → movs r0,#0 → epilogue" block (+0xA4), bypassing
+    # the PLL disable/enable timeout loops that spin forever while tick_get is 0.
+    # With SWS=HSI (CFGR tag 0x4) the rcc_configure SWS poll then exits on its first
+    # read, so the whole clock-init path completes without any busy-wait.
+    Hook Return Zero          rcc_osc_config
+    ${rcc}=       Resolve Symbol    rcc_osc_config
+    ${rcc_mid}=   Evaluate    "0x%X" % (${rcc} + 0x234)
+    ${rcc_epi}=   Evaluate    "0x%X" % (${rcc} + 0xA4)
+    Execute Command           cpu AddHook ${rcc_mid} "self.SetRegisterUlong(0, 0); cpu.PC = ${rcc_epi}"
+    # system_reset / nvic_system_reset_dup: neutralise the SYSRESETREQ paths fired
+    # from clock-init and fault_led_trigger (return before push {r4,lr}).
+    Hook Return               system_reset
+    Hook Return               nvic_system_reset_dup
+    # SysTick_Handler (weak default ISR): return from interrupt doing nothing — we
+    # keep SysTick disabled (flash_page_erase skipped) so it should never fire.
+    Hook Return               SysTick_Handler
+    # flash_page_erase: would configure SysTick at up to 8 kHz; at that rate the
+    # Python hook overhead dominates wall-clock time. Skip it.
+    Hook Return Zero          flash_page_erase
+    # dma_wait_for_ready: 50 000-tick FLASH_SR poll per call site — return 0 (ready).
+    Hook Return Zero          dma_wait_for_ready
+    # delay_ms / delay_us: poll a SysTick event flag the stubbed handler never sets.
+    Hook Return               delay_ms
+    Hook Return               delay_us
+    # dma_flash_start.part.0: polls an uninitialised tick counter.
+    Hook Return Zero          dma_flash_start.part.0
+    # bms_setup: initial BMS cell setup iterates a full flash page over SPI.
+    Hook Return               bms_setup
+    # smbus_transmit/write_reg/read: SPI1 (0x40013000) / I2C state absent from the
+    # .repl — return 0 (OK) for all three.
+    Hook Return Zero          smbus_transmit
+    Hook Return Zero          smbus_write_reg
+    Hook Return Zero          smbus_read
+    # memcmp_verify: byte-by-byte compare via SPI reads in a tight loop — return 0.
+    Hook Return Zero          memcmp_verify
+
+Create Leaf Machine
+    [Documentation]    Minimal machine for direct-call (leaf function) tests: load
+    ...                the platform and ELF, nothing else. The pure routines under
+    ...                test (CRC, hex conversion, tick read) touch no clock/flash
+    ...                status registers, so none of the boot-time tags or hooks from
+    ...                'Create Battery Machine' are needed here.
+    Execute Command           mach create
+    Execute Command           machine LoadPlatformDescription ${REPL}
+    Execute Command           sysbus LoadELF ${ELF}
+
+Load Scratch Bytes
+    [Documentation]    Write a list of byte literals into the SRAM scratch buffer
+    ...                (${SCRATCH}), one byte per ascending address.
+    [Arguments]    @{bytes}
+    ${i}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${SCRATCH} + ${i}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${i}=    Evaluate    ${i} + 1
+    END
+
+Hex To Nibble Should Be
+    [Documentation]    Fresh-machine helper for the hex_to_nibble table check: load
+    ...                the ASCII code into R0, call, and assert the 4-bit result.
+    [Arguments]    ${char}    ${expected}
+    Create Leaf Machine
+    Execute Command    cpu SetRegister 0 ${char}
+    ${r}=    Call Leaf Function    hex_to_nibble
+    Should Be Equal As Integers    ${r}    ${expected}
+
+Resolve Symbol
+    [Documentation]    Look up a symbol's address in the loaded ELF and return it
+    ...                stripped (e.g. "0x08005964"). Keeps the suite rebuild-proof.
+    [Arguments]    ${name}
+    ${addr}=    Execute Command    sysbus GetSymbolAddress "${name}"
+    ${addr}=    Strip String       ${addr}
+    [Return]    ${addr}
+
+Hook Return
+    [Documentation]    Hook a function (by symbol) to return immediately — cpu.PC =
+    ...                cpu.LR before its prologue, so callers proceed as if it ran.
+    [Arguments]    ${symbol}
+    ${a}=    Resolve Symbol    ${symbol}
+    Execute Command    cpu AddHook ${a} "cpu.PC = cpu.LR"
+
+Hook Return Zero
+    [Documentation]    Hook a function (by symbol) to return 0 immediately —
+    ...                r0 = 0; cpu.PC = cpu.LR. (R0 is read-only in a hook, hence
+    ...                SetRegisterUlong; see the renode-batteryware memory note.)
+    [Arguments]    ${symbol}
+    ${a}=    Resolve Symbol    ${symbol}
+    Execute Command    cpu AddHook ${a} "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
+
+Return Trap
+    [Documentation]    Address of Default_Handler (a `b .` self-loop) with the Thumb
+    ...                bit set, used as LR so a called function parks the CPU
+    ...                harmlessly on return (BX LR) instead of running off into
+    ...                undefined code. Resolved per machine so a rebuild can't stale it.
+    ${trap}=    Resolve Symbol     Default_Handler
+    # GetSymbolAddress yields a 0x… literal that robot inlines as a Python int,
+    # so OR the Thumb bit directly (no int(..., 16) wrapper).
+    ${trap}=    Evaluate           ${trap} | 1
+    [Return]    ${trap}
+
+Call Leaf Function
+    [Documentation]    Invoke a Thumb function by symbol name and return R0 (its
+    ...                return value) as a stripped string. Arguments R0..R3 must
+    ...                already be set by the caller. Sets up a fresh stack, points LR
+    ...                at the Return Trap self-loop, runs a brief window so the call
+    ...                completes, then reads R0. RunFor "0.001" is ~32k CPU cycles at
+    ...                32 MHz — orders of magnitude more than these routines need.
+    [Arguments]    ${symbol}
+    ${addr}=    Resolve Symbol    ${symbol}
+    ${trap}=    Return Trap
+    Execute Command           cpu SetRegister 13 ${STACKTOP}
+    Execute Command           cpu SetRegister 14 ${trap}
+    Execute Command           cpu PC ${addr}
+    Execute Command           emulation RunFor "0.001"
+    ${r0}=    Execute Command    cpu GetRegister 0
+    ${r0}=    Strip String      ${r0}
+    [Return]    ${r0}
+
+Inject Modbus Frame
+    [Documentation]    Put the BMS into binary Modbus command mode, clear the RX
+    ...                state machine + response buffers, and write the request bytes
+    ...                into the USART1 RX ring so the next 'Process Rx Ring' drains
+    ...                them. Frame bytes are passed as byte literals (incl. CRC).
+    [Arguments]    @{frame}
+    Execute Command    sysbus WriteByte ${TX_ENABLE} 1            # let uart_putchar emit
+    Execute Command    sysbus WriteDoubleWord ${MODE_WORD} 0      # binary command mode
+    Execute Command    sysbus WriteWord ${RX_STATE} 0            # fresh frame
+    Execute Command    sysbus WriteDoubleWord ${RESP_LEN} 0
+    Execute Command    sysbus WriteDoubleWord ${TX_FIELD_CNT} 0
+    Execute Command    sysbus WriteWord ${TX_WR_IDX} 0
+    ${n}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{frame}
+        ${addr}=    Evaluate    ${RX_RING} + ${n}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${n}=    Evaluate    ${n} + 1
+    END
+    Execute Command    sysbus WriteWord ${RX_HEAD} ${n}          # head = frame length
+    Execute Command    sysbus WriteWord ${RX_TAIL} 0
+
+Process Rx Ring
+    [Documentation]    Call uart_resp_handler() once. It loops over the whole RX ring,
+    ...                feeding each byte to uart_protocol_handler — so a complete frame
+    ...                is parsed and its response assembled in a single call (which
+    ...                matters: a returning call parks the CPU, so only one per machine).
+    Execute Command    cpu SetRegister 13 ${STACKTOP}
+    ${trap}=    Return Trap
+    Execute Command    cpu SetRegister 14 ${trap}
+    ${h}=       Resolve Symbol    uart_resp_handler
+    Execute Command    cpu PC ${h}
+    Execute Command    emulation RunFor "0.05"
+
+Response Is Crc Valid
+    [Documentation]    Read ${length} response bytes from ${RESP_BUF} and return True
+    ...                iff the trailing two bytes are a correct little-endian Modbus
+    ...                CRC-16 over the preceding body (poly 0xA001, init 0xFFFF). The
+    ...                CRC is computed in-line with a nested reduce so no helper lib is
+    ...                needed.
+    [Arguments]    ${length}
+    ${raw}=    Execute Command    sysbus ReadBytes ${RESP_BUF} ${length}
+    ${ok}=     Evaluate    (lambda bs: __import__('functools').reduce(lambda c,b: __import__('functools').reduce(lambda x,_:(x>>1)^0xA001 if x&1 else x>>1, range(8), c^b), bs[:-2], 0xFFFF) == (bs[-2]|(bs[-1]<<8)))([int(x,16) for x in __import__('re').findall(r'0x([0-9A-Fa-f]{2})', r'''${raw}''')][:${length}])
+    [Return]    ${ok}
+
+Read Sram Word
+    [Documentation]    Read a 16-bit SRAM word and return it as an integer.
+    [Arguments]    ${addr}
+    ${v}=    Execute Command    sysbus ReadWord ${addr}
+    ${v}=    Strip String       ${v}
+    ${v}=    Convert To Integer    ${v}    16
+    [Return]    ${v}
 
 *** Test Cases ***
 Vector Table Is Well Formed
@@ -143,20 +285,158 @@ Boots Into The Service Super-Loop
     Start Emulation
     Wait For Log Entry        IN_SUPERLOOP
 
-# --- Modbus functional test (scaffold) ---------------------------------------
-# Once "Boots Into The Service Super-Loop" passes, the USART1 Modbus link can be
-# exercised. The BMS is a Modbus RTU slave at address 0xAA; a Read Holding
-# Registers (func 0x03) request for the live snapshot looks like:
-#
-#     AA 03 00 02 00 2B <crcLo> <crcHi>     # read 0x2B regs from reg 2
-#
-# Feed the request a byte at a time into the RX path and capture the reply:
-#
-#     Execute Command   sysbus.usart1 WriteChar 0xAA
-#     Execute Command   sysbus.usart1 WriteChar 0x03
-#     ...               (remaining request bytes incl. CRC-16/0xA001)
-#     # capture TX: hook sysbus.usart1 or attach a tester, then assert the reply
-#     # opens with AA 03 <byteCount> ... and ends with a valid CRC-16.
-#
-# This needs byte-level UART capture (the line-oriented Terminal Tester does not
-# fit binary RTU framing); left as a follow-up to wire against your Renode build.
+# --- Functional unit tests (direct leaf-function calls) ----------------------
+# These do not run the firmware's boot path. Each loads the image into a fresh
+# machine, sets up the AAPCS registers (R0..R3 = args, SP = stack, LR = a self-
+# loop trap), points PC at a pure routine, runs a brief window, and reads R0.
+# This exercises the *real compiled code* for the CRC/hex/tick primitives against
+# externally-known reference values — catching mis-translations the boot/liveness
+# tests above cannot. NB: a returning leaf parks the CPU in the trap loop, so each
+# call needs its own machine (a second call in the same machine never resumes).
+
+CRC-16 Modbus Standard Check Value
+    [Documentation]    crc16_calc over ASCII "123456789" must equal 0x4B37 — the
+    ...                canonical Modbus/CRC-16 check value (poly 0xA001, init
+    ...                0xFFFF). Validates the protocol-frame CRC against an external
+    ...                reference rather than against itself.
+    Create Leaf Machine
+    Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x36  0x37  0x38  0x39
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 9
+    ${crc}=    Call Leaf Function    crc16_calc
+    Should Be Equal As Integers    ${crc}    0x4B37
+
+CRC-16 Of A Modbus Read-Holding-Registers Frame
+    [Documentation]    The Read Holding Registers request below the scaffold
+    ...                (AA 03 00 02 00 2B) has CRC-16 0xCEBD; appending CE BD
+    ...                little-endian forms the full on-wire frame the BMS expects.
+    Create Leaf Machine
+    Load Scratch Bytes    0xAA  0x03  0x00  0x02  0x00  0x2B
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 6
+    ${crc}=    Call Leaf Function    crc16_calc
+    Should Be Equal As Integers    ${crc}    0xCEBD
+
+CRC-16 Of An Empty Buffer Is The Init Value
+    [Documentation]    With len 0 the loop body never executes, so crc16_calc
+    ...                returns the initial register 0xFFFF unchanged. Guards the
+    ...                `while (len-- != 0)` boundary.
+    Create Leaf Machine
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 0
+    ${crc}=    Call Leaf Function    crc16_calc
+    Should Be Equal As Integers    ${crc}    0xFFFF
+
+CRC-8 SMBus PEC Standard Check Value
+    [Documentation]    crc8_for_smbus over "123456789" must equal 0xF4 — the
+    ...                canonical CRC-8/SMBus check value (poly 0x07, init 0x00).
+    ...                This is the PEC byte the FEDL5236 driver appends and checks.
+    Create Leaf Machine
+    Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x36  0x37  0x38  0x39
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 9
+    ${crc}=    Call Leaf Function    crc8_for_smbus
+    Should Be Equal As Integers    ${crc}    0xF4
+
+CRC-8 Verify Agrees With The Generator
+    [Documentation]    crc8_verify is the read-side helper; for identical input it
+    ...                must compute the same PEC as crc8_for_smbus (both wrap the
+    ...                same bitwise core). Run each in its own machine and compare.
+    Create Leaf Machine
+    Load Scratch Bytes    0xAA  0x03  0x00  0x02  0x00  0x2B
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 6
+    ${gen}=    Call Leaf Function    crc8_for_smbus
+    Create Leaf Machine
+    Load Scratch Bytes    0xAA  0x03  0x00  0x02  0x00  0x2B
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 6
+    ${ver}=    Call Leaf Function    crc8_verify
+    Should Be Equal As Integers    ${gen}    ${ver}
+
+Hex To Nibble Maps Digits And Letters
+    [Documentation]    hex_to_nibble: '0'->0, '9'->9, 'A'->0xA, 'F'->0xF. Each case
+    ...                runs in its own machine (one leaf call per machine).
+    Hex To Nibble Should Be    0x30    0x0
+    Hex To Nibble Should Be    0x39    0x9
+    Hex To Nibble Should Be    0x41    0xA
+    Hex To Nibble Should Be    0x46    0xF
+
+Tick Get Reads The System Tick Counter
+    [Documentation]    tick_get returns the 32-bit word at SRAM 0x200047DC. Seed a
+    ...                known sentinel there and confirm the routine reads it back —
+    ...                a focused check of the tick reference the timeout loops poll.
+    Create Leaf Machine
+    Execute Command       sysbus WriteDoubleWord 0x200047DC 0x0001E240
+    ${t}=    Call Leaf Function    tick_get
+    Should Be Equal As Integers    ${t}    0x0001E240
+
+# --- Modbus RTU functional tests (RX → handler → TX) -------------------------
+# These drive the binary Modbus link the way the cartridge MCU does, without the
+# slow full super-loop: a request frame is written into the USART1 RX ring, then
+# uart_resp_handler() is called once (it drains the ring, feeding each byte to the
+# uart_protocol_handler state machine). The handler parses the frame, verifies its
+# CRC-16, and — for a read — assembles the response in respbuf and pushes it out
+# through uart_putchar (the real TX path). We then read the response straight from
+# SRAM. The BMS is Modbus slave 0xAA; CRC-16 is poly 0xA001, appended LE.
+
+Modbus Read Holding Registers Returns A CRC-Valid Response
+    [Documentation]    Inject a Read Holding Registers request (func 0x03, AA 03 00
+    ...                00 00 04, CRC 5D D2) and confirm the firmware emits a response
+    ...                that opens with AA 03 and carries a correct trailing CRC-16 —
+    ...                i.e. the full RX-parse → telemetry-cascade → TX path works and
+    ...                produces a frame the host would accept.
+    Create Leaf Machine
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0xD2
+    Process Rx Ring
+    # A response was assembled (fields emitted) and is non-trivially long.
+    ${fields}=    Execute Command    sysbus ReadDoubleWord ${TX_FIELD_CNT}
+    Should Not Be Equal As Integers    ${fields}    0
+    ${len}=    Read Sram Word    ${RESP_LEN}
+    Should Be True    ${len} > 4
+    # Header: slave 0xAA, function 0x03.
+    ${b1addr}=    Evaluate    ${RESP_BUF} + 1
+    ${b0}=    Execute Command    sysbus ReadByte ${RESP_BUF}
+    ${b1}=    Execute Command    sysbus ReadByte ${b1addr}
+    Should Be Equal As Integers    ${b0}    0xAA
+    Should Be Equal As Integers    ${b1}    0x03
+    # Trailing two bytes are a valid Modbus CRC-16 over the body.
+    ${valid}=    Response Is Crc Valid    ${len}
+    Should Be True    ${valid}
+
+Modbus Read Response Header Echoes The Function Code
+    [Documentation]    A second read at a different start register (read 8 regs from
+    ...                reg 2) still produces a well-formed AA 03 header — the parser
+    ...                isn't tied to one specific request.
+    Create Leaf Machine
+    Inject Modbus Frame    0xAA  0x03  0x00  0x02  0x00  0x08  0xFC  0x17
+    Process Rx Ring
+    ${len}=    Read Sram Word    ${RESP_LEN}
+    Should Be True    ${len} > 4
+    ${valid}=    Response Is Crc Valid    ${len}
+    Should Be True    ${valid}
+
+Modbus Bad-CRC Request Is Rejected
+    [Documentation]    The same read frame with a corrupted CRC (last byte D2→00)
+    ...                must be dropped by the handler's CRC check — no response is
+    ...                assembled (TX field count stays 0).
+    Create Leaf Machine
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0x00
+    Process Rx Ring
+    ${fields}=    Execute Command    sysbus ReadDoubleWord ${TX_FIELD_CNT}
+    Should Be Equal As Integers    ${fields}    0
+
+Modbus Write Single Register Takes Effect
+    [Documentation]    Write Single Register (func 0x06) to register 9 = 1 turns on
+    ...                test/debug mode: arm_cfg_flag sets cfg_blk+5 (0x200028D5). Stub
+    ...                memcmp_verify (a flash/SPI persistence loop the bare platform
+    ...                can't service) and confirm the flag flips 0 → 1, proving the
+    ...                write reached its dispatch handler.
+    Create Leaf Machine
+    ${mcv}=    Resolve Symbol    memcmp_verify
+    Execute Command    cpu AddHook ${mcv} "self.SetRegisterUlong(0, 0); cpu.PC = cpu.LR"
+    Execute Command    sysbus WriteByte ${TESTMODE_FLAG} 0
+    Inject Modbus Frame    0xAA  0x06  0x00  0x09  0x00  0x01  0x81  0xD3
+    Process Rx Ring
+    ${flag}=    Execute Command    sysbus ReadByte ${TESTMODE_FLAG}
+    Should Be Equal As Integers    ${flag}    0x01
