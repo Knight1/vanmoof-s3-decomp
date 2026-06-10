@@ -13,18 +13,33 @@ Datasheet: *STM32L072xx Reference Manual (RM0376)* — see `reference/`.
 
 ## Firmware layout
 
-The batteryware image (`batteryware_1.17.1.bin`, `0x15610` = 87,568 bytes)
-is linked at **`0x08000000`** (STM32L0 flash base). Unlike shifterware,
-there is no separate bootloader occupying the lower flash — batteryware is
-self-contained at the flash origin.
+The batteryware image (`batteryware_1.17.1.bin`, `0x15610` = 87,568 bytes) is
+the **application ("AP") bank**: it is linked to **run at `0x08005000`**, not
+at the flash origin. The first 20 KB of flash (`0x08000000`–`0x08004FFF`) is
+owned by the **bmsboot** bootloader, which validates this image's 40-byte
+VanMoof header and boots `AP_BASE + 0x28`. (See `../../bmsboot/docs/memory-map.md`
+and `../linker_stm32l072.ld`, `ORIGIN = 0x08005000`.)
 
-> Image base confirmed 2026-05-25 by setting `image_base = 0x08000000`
-> in Ghidra; the reset vector `0x080131F9` (Thumb LSB set → entry at
-> `0x080131F8`) only lands inside the image at this base.
+| Region | Address range | Size | Owner |
+| --- | --- | --- | --- |
+| bmsboot | `0x08000000`–`0x08004FFF` | 20 KB | bootloader |
+| **batteryware (AP)** | `0x08005000`–`0x0801A7FF` | 86 KB | this image (runs here) |
+| Shadow | `0x0801A800`–`0x0802FFFF` | 86 KB | OTA staging / golden backup |
+| data EEPROM | `0x08080000`–`0x080817FF` | 6 KB | persistent state (see `eeprom.md`) |
 
-### Image layout (link address `0x08000000`)
+> **Ghidra base vs run address.** The Ghidra program is loaded at
+> `image_base = 0x08000000` (file offset 0 → `0x08000000`), so
+> **Ghidra address = runtime address − 0x5000**. The vector table and literal
+> pools store *runtime* pointers (reset `0x080131F9`; `AHBPrescTable`
+> `0x080181E8`); those only resolve inside the 0x15610-byte image at the
+> `0x08005000` run base — the proof the firmware runs there (at base
+> `0x08000000`, `0x080181E8` would fall past the image end). To follow a
+> runtime pointer in Ghidra, subtract `0x5000` (reset entry `0x080131F8` →
+> Ghidra `0x0800E1F8`). The tables below use **Ghidra-file** addresses.
 
-| Range | Size | Content |
+### Image layout (Ghidra-file addresses, base `0x08000000`; runtime = +0x5000)
+
+| Range (Ghidra) | Size | Content |
 | --- | --- | --- |
 | `0x08000000`–`0x08000027` | 40 B | VanMoof image header |
 | `0x08000028`–`0x080000E7` | 192 B | Cortex-M0+ vector table (48 × 4 B) |

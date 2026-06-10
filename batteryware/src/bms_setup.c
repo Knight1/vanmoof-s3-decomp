@@ -14,9 +14,9 @@
  *   7. Scale cfg[+0x06] (u16) into two large 32-bit calibration
  *      constants at 0x20002b50 / 0x20002b54.
  *   8. Call bms_init() (= FEDL5236 hardware init / fg_init).
- *   9. Pull cfg[+0x3a]/[+0x3c] into 0x200025b2/0x200025b0 and clamp
- *      each into the 1075..1000 range. Set fixed defaults at
- *      0x200025be/0x200025c4/0x200025bc.
+ *   9. Load the charge/discharge current-cal gains from cfg[+0x3a]/[+0x3c]
+ *      into 0x200025b2/0x200025b0; if either is out of (900,1099] reset both
+ *      to 1000. Set fixed defaults at 0x200025be/0x200025c4/0x200025bc.
  *  10. Call rsoc_lookup().
  *  11. Branch on cfg[+0x28] (first-time-init flag):
  *        zero  → factory init: rewrite zeros, set defaults, store
@@ -89,9 +89,12 @@ void bms_setup(void)
     volatile uint32_t * const g_cal_a       = (volatile uint32_t *)0x20002B50;
     volatile uint32_t * const g_cal_b       = (volatile uint32_t *)0x20002B54;
 
-    /* Per-cell voltage thresholds (u16 each). */
-    volatile uint16_t * const g_v_hi        = (volatile uint16_t *)0x200025B2;
-    volatile uint16_t * const g_v_lo        = (volatile uint16_t *)0x200025B0;
+    /* Charge / discharge current-calibration gains (per-mille; cfg+0x3a/+0x3c,
+     * EEPROM 0x08080C3A/0x3C). fg_coulomb_update multiplies the measured pack
+     * current by these /1000. Set by the CHG CAL / DSG CAL console commands.
+     * (Previously mislabeled "voltage threshold hi/lo" — see docs/eeprom.md §5.) */
+    volatile uint16_t * const g_chg_cal_gain = (volatile uint16_t *)0x200025B2;
+    volatile uint16_t * const g_dsg_cal_gain = (volatile uint16_t *)0x200025B0;
 
     /* Misc byte flags written to fixed defaults. */
     volatile uint8_t  * const g_byte_25be   = (volatile uint8_t  *)0x200025BE;
@@ -159,12 +162,15 @@ void bms_setup(void)
     /* 8. FEDL5236 hardware init. */
     bms_init();
 
-    /* 9. Pull current thresholds from cfg[+0x3a]/[+0x3c]; clamp to <= 1075 and > 1099. */
-    *g_v_hi = *(volatile uint16_t *)((uint8_t *)cfg + 0x3A);
-    *g_v_lo = *(volatile uint16_t *)((uint8_t *)cfg + 0x3C);
-    if (*g_v_hi > 0x44B || *g_v_hi <= 0x384 || *g_v_lo > 0x44B || *g_v_lo <= 0x384) {
-        *g_v_hi = 0x3E8;  /* 1000 */
-        *g_v_lo = 0x3E8;
+    /* 9. Load charge/discharge current-cal gains from cfg[+0x3a]/[+0x3c].
+     *    Valid (901..1099); if EITHER is <= 0x384 (900) or > 0x44B (1099),
+     *    reset BOTH to 0x3E8 (1000 = x1.000, no correction). */
+    *g_chg_cal_gain = *(volatile uint16_t *)((uint8_t *)cfg + 0x3A);
+    *g_dsg_cal_gain = *(volatile uint16_t *)((uint8_t *)cfg + 0x3C);
+    if (*g_chg_cal_gain > 0x44B || *g_chg_cal_gain <= 0x384 ||
+        *g_dsg_cal_gain > 0x44B || *g_dsg_cal_gain <= 0x384) {
+        *g_chg_cal_gain = 0x3E8;  /* 1000 */
+        *g_dsg_cal_gain = 0x3E8;
     }
     *g_byte_25be = 0;
     *g_byte_25c4 = 3;
@@ -180,8 +186,8 @@ void bms_setup(void)
         for (int8_t i = 0; i >= 0; i++) {
             cfg[(uint8_t)i] = 0;
         }
-        *(volatile uint16_t *)((uint8_t *)cfg + 0x3A) = *g_v_hi;
-        *(volatile uint16_t *)((uint8_t *)cfg + 0x3C) = *g_v_lo;
+        *(volatile uint16_t *)((uint8_t *)cfg + 0x3A) = *g_chg_cal_gain;
+        *(volatile uint16_t *)((uint8_t *)cfg + 0x3C) = *g_dsg_cal_gain;
         cfg[0x36] = 0;
         *(volatile uint32_t *)((uint8_t *)cfg + 0x24) = *g_real_soc;
         *(volatile uint32_t *)((uint8_t *)cfg + 0x28) =

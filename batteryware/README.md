@@ -8,7 +8,7 @@ the VanMoof S3 battery management system (BMS) on an
 | --- | --- |
 | MCU | ST STM32L072CZT6 (Cortex-M0+, 32 MHz, ultra-low-power) |
 | Image | `batteryware_1.17.1.bin` (87,568 B) |
-| Flash | `0x08000000..0x0801560F` (self-contained, no separate bootloader) |
+| Flash | application ("AP") bank, **runs at `0x08005000`**; `bmsboot` owns `0x08000000`–`0x08004FFF` (see `docs/memory-map.md`) |
 | Initial SP | `0x20005000` (top of 20 KB SRAM) |
 | Status | **195 decomp-c / 30 deferred (veneers) / 6 named (libgcc + handler stubs)** — every application function is decoded |
 
@@ -239,6 +239,16 @@ sizes, and descriptions.
    (`0x20000E70`), and IRQ 27 (`0x20001AA0`) are patched in SRAM at
    runtime, characteristic of a firmware that accepts ISR callbacks
    across different execution phases (bootloader hand-off).
+
+6. **Current calibration = config-block gains, not voltage thresholds.**
+   Config block `+0x3A`/`+0x3C` (EEPROM `0x08080C3A`/`0x08080C3C`) hold the
+   **charge / discharge current-cal gains** — per-mille multipliers
+   (`I = I_raw · gain/1000`, default 1000, range 901–1099) the fuel gauge
+   applies in `fg_coulomb_update`. The `CHG CAL`/`DSG CAL` console commands
+   measure a known reference current over 40 samples and write the derived
+   gain back to EEPROM. Earlier docs mislabeled these as "voltage
+   thresholds." See `docs/eeprom.md` §5; the `tools/` EEPROM scripts read and
+   write them.
 
 ## Legal
 

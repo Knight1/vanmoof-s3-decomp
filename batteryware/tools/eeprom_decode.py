@@ -151,8 +151,14 @@ def main():
     print("CYCLE COUNT     +0x34 : %d" % u16(ee, cb + 0x34))
     print("RSOC %%          +0x36 : %d" % u8(ee, cb + 0x36))
     print("absolute SOC %%  +0x37 : %d" % u8(ee, cb + 0x37))
-    print("volt thresh hi  +0x3A : %d (0x%04X)" % (u16(ee, cb + 0x3A), u16(ee, cb + 0x3A)))
-    print("volt thresh lo  +0x3C : %d (0x%04X)" % (u16(ee, cb + 0x3C), u16(ee, cb + 0x3C)))
+    def cal_note(g):
+        # bms_setup resets BOTH gains to 1000 if either is <=900 or >1099.
+        return "x%.3f" % (g / 1000.0) if 901 <= g <= 1099 \
+            else "OUT OF RANGE (901..1099) -> firmware resets both to 1000"
+    chg = u16(ee, cb + 0x3A)
+    dsg = u16(ee, cb + 0x3C)
+    print("CHG cal gain    +0x3A : %d  (%s)  charge current x gain/1000" % (chg, cal_note(chg)))
+    print("DSG cal gain    +0x3C : %d  (%s)  discharge current x gain/1000" % (dsg, cal_note(dsg)))
     print("phase markers   +0x44 : %r" % show_ascii(ee[cb + 0x44:cb + 0x47]))
 
     # ---- Raw dumps of the populated regions (calibration etc. visible here) ----

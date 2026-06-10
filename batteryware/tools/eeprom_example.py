@@ -23,17 +23,25 @@ factory init). This generator writes explicit defaults on top of that so the
 image is human-readable, the version-magic matches, and the bootloader sees a
 clean "normal boot" flag instead of the erased 0x00.
 
+The charge / discharge current-calibration gains (config block +0x3A / +0x3C)
+default to 1000 = x1.000 (no correction). If you recorded a pack's gains with
+"CHG CAL?" / "DSG CAL?" you can restore them with --chg-cal / --dsg-cal;
+otherwise the gauge reads uncorrected current until you re-run the "CHG CAL" /
+"DSG CAL" procedure on the pack against a known reference current.
+
 What this CANNOT recover (pack-specific, must be redone on the pack):
   * ESN + manufacture date  -> write with the PBU "WriteESNAndDate" (Modbus
     func 0x10, regs 0x0C-0x14) after flashing, unless you pass --esn/--date.
-  * CHG / DSG current calibration -> re-run the "CHG CAL" / "DSG CAL" console
-    commands; the gauge is inaccurate until then.
+  * The pack's true CHG / DSG current calibration -> measured against a known
+    reference current via the "CHG CAL" / "DSG CAL" console commands. Restorable
+    with --chg-cal/--dsg-cal only if you saved the gains beforehand.
   * Learned SOC / capacity / cycle count -> reset; the gauge re-learns.
 
 Usage:
     eeprom_example.py [--version 1.14.1|1.17.1] [--capacity MAH]
-                      [--esn ESN14] [--date YYYYMMDD]
-                      [--boot-flag HEX] [--unprovisioned] [-o out.bin]
+                      [--esn ESN14] [--date YYYYMMDD] [--boot-flag HEX]
+                      [--chg-cal PERMILLE] [--dsg-cal PERMILLE]
+                      [--unprovisioned] [-o out.bin]
 
 Importable: `build_eeprom(...)` returns the 0x1800-byte bytearray; this is
 what bms_build_image.py uses to fold a default EEPROM into a chip image.
@@ -63,9 +71,20 @@ DEF_PARAM_36 = 0x0C4E
 
 # config block @ 0x08080C00 defaults
 CFG_BASE = 0xC00
-DEF_VTHRESH = 1000            # 0x03E8; must stay in (900, 1099]
 DEF_ABS_SOC = 100             # absolute-SOC full-scale reference
 PHASE_MARKER = ord("A")       # 0x41
+
+# Charge / discharge current-calibration gains (config block +0x3A / +0x3C;
+# EEPROM 0x08080C3A / 0x08080C3C). Per-mille multipliers the fuel gauge applies
+# to the measured pack current: I = I_raw * gain / 1000. 1000 = x1.000 (no
+# correction). Set by the "CHG CAL" / "DSG CAL" console commands; read back with
+# "CHG CAL?" / "DSG CAL?". bms_setup resets BOTH to 1000 if EITHER is outside
+# (900, 1099] — so the usable range is 901..1099 (about +/-10%). (These two
+# fields were previously mislabeled "voltage threshold hi/lo"; the firmware
+# multiplies them into the current, it does not compare them to a voltage.)
+CAL_GAIN_DEFAULT = 1000
+CAL_GAIN_MIN = 901
+CAL_GAIN_MAX = 1099
 
 
 def put(buf, off, data):
@@ -99,8 +118,22 @@ def encode_date(buf, yyyymmdd):
     buf[0x20] = m
 
 
+def validate_cal_gain(name, value):
+    """Raise ValueError if a current-cal gain is outside the firmware's range.
+
+    bms_setup resets BOTH gains to 1000 if EITHER is <= 900 or > 1099, so any
+    out-of-range value is silently discarded on the next boot.
+    """
+    if not (CAL_GAIN_MIN <= value <= CAL_GAIN_MAX):
+        raise ValueError(
+            "%s %d is outside %d..%d (per-mille); the firmware resets BOTH cal "
+            "gains to %d if either is out of range"
+            % (name, value, CAL_GAIN_MIN, CAL_GAIN_MAX, CAL_GAIN_DEFAULT))
+
+
 def build_eeprom(fw_magic=MAGIC["1.17.1"], capacity=12600, esn=None, date=None,
-                 boot_flag=BOOT_FLAG_NORMAL, boot_mode=0x00, provisioned=True):
+                 boot_flag=BOOT_FLAG_NORMAL, boot_mode=0x00, provisioned=True,
+                 chg_cal=CAL_GAIN_DEFAULT, dsg_cal=CAL_GAIN_DEFAULT):
     """Return a complete 0x1800-byte BMS EEPROM image (erased = 0x00).
 
     fw_magic    : FW-magic word @0x2E (== the app's header version word).
@@ -110,6 +143,9 @@ def build_eeprom(fw_magic=MAGIC["1.17.1"], capacity=12600, esn=None, date=None,
     boot_flag   : bmsboot flag @0x00 (0x55 normal). NEVER 0xCC/0x33/0x5A.
     boot_mode   : batteryware boot mode @0x01 (0 normal). NEVER 0x17/0x18.
     provisioned : when False, force capacity 0 so the firmware factory-inits.
+    chg_cal     : charge current-cal gain @0x0C3A (per-mille, 1000 = x1.0).
+    dsg_cal     : discharge current-cal gain @0x0C3C (per-mille, 1000 = x1.0).
+                  Both must be in 901..1099 or the firmware resets both to 1000.
     """
     ee = bytearray(EE_SIZE)
 
@@ -139,8 +175,8 @@ def build_eeprom(fw_magic=MAGIC["1.17.1"], capacity=12600, esn=None, date=None,
     put_u16(ee, cb + 0x34, 0)                          # cycle count
     ee[cb + 0x36] = 0                                  # RSOC %
     ee[cb + 0x37] = DEF_ABS_SOC                        # absolute SOC full-ref
-    put_u16(ee, cb + 0x3A, DEF_VTHRESH)                # voltage threshold hi
-    put_u16(ee, cb + 0x3C, DEF_VTHRESH)                # voltage threshold lo
+    put_u16(ee, cb + 0x3A, chg_cal)                    # charge current-cal gain (per-mille)
+    put_u16(ee, cb + 0x3C, dsg_cal)                    # discharge current-cal gain (per-mille)
     put_u16(ee, cb + 0x40, 0)                          # factory-zeroed
     put_u16(ee, cb + 0x42, 0)                          # factory-zeroed
     ee[cb + 0x44] = PHASE_MARKER                       # per-phase voltage markers
@@ -165,6 +201,10 @@ def parse_args(argv):
                    help="bmsboot boot flag @0x08080000 (default 0x55 normal)")
     p.add_argument("--unprovisioned", action="store_true",
                    help="leave capacity 0 so the firmware factory-inits the config block")
+    p.add_argument("--chg-cal", type=int, default=CAL_GAIN_DEFAULT,
+                   help="charge current-cal gain, per-mille (default 1000 = x1.0; 901..1099)")
+    p.add_argument("--dsg-cal", type=int, default=CAL_GAIN_DEFAULT,
+                   help="discharge current-cal gain, per-mille (default 1000 = x1.0; 901..1099)")
     p.add_argument("-o", "--out", default="eeprom_example.bin",
                    help="output file (default eeprom_example.bin)")
     return p.parse_args(argv)
@@ -178,10 +218,17 @@ def main(argv=None):
         print("error: --boot-flag 0x%02X is a recover/ack/wipe trigger; use 0x55 "
               "(normal) or 0x00 (erased)." % boot_flag, file=sys.stderr)
         return 2
+    try:
+        validate_cal_gain("--chg-cal", args.chg_cal)
+        validate_cal_gain("--dsg-cal", args.dsg_cal)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 2
 
     ee = build_eeprom(fw_magic=MAGIC[args.version], capacity=args.capacity,
                       esn=args.esn, date=args.date, boot_flag=boot_flag,
-                      provisioned=not args.unprovisioned)
+                      provisioned=not args.unprovisioned,
+                      chg_cal=args.chg_cal, dsg_cal=args.dsg_cal)
 
     with open(args.out, "wb") as f:
         f.write(ee)
@@ -191,6 +238,8 @@ def main(argv=None):
              0 if args.unprovisioned else args.capacity,
              ", UNPROVISIONED (firmware factory-inits)" if args.unprovisioned else ""))
     print("boot flag @0x08080000 : 0x%02X   boot mode @0x08080001 : 0x00" % boot_flag)
+    print("CHG cal @0x08080C3A   : %d (x%.3f)    DSG cal @0x08080C3C : %d (x%.3f)"
+          % (args.chg_cal, args.chg_cal / 1000.0, args.dsg_cal, args.dsg_cal / 1000.0))
     print("ESN  : %s" % (args.esn or "(left blank - set via PBU WriteESNAndDate)"))
     print("date : %s" % (args.date or "(left blank - set via PBU WriteESNAndDate)"))
     print("\nFlash to 0x08080000 (or fold into a chip image with "

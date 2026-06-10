@@ -252,6 +252,10 @@ def parse_args(argv):
     p.add_argument("--date", help="--gen-eeprom: manufacture date YYYYMMDD")
     p.add_argument("--unprovisioned", action="store_true",
                    help="--gen-eeprom: leave the gauge unprovisioned (firmware factory-inits)")
+    p.add_argument("--chg-cal", type=int, default=eeprom_example.CAL_GAIN_DEFAULT,
+                   help="--gen-eeprom: charge current-cal gain, per-mille (default 1000; 901..1099)")
+    p.add_argument("--dsg-cal", type=int, default=eeprom_example.CAL_GAIN_DEFAULT,
+                   help="--gen-eeprom: discharge current-cal gain, per-mille (default 1000; 901..1099)")
     p.add_argument("--reclen", type=int, default=16,
                    help="Intel HEX data bytes per record (default 16)")
     return p.parse_args(argv)
@@ -269,10 +273,13 @@ def main(argv=None):
         if args.eeprom:
             eeprom = load_eeprom(args.eeprom, warn)
         elif args.gen_eeprom:
+            eeprom_example.validate_cal_gain("--chg-cal", args.chg_cal)
+            eeprom_example.validate_cal_gain("--dsg-cal", args.dsg_cal)
             eeprom = bytes(eeprom_example.build_eeprom(
                 fw_magic=app_version, capacity=args.capacity, esn=args.esn,
-                date=args.date, provisioned=not args.unprovisioned))
-    except BuildError as exc:
+                date=args.date, provisioned=not args.unprovisioned,
+                chg_cal=args.chg_cal, dsg_cal=args.dsg_cal))
+    except (BuildError, ValueError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
     except OSError as exc:

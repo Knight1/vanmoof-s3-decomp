@@ -9,10 +9,26 @@ to bring a blank pack up. Companion to `hardware.md`, `fedl5236.md`,
   (`0x08080000`, len `0x1800`) into all documented fields. Refuses a
   main-flash image (the EEPROM is a *separate* region — read `0x08080000`
   len `0x1800`, e.g. `st-flash read eeprom.bin 0x08080000 0x1800`).
-- `eeprom_example.py [--version 1.14.1|1.17.1] [--esn …] [--date YYYYMMDD]`
-  — generate a known-good recovery EEPROM. Set the `--version` to match the
-  app on the chip (the FW-magic must agree). Field offsets are from the
-  1.17.1 decomp; confirm against other versions.
+- `eeprom_example.py [--version 1.14.1|1.17.1] [--capacity MAH] [--esn …]
+  [--date YYYYMMDD] [--boot-flag HEX] [--chg-cal PERMILLE] [--dsg-cal PERMILLE]
+  [--unprovisioned]` — generate a **complete** known-good EEPROM covering both
+  firmwares' fields: the bmsboot boot flag at `0x08080000` (`0x55` = normal
+  boot) and the reset-cause word, plus all batteryware fields (boot mode,
+  validated params, FW-magic, ESN/date, config block including the
+  charge/discharge current-cal gains — see §5). Set `--version` to match the
+  app on the chip (the FW-magic must agree). `--chg-cal`/`--dsg-cal` restore
+  saved current-cal gains (default `1000` = no correction). `--unprovisioned`
+  leaves the gauge's capacity flag `0` so the firmware factory-inits on first
+  boot. `build_eeprom()` is importable. Field offsets are from the 1.17.1
+  decomp; confirm against other versions.
+- `bms_build_image.py BMSBOOT.bin BATTERYWARE.bin [--gen-eeprom |
+  --eeprom FILE]` — assemble a flashable chip image: bmsboot at
+  `0x08000000`, batteryware at `0x08005000` (the AP bank), and an optional
+  6 KB EEPROM at `0x08080000`. Validates each input (sizes, header magic,
+  image-header / bootloader-trailer CRCs, AP-bank fit) and emits a combined
+  Intel HEX plus raw per-region bins, with ready-to-run OpenOCD /
+  STM32CubeProgrammer / st-flash commands. `--gen-eeprom` folds in a default
+  EEPROM with the FW-magic auto-matched to the supplied app.
 
 ## 1. What the "EEPROM" actually is
 
@@ -71,8 +87,8 @@ block):
 | `+0x34` | 2 | **cycle count** | Charge-cycle counter. Modbus read reg `0x19` (`uart.c:482` `RD16(0x200029A8+0x34)`). Persisted at `0x08080C34`. |
 | `+0x36` | 1 | **RSOC %** | Relative state-of-charge percent. Modbus read reg `0x05`. Reloaded from `0x08080C36`. |
 | `+0x37` | 1 | **absolute SOC %** | Modbus read reg `0x18` (`uart.c:481`). Set to `100` at factory init. |
-| `+0x3A` | 2 | voltage threshold hi | Clamped to `(0x384, 0x44B]` (900–1099); default `0x3E8` (1000). |
-| `+0x3C` | 2 | voltage threshold lo | Same clamp/default. |
+| `+0x3A` | 2 | **charge current-cal gain** | Per-mille multiplier the fuel gauge applies to measured charge current (`I = I_raw · gain/1000`); `0x3E8` (1000) = ×1.000. Loaded into `g_chg_cal_gain @0x200025B2`; set by `CHG CAL`. Clamped to `(0x384, 0x44B]` (901–1099); `bms_setup` resets **both** gains to 1000 if either is out of range. (Not a voltage threshold — see §5.) |
+| `+0x3C` | 2 | **discharge current-cal gain** | Same, for discharge current (`g_dsg_cal_gain @0x200025B0`); set by `DSG CAL`. Same clamp/default. |
 | `+0x40` | 2 | (factory-zeroed) | Persisted to `0x08080C40`. |
 | `+0x42` | 2 | (factory-zeroed) | Persisted to `0x08080C42`. |
 | `+0x44/+0x45/+0x46` | 1 each | per-phase voltage markers | Default `'A'` (`0x41`); updated by `cell_balance_update` after 5 consecutive over-threshold readings, persisted to `0x08080C44/45/46`. |
@@ -147,9 +163,9 @@ command (func `0x06`, register `0x0A`) clears the identity via the
 ### Other persisted state
 
 The BMS also persists: the **config block** (SOC, RSOC/abs-SOC, full-charge
-& remaining capacity, **cycle count**, voltage thresholds), the **FW
-magic**, the **boot mode**, the **anti-replay ticks**, and the **event
-log**.
+& remaining capacity, **cycle count**, charge/discharge **current-cal gains**),
+the **FW magic**, the **boot mode**, the **anti-replay ticks**, and the
+**event log**.
 
 ## 4. Provisioning a blank pack
 
@@ -178,7 +194,7 @@ So a freshly-erased pack comes up working on first boot. To provision
 | `0x08080C00 +0x28` | non-zero | mark provisioned (skip factory init). Leave `0` to let the firmware factory-init. |
 | `0x08080C00 +0x24` | initial SOC | starting coulomb count (e.g. measured from open-circuit voltage). |
 | `0x08080C00 +0x37` | `100` | RSOC full-scale reference. |
-| `0x08080C00 +0x3A/+0x3C` | `E8 03` (`0x03E8`=1000) | voltage thresholds (must be in `(900,1099]` or they reset to 1000). |
+| `0x08080C00 +0x3A/+0x3C` | `E8 03` (`0x03E8`=1000) | charge/discharge current-cal gains (per-mille; `1000` = no correction). Must be in `(900,1099]` or **both** reset to 1000. See §5. |
 | `0x0808000F`–`0x0808001C` | 14 ASCII bytes | **ESN** — write via Modbus reg `0x0C`–`0x12` (func `0x10`), not by poking EEPROM directly. |
 | `0x0808001D`–`0x08080020` | `00 YY MM DD` | **manufacture date** — write via Modbus reg `0x13`–`0x14`. |
 
@@ -190,3 +206,50 @@ read-back verification stay consistent.
 > **Single most important rule:** do not leave `0x08080001` = `0x17` or
 > `0x18`. Every other field either self-heals or only affects gauge
 > accuracy; that one byte can trip the irreversible pack fuse at boot.
+
+## 5. Current calibration (`CHG CAL` / `DSG CAL`)
+
+> Corrects this doc's earlier label of config-block `+0x3A`/`+0x3C` as
+> "voltage threshold hi/lo". They are the **charge / discharge current
+> calibration gains**: `fuel_gauge.c::fg_coulomb_update` (OEM `0x080039c2`,
+> runtime `0x0800E9C2`) *multiplies* the measured pack current by them and
+> divides by 1000 — it never compares them to a voltage.
+
+The ML5236 measures pack current on the ISP–ISM shunt (`fedl5236.md` §3.3);
+the raw 16-bit code is scaled (`×0x32C80 >> 16` ≈ ×3.166 per LSB) into an
+internal current, then trimmed by a per-direction gain:
+
+| EEPROM | cfg | SRAM (runtime) | Applies to | Console |
+| --- | --- | --- | --- | --- |
+| `0x08080C3A` | `+0x3A` | `0x200025B2` (`g_chg_cal_gain`) | charge current (`I ≥ 0`) | `CHG CAL` / `CHG CAL?` |
+| `0x08080C3C` | `+0x3C` | `0x200025B0` (`g_dsg_cal_gain`) | discharge current (`I < 0`) | `DSG CAL` / `DSG CAL?` |
+
+`I_corrected = I_raw · gain / 1000`. **Default `1000` = ×1.000 (no
+correction).** Usable range **901..1099** (≈ ±10 %); `bms_setup` resets
+*both* to 1000 if *either* is `≤ 900` or `> 1099`.
+
+### The calibration procedure (firmware side)
+
+The console commands are dispatched by `command_parser` (`cmd.c`) into
+frame-sharing handlers (`cmd_chg_cal_set_h` @ `0x0800A0E8` etc.):
+
+- **`CHG CAL?` / `DSG CAL?`** (no value) print the stored gain back as
+  `CHG CAL=<gain>` (it reads `g_chg_cal_gain`), so you can record a pack's
+  gains before reflashing and restore them with
+  `eeprom_example.py --chg-cal/--dsg-cal`.
+- **`CHG CAL=<ref>`** stores `<ref>` (the *known* current being forced
+  through the pack, in the firmware's internal current unit) at SRAM
+  `0x20002594`, zeroes the live gain, and arms bit `0x2000` of the control
+  word `0x20002C00` (`DSG CAL` arms bit `0x4000`). With the bit set,
+  `fg_coulomb_update` averages **40 samples** of the raw (un-gained) current,
+  computes `measured = Σ·25/ref` (so `measured ≈ 1000` when the reading
+  matches `ref`), derives `gain = 2000 − measured` (a linearised inverse
+  about 1000), writes it to `cfg+0x3A`/`+0x3C`, **persists the 2 bytes to
+  `0x08080C3A`/`0x08080C3C` via `memcmp_verify`**, clears the arm bit, and
+  prints `CHG CAL OK` / `DSG CAL OK`.
+
+So the gains are genuinely per-pack (they absorb shunt + amplifier
+tolerance) and must be re-measured against a known reference current after a
+blank reflash — unless you saved them with the `?` query first. The tooling
+writes the neutral default (`1000`) so a freshly-flashed pack reads
+uncorrected current until then.
