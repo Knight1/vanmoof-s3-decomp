@@ -149,7 +149,7 @@ extern void     subsystem_update_sm(void *ctx);               /* 0x08031900 */
 extern int      update_sm_is_idle(void);                      /* 0x08032980 */
 extern void     log_upload_sm_step(int force_start);          /* 0x08029774 */
 extern void     display_mode_sm_step(void *ctx);              /* 0x0802E800 */
-extern void     factory_reset_sm_step(void *ctx);             /* 0x08038A90 */
+extern void     factory_reset_sm_step(uint8_t *ctx);          /* 0x08038A90 (states.c) */
 extern void     staged_msg_validate_and_dispatch(void *staged); /* 0x08043C74 */
 
 /* ── mainware_boot_init_sequence callees ────────────────────────────────────*/

@@ -18,6 +18,9 @@
 #define GPIOC_BASE ((void *)0x40020800u)
 #define GPIOD_BASE ((void *)0x40020C00u)
 #define GPIOE_BASE ((void *)0x40021000u)
+#define GPIOF_BASE ((void *)0x40021400u)   /* used only by enter_stop_mode's pin sweep */
+#define GPIOG_BASE ((void *)0x40021800u)
+#define GPIOH_BASE ((void *)0x40021C00u)
 
 /* ── named callees (decoded elsewhere; K&R prototypes — several are variadic-ish
  * in the OEM ABI, e.g. save_state_record_to_eeprom takes 15 stack args and
@@ -36,7 +39,7 @@ extern int console_cmd_logout();
 extern int ctx_flag_0x131_is_clear();
 extern int diagnostics_run_step();
 extern int display_send_init_cmd();
-extern int enter_stop_mode();
+void enter_stop_mode(uint8_t reason);          /* sourced at end of file */
 extern int gpio_pc1_is_low();
 extern int internal_lipo_charge_step();
 extern int is_display_bus_ready();
@@ -58,7 +61,7 @@ extern int obj_set_field34();
 extern int obj_set_field38();
 extern int power_assist_gear_step();
 extern int power_state_get_clamped();
-extern int reboot_restart_task();
+void reboot_restart_task(void);                /* sourced at end of file */
 extern int save_state_record_to_eeprom();
 extern int sched_timer_arm_or_alloc();
 extern int set_unlock_state_persist();
@@ -2585,4 +2588,542 @@ void lock_poll_timer_arm(void)
         *slot = scheduler_alloc();
     }
     scheduler_start(*slot, 100u, 0);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  Low-power sleep + reset / factory-reset
+ *
+ *  Three OEM functions sourced together because they form the bike's
+ *  power-down / restart surface:
+ *    enter_stop_mode        0x080382D0 — arm wake sources, sleep (STOP/WFI),
+ *                                        re-init the clock tree on wake, reboot
+ *    reboot_restart_task    0x08038A68 — commit a reboot (clear marker, NVIC reset)
+ *    factory_reset_sm_step  0x08038A90 — the 6-state USER/factory-reset machine
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* RCC (RM0430 §6) — only the AHB clock-enable registers we touch here. */
+#define RCC_BASE     0x40023800u
+#define RCC_AHB1ENR  0x30u   /* bits 0..7 = GPIOA..GPIOH clock enable */
+#define RCC_AHB2ENR  0x34u   /* bit 7 = OTGFSEN */
+
+/* STM32 HAL GPIO_InitTypeDef, as laid out on the OEM stack (4 words — these
+ * calls never use the Alternate-function field). */
+typedef struct {
+    uint32_t Pin;
+    uint32_t Mode;
+    uint32_t Pull;
+    uint32_t Speed;
+} gpio_init_t;
+
+/* HAL GPIO mode encodings (ST HAL values). The per-reason wake pins are armed
+ * as EXTI interrupt sources; analog mode parks every other pin for low power. */
+#define GPIO_MODE_ANALOG       3u
+#define GPIO_MODE_IT_FALLING   0x10210000u
+#define GPIO_MODE_IT_RISING    0x10110000u   /* == GPIO_MODE_IT_FALLING - 0x100000 */
+
+/* Per-reason sleep/wake parameters in one runtime-populated RAM struct
+ * @0x20000094: slot[reason] (u32) is the sleep duration in ms (its low u16 is
+ * reused as the RTC wake period in seconds); p_clear at +0x24 is a
+ * write-through pointer the OEM zeroes before sleeping. */
+typedef struct { uint32_t slot[9]; uint32_t *p_clear; } sleep_ctx_t;
+#define g_sleep_ctx        ((sleep_ctx_t *)0x20000094u)
+#define g_stop_mode_rtc    ((void *)0x200099E4u)        /* RTC handle for the disable call */
+#define K_MS_TO_MIN_MAGIC  0x88888889ull                /* reciprocal /60000 (×, then >>37) */
+#define K_WARM_BOOT_MARKER 0x55AA55CFu                  /* RAM marker @0x20000000 */
+
+/* The logger object at SRAM 0x20009D98 is a 3-slot fn-ptr table; log.h exposes
+ * slot [0] as g_log_func (printf sink). Slot [1] is a single-byte sink and
+ * slot [2] an alternate formatter, used on the reset SM's error paths. The
+ * casts go through the table-pointer type (not object->function) to stay
+ * -Wpedantic-clean. */
+typedef void (*log_putc_t)(uint8_t c);
+#define g_log_putc(c)  (((log_putc_t *)&g_log_func)[1])(c)
+#define g_log_alt      (((log_func_t *)&g_log_func)[2])
+
+/* reset-SM control + scheduler timer-slot blocks (SRAM). */
+static uint8_t * const g_reset_sm    = (uint8_t *)0x20006E44u;  /* [0]=state(0..5) [1]=substep(1..6) */
+static uint8_t * const g_timer_slots = (uint8_t *)0x200000BCu;  /* slot handles, 0xFA = free */
+
+/* ── callees not already declared via the included headers ─────────────────*/
+extern int  HAL_GPIO_Init();                       /* 0x080267D0 */
+extern int  gas_gauge_reset(void);                 /* 0x080396C4 */
+extern void settings_factory_reset(void *ctx, int mode); /* 0x0803FAD8 (app.c) */
+extern void bus_tx_enqueue_byte(uint8_t b);        /* 0x0803639C */
+extern int  bus_rx_byte_locked(uint8_t *out);      /* 0x080363EC */
+extern void NVIC_SystemReset(void);                /* 0x08038A14 (noreturn) */
+extern void reset_ble_timeout_cb(void);            /* 0x08038A38 — 2 s BLE-reset timer cb */
+/* enter_stop_mode pre-sleep de-init cascade (HAL_*_DeInit veneers) */
+extern void uart_handle_deinit_0(void);            /* 0x08033894 */
+extern void uart_handle_deinit_1(void);            /* 0x080338A4 */
+extern void shifter_usart3_reinit(void);           /* 0x080338B4 — 3rd UART veneer (shifter.c) */
+extern void uart_handle_deinit_3(void);            /* 0x080338C4 */
+extern void uart_handle_deinit_4(void);            /* 0x080338D4 */
+extern void uart_handle_deinit_5(void);            /* 0x080338E4 */
+extern void uart_handle_deinit_6(void);            /* 0x080338F4 */
+extern void uart_handle_deinit_7(void);            /* 0x08033904 */
+extern void i2c_handle_deinit(void);               /* 0x0803C8D4 */
+extern void i2c3_handle_deinit(void);              /* 0x0803C8E4 */
+extern void spi_handle_deinit(void);               /* 0x0803C614 */
+extern void adc_handle_deinit(void);               /* 0x08032C94 */
+extern void ahb1_periph_handle_deinit(void);       /* 0x080402D8 */
+/* CMSIS NVIC + low-power + RTC-wakeup helpers */
+extern void nvic_set_priority(int32_t irq_n, uint32_t preempt, uint32_t sub); /* 0x08027078 */
+extern void nvic_enable_irq(int32_t irq_n);        /* 0x080270E0 */
+extern void nvic_clear_pending_irq(int32_t irq_n); /* 0x0802714C */
+extern void enter_low_power_wait(uint32_t pwr_cr_mode, int use_wfi); /* 0x08022DC4 (PWR STOP + WFI) */
+extern void systick_irq_disable(void);             /* 0x0802332C */
+extern void systick_irq_enable(void);              /* 0x0802333C */
+extern void set_wakeup_done_flag(void);            /* 0x080279C8 */
+extern void rtc_set_wakeup_seconds(uint16_t seconds); /* 0x08038088 */
+extern int  rtc_wakeup_timer_disable(void *hrtc);  /* 0x08026FB0 */
+extern void boot_init_warm(void);                  /* 0x0803DADC (static in main.c) */
+extern void boot_init_cold(void);                  /* 0x0803DDE0 (static in main.c) */
+extern void Error_Handler(void);                   /* 0x0803DDCC (panic.c) */
+extern void system_software_reset(void) __attribute__((noreturn)); /* 0x080382AC (inlined NVIC reset) */
+
+/* enter_stop_mode — low-power "STOP" entry / wake-arm sequencer (OEM 0x080382D0).
+ * `reason` (0..8, else default) selects the wake-source map. After the entry
+ * banner + per-reason wake string it: drives PB8 high / PB15 low, de-inits every
+ * UART + I2C + SPI + ADC + the AHB1 peripheral, enables all 8 GPIO port clocks,
+ * re-Inits every pin of GPIOA..H to analog low-power, then disables the clocks.
+ * Per reason it arms a small EXTI wake-pin map + the RTC wakeup timer (skipped
+ * for reason 6 "Shipping"), enters STOP via WFI (enter_low_power_wait), and on
+ * wake re-initialises the clock tree (warm vs cold from the marker @0x20000000),
+ * disables the RTC wakeup timer (Error_Handler on failure) and performs a clean
+ * software reset (system_software_reset, noreturn). The enclosing do/while and
+ * the default tail are structurally faithful but never iterate — the reset ends
+ * the function. Behaviour-equivalent reconstruction; exact order of every
+ * RCC/GPIO write preserved. */
+void enter_stop_mode(uint8_t reason)
+{
+    volatile uint32_t *rcc   = (volatile uint32_t *)RCC_BASE;
+    void              *GPIOx = GPIOB_BASE;     /* cached, reused across the switch */
+    gpio_init_t        init;
+    uint32_t           seed;                   /* per-pin packed EXTI mode seed */
+    int                rc;
+
+    log_print_timestamp_prefix();
+    /* "EnterSTOPMode %d min ": minutes = duration_ms * 0x88888889 >> 37
+     * (umull hi-word then >>5). The low 32 bits are a dead second %d the OEM
+     * also passes. */
+    {
+        uint64_t prod = K_MS_TO_MIN_MAGIC * g_sleep_ctx->slot[reason];
+        g_log_func("EnterSTOPMode %d min ",
+                   (uint32_t)(prod >> 0x25), (uint32_t)prod);
+    }
+
+    switch (reason) {
+    case 0:
+    case 1:
+        g_log_func("Wake:All\r\n");
+        break;
+    case 2:
+        g_log_func("Wake:NoMems\r\n");
+        break;
+    case 3:
+    case 4:
+    case 5:
+        if (lis3dh_powerdown() != 0)
+            g_log_func("  ERR2 LIS3DH\r\n");
+        g_log_func("Wake:RST\r\n");
+        break;
+    case 6:
+        if (lis3dh_powerdown() != 0)
+            g_log_func("  ERR2 LIS3DH\r\n");
+        g_log_func("Wake:Shipping\r\n");
+        break;
+    case 7:
+        g_log_func("Wake:No bat\r\n");
+        break;
+    case 8:
+        if (lis3dh_powerdown() != 0)
+            g_log_func("  ERR2 LIS3DH\r\n");
+        g_log_func("Wake:ERROR\r\n");
+        break;
+    }
+
+    /* common pre-sleep: drive PB8 high, PB15 low, settle, de-init peripherals */
+    HAL_GPIO_WritePin(GPIOB_BASE, 0x100, 1);   /* PB8  */
+    HAL_GPIO_WritePin(GPIOx, 0x8000, 0);       /* PB15 */
+    systick_delay(0x14);
+    uart_handle_deinit_0();
+    uart_handle_deinit_1();
+    shifter_usart3_reinit();                    /* 3rd UART de-init veneer */
+    uart_handle_deinit_3();
+    uart_handle_deinit_4();
+    uart_handle_deinit_5();
+    uart_handle_deinit_6();
+    uart_handle_deinit_7();
+    i2c_handle_deinit();
+    i2c3_handle_deinit();
+    spi_handle_deinit();
+    adc_handle_deinit();
+    ahb1_periph_handle_deinit();
+
+    *g_sleep_ctx->p_clear = 0;                  /* clear the context pointer field (+0x24) */
+
+    /* RCC: AHB2ENR bit7 off (OTGFS), enable AHB1ENR GPIOA..H clocks (bits 0..7).
+     * Each enable is read-modify-write then read back (HAL clock-enable settle). */
+    rcc[RCC_AHB2ENR / 4] &= 0xffffff7fu;
+    rcc[RCC_AHB1ENR / 4] |= 0x01; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x02; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x04; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x08; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x10; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x20; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x40; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] |= 0x80; (void)rcc[RCC_AHB1ENR / 4];
+
+    /* park every pin of GPIOA..H: analog, no pull, Pin=0xFFFF (order A..H) */
+    init.Mode  = GPIO_MODE_ANALOG;
+    init.Speed = 3;
+    init.Pull  = 0;
+    init.Pin   = 0xffff;
+    HAL_GPIO_Init(GPIOA_BASE, &init);
+    HAL_GPIO_Init(GPIOx, &init);               /* GPIOB (cached) */
+    HAL_GPIO_Init(GPIOC_BASE, &init);
+    HAL_GPIO_Init(GPIOD_BASE, &init);
+    HAL_GPIO_Init(GPIOE_BASE, &init);
+    HAL_GPIO_Init(GPIOF_BASE, &init);
+    HAL_GPIO_Init(GPIOG_BASE, &init);
+    HAL_GPIO_Init(GPIOH_BASE, &init);
+
+    /* disable the GPIO clocks again (GPIOC/bit2 is left enabled for the per-reason
+     * re-Init that follows). Read-back on the bit2 set preserved as in the OEM. */
+    rcc[RCC_AHB1ENR / 4] &= 0xfffffffeu;
+    rcc[RCC_AHB1ENR / 4] &= 0xfffffffdu;
+    rcc[RCC_AHB1ENR / 4] |= 0x04; (void)rcc[RCC_AHB1ENR / 4];
+    rcc[RCC_AHB1ENR / 4] &= 0xfffffff7u;
+    rcc[RCC_AHB1ENR / 4] &= 0xffffffefu;
+    rcc[RCC_AHB1ENR / 4] &= 0xffffffdfu;
+    rcc[RCC_AHB1ENR / 4] &= 0xffffffbfu;
+    rcc[RCC_AHB1ENR / 4] &= 0xffffff7fu;
+
+    /* per-reason EXTI wake-pin map on GPIOC (+GPIOD for 3/4/5/6/8), then the
+     * shared arm/sleep/reboot tail at 'rearm'. */
+    switch (reason) {
+    case 0:
+    case 1:
+        do {
+            seed = GPIO_MODE_IT_FALLING;
+            init.Pin = 0x13;  init.Pull = 0; init.Speed = 2; init.Mode = seed;
+            HAL_GPIO_Init(GPIOC_BASE, &init);
+            init.Pin = 0x400; init.Pull = 2; init.Speed = 2; init.Mode = seed;
+            HAL_GPIO_Init(GPIOC_BASE, &init);
+            seed -= 0x100000;                  /* -> GPIO_MODE_IT_RISING */
+            init.Pin = 0x100; init.Pull = 1; init.Speed = 2; init.Mode = seed;
+            HAL_GPIO_Init(GPIOC_BASE, &init);
+            init.Pin = 0xc;   init.Pull = 0; init.Speed = 2; init.Mode = seed;
+            HAL_GPIO_Init(GPIOC_BASE, &init);
+            nvic_set_priority(6, 3, 0);    nvic_enable_irq(6);
+            nvic_set_priority(7, 3, 0);    nvic_enable_irq(7);
+            nvic_set_priority(8, 3, 0);    nvic_enable_irq(8);
+            nvic_set_priority(9, 3, 0);    nvic_enable_irq(9);
+            nvic_set_priority(10, 3, 0);   nvic_enable_irq(10);
+            nvic_set_priority(0x17, 3, 0); nvic_enable_irq(0x17);
+            nvic_set_priority(0x28, 3, 0); nvic_enable_irq(0x28);
+        rearm:
+            systick_delay(0x32);
+            nvic_clear_pending_irq(6);
+            nvic_clear_pending_irq(7);
+            nvic_clear_pending_irq(8);
+            nvic_clear_pending_irq(9);
+            nvic_clear_pending_irq(10);
+            nvic_clear_pending_irq(0x17);
+            nvic_clear_pending_irq(0x28);
+            nvic_clear_pending_irq(0x29);
+            wwdg_apb_clk_disable();
+            systick_delay(100);
+            if (reason != 6) {                 /* reason 6 "Shipping" parks with no RTC auto-wake */
+                /* OEM reads the low u16 of slot[reason] (stride 4) as wake seconds */
+                rtc_set_wakeup_seconds((uint16_t)g_sleep_ctx->slot[reason]);
+            }
+            set_wakeup_done_flag();
+            systick_irq_disable();
+            enter_low_power_wait(1, 1);        /* STOP mode, regulator low-power, WFI */
+            systick_irq_enable();
+            if (*(volatile uint32_t *)0x20000000u == K_WARM_BOOT_MARKER)
+                boot_init_warm();
+            else
+                boot_init_cold();
+            *(volatile uint32_t *)0x20000000u = 0;
+            rc = rtc_wakeup_timer_disable(g_stop_mode_rtc);
+            if (rc != 0)
+                Error_Handler();
+            system_software_reset();           /* noreturn (AIRCR system reset) */
+        } while (1);
+
+    case 2:
+        seed = GPIO_MODE_IT_FALLING;
+        init.Pin = 0x13;  init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        init.Pin = 0x400; init.Pull = 2; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        seed -= 0x100000;                      /* -> GPIO_MODE_IT_RISING */
+        init.Pin = 0x100; init.Pull = 1; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        init.Pin = 0x4;   init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        nvic_set_priority(6, 3, 0);    nvic_enable_irq(6);
+        nvic_set_priority(7, 3, 0);    nvic_enable_irq(7);
+        nvic_set_priority(8, 3, 0);    nvic_enable_irq(8);
+        nvic_set_priority(9, 3, 0);    nvic_enable_irq(9);
+        nvic_set_priority(10, 3, 0);   nvic_enable_irq(10);
+        nvic_set_priority(0x17, 3, 0); nvic_enable_irq(0x17);
+        nvic_set_priority(0x28, 3, 0); nvic_enable_irq(0x28);
+        goto rearm;
+
+    case 3:
+    case 4:
+    case 5:
+    case 6:
+    case 8:
+        seed = GPIO_MODE_IT_FALLING;
+        init.Pin = 0x10; init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        rcc[RCC_AHB1ENR / 4] |= 0x08; (void)rcc[RCC_AHB1ENR / 4];  /* re-enable GPIOD clk for PD2 */
+        init.Pin = 0x4;  init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOD_BASE, &init);
+        nvic_set_priority(6, 3, 0);    nvic_enable_irq(6);
+        nvic_set_priority(7, 3, 0);    nvic_enable_irq(7);
+        nvic_set_priority(8, 3, 0);    nvic_enable_irq(8);
+        nvic_set_priority(9, 3, 0);    nvic_enable_irq(9);
+        nvic_set_priority(10, 3, 0);   nvic_enable_irq(10);
+        nvic_set_priority(0x17, 3, 0); nvic_enable_irq(0x17);
+        nvic_set_priority(0x28, 3, 0); nvic_enable_irq(0x28);
+        nvic_set_priority(0x17, 3, 0); nvic_enable_irq(0x17);   /* OEM arms EXTI9_5 twice */
+        goto rearm;
+
+    case 7:
+        seed = GPIO_MODE_IT_FALLING;
+        init.Pin = 0x13;  init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        seed = GPIO_MODE_IT_RISING;
+        init.Pin = 0x100; init.Pull = 1; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        init.Pin = 0xc;   init.Pull = 0; init.Speed = 2; init.Mode = seed;
+        HAL_GPIO_Init(GPIOC_BASE, &init);
+        nvic_set_priority(6, 3, 0);    nvic_enable_irq(6);
+        nvic_set_priority(7, 3, 0);    nvic_enable_irq(7);
+        nvic_set_priority(8, 3, 0);    nvic_enable_irq(8);
+        nvic_set_priority(9, 3, 0);    nvic_enable_irq(9);
+        nvic_set_priority(10, 3, 0);   nvic_enable_irq(10);
+        nvic_set_priority(0x17, 3, 0); nvic_enable_irq(0x17);
+        goto rearm;
+
+    default:
+        systick_delay(0x14);
+        system_software_reset();               /* noreturn */
+    }
+}
+
+/* reboot_restart_task — commit a pending reboot (OEM 0x08038A68). Clears the
+ * warm-boot marker so the bootloader does a cold init, logs "NVICReset", waits
+ * 20 ms for the line to drain, then triggers a CPU reset via NVIC_SystemReset
+ * (never returns). Armed as a scheduler callback by console_cmd_reboot (+600
+ * ticks), the OAD-failed path in status_process, and the reset SM (state 5). */
+void reboot_restart_task(void)
+{
+    *(volatile uint32_t *)0x20000000u = 0;     /* clear warm-boot marker -> cold boot */
+    log_print_timestamp_prefix();
+    g_log_func("NVICReset\r\n");
+    systick_delay(0x14);                        /* 20 ms */
+    NVIC_SystemReset();                         /* noreturn */
+}
+
+/* factory_reset_sm_step — FACTORY/USER-reset & power-cycle state machine
+ * (OEM 0x08038A90). Ticked every super-loop from main() with `ctx` = the app
+ * context base. g_reset_sm[0] is the main state (0->1->2->3->(4)->5);
+ * g_reset_sm[1] is the sub-step (1..6) of the state-5 hardware-reset cascade.
+ *
+ *   0: arm the machine.
+ *   1: when PD2 and PB5 both read low, arm the reset timer, log "USER Reset",
+ *      move to state RESET(0x16)/mode LOW_SOC(0x25), enqueue BLE notify 0x11D.
+ *   2: once the slot is idle (or a forced BLEWare version is pending), arm a
+ *      2 s BLE-reset countdown or push the forced version; then gas_gauge_reset,
+ *      settings_factory_reset, optional "Force end update", stamp the state
+ *      record and persist its 15 words to EEPROM.
+ *   3: PB9 high, "NVICReset", NVIC_SystemReset() (noreturn; the OEM physically
+ *      falls through into state 4, which is therefore dead).
+ *   4: arm/await the 6 s "reset_tmr" slot, then advance to 5.
+ *   5: sub_step 1..6 = reboot-timer arm / BLE reset / reboot-timer re-arm /
+ *      eShifter reset / BMS parameter reset ("\nReset BMS\r" + 2 s RX drain) /
+ *      Motor reset; afterwards the machine returns to state 0.
+ *
+ * Verified against the OEM disassembly: control flow, ctx offsets, log strings,
+ * GPIO writes, timer slots, and the 15-arg EEPROM save. */
+void factory_reset_sm_step(uint8_t *ctx)
+{
+    void   *gpiob = GPIOB_BASE;       /* cached at top of the OEM body */
+    uint8_t slot;
+    int     i;
+    uint8_t rx_byte;
+    uint8_t ble_payload[1];
+
+    switch (g_reset_sm[0]) {
+    case 0:
+        g_reset_sm[0] = 1;
+        break;
+
+    case 1:
+        /* both wake pins low (PD2 == 0 && PB5 == 0) -> user-reset path */
+        if (HAL_GPIO_ReadPin(GPIOD_BASE, 0x4) == 0 &&
+            HAL_GPIO_ReadPin(GPIOB_BASE, 0x20) == 0) {
+            if (g_timer_slots[1] == 0xFA) {
+                slot = scheduler_alloc();
+                g_timer_slots[1] = slot;
+                scheduler_start(slot, 2000, 0);
+            }
+            if (scheduler_slot_is_idle(g_timer_slots[1]) != 0) {
+                scheduler_start(g_timer_slots[1], 200, 0);
+                log_print_timestamp_prefix();
+                g_log_func("USER Reset\r\n");
+                maybe_set_state_if_unlocked(0x16);   /* -> RESET   */
+                set_mode_state_byte(0x25);           /* -> LOW_SOC */
+                *(uint32_t *)(ctx + 0x38c) = 0;
+                ble_payload[0] = 1;
+                if (ssp_ble_enqueue_tx_packet(0x11d, 1, ble_payload, 0) > 0x80)
+                    g_log_alt("  ERROR SSP place\r\n");
+                g_reset_sm[0] = 2;
+            }
+        } else {
+            scheduler_release(&g_timer_slots[1]);
+        }
+        break;
+
+    case 2:
+        if (scheduler_slot_is_idle(g_timer_slots[1]) != 0 ||
+            *(int *)(ctx + 0x38c) != 0) {
+            if (*(int *)(ctx + 0x38c) == 0) {
+                g_log_func("Resetting the BLE in 2 seconds\r\n");
+                if (g_timer_slots[0] == 0xFA)
+                    g_timer_slots[0] = scheduler_alloc();
+                scheduler_start(g_timer_slots[0], 2000, reset_ble_timeout_cb);
+            } else {
+                uint32_t v = *(uint32_t *)(ctx + 0x38c);
+                channel_notify_with_status(7);
+                HAL_GPIO_WritePin(GPIOD_BASE, 0x2000, 1);   /* PD13 high */
+                sched_timer_arm_or_alloc(15000);
+                g_log_func("BLEWare %d.%d.%02d\r\n",
+                           (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
+            }
+            scheduler_start(g_timer_slots[1], 7000, 0);
+
+            if (gas_gauge_reset() == 0)
+                g_log_func("GasGauge_Reset\r\n");
+            else
+                g_log_func("ERROR GasGauge_Reset\r\n");
+
+            settings_factory_reset(ctx, 0);
+
+            if (*(char *)(ctx + 0x32c) != 0) {
+                g_log_func("Force end update\r\n");
+                *(uint32_t *)(ctx + 0x32c) = 0;
+                *(uint16_t *)(ctx + 0x330) = 0;
+            }
+
+            *(uint8_t *)(ctx + 0x318) = 10;
+            *(uint8_t *)(ctx + 0x316) = 4;
+
+            if (save_state_record_to_eeprom(
+                    *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314),
+                    *(uint32_t *)(ctx + 0x318), *(uint32_t *)(ctx + 0x31c),
+                    *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+                    *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32c),
+                    *(uint32_t *)(ctx + 0x330), *(uint32_t *)(ctx + 0x334),
+                    *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33c),
+                    *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344),
+                    *(uint32_t *)(ctx + 0x348)) != 0)
+                g_log_func(" ERROR Save values\r\n");
+
+            g_reset_sm[0] = 3;
+        }
+        break;
+
+    case 3:
+        if (scheduler_slot_is_idle(g_timer_slots[1]) != 0) {
+            HAL_GPIO_WritePin(GPIOB_BASE, 0x200, 1);   /* PB9 high */
+            log_print_timestamp_prefix();
+            g_log_func("NVICReset\r\n");
+            systick_delay(10);
+            NVIC_SystemReset();                        /* noreturn */
+        }
+        /* OEM physically falls through into state 4 here; unreachable because
+         * NVIC_SystemReset() never returns. When the slot is NOT idle the OEM
+         * branches straight to the function exit (this break). */
+        break;
+
+    case 4:
+        if (g_timer_slots[2] == 0xFA) {
+            slot = scheduler_alloc();
+            g_timer_slots[2] = slot;
+            scheduler_start(slot, 6000, 0);
+            scheduler_set_timer_name(g_timer_slots[2], 6000, "reset_tmr");
+        }
+        if (scheduler_slot_is_idle(g_timer_slots[2]) != 0) {
+            scheduler_release(&g_timer_slots[2]);
+            g_reset_sm[0] = 5;
+        }
+        break;
+
+    case 5:
+        switch (g_reset_sm[1]) {
+        case 1:
+            HAL_GPIO_WritePin(GPIOB_BASE, 0x4000, 0);  /* PB14 low  */
+            HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 1);    /* PE5  high */
+            HAL_GPIO_WritePin(gpiob, 0x200, 1);        /* PB9  high */
+            HAL_GPIO_WritePin(gpiob, 0x20, 1);         /* PB5  high */
+            slot = scheduler_alloc();
+            g_timer_slots[3] = slot;
+            scheduler_set_timer_name(slot, 4000, "reboot_tmr");
+            scheduler_start(g_timer_slots[3], 4000, reboot_restart_task);
+            break;
+        case 2:
+            g_log_func("BLE reset\r\n");
+            HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 1);    /* PE5 pulse */
+            systick_delay(10);
+            HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 0);
+            break;
+        case 3:
+            slot = scheduler_alloc();
+            g_timer_slots[3] = slot;
+            scheduler_set_timer_name(slot, 500, "reboot_tmr");
+            scheduler_start(g_timer_slots[3], 500, reboot_restart_task);
+            break;
+        case 4:
+            g_log_func("Eshifter reset\r\n");
+            HAL_GPIO_WritePin(GPIOB_BASE, 0x4000, 0);  /* PB14 low */
+            systick_delay(10);
+            shifter_sm_set_step_3();
+            break;
+        case 5:
+            g_log_func("BMS parameter reset\r\n");
+            bus_tx_enqueue_byte(0x0A);                 /* "\nReset BMS\r" */
+            bus_tx_enqueue_byte('R');
+            bus_tx_enqueue_byte('e');
+            bus_tx_enqueue_byte('s');
+            bus_tx_enqueue_byte('e');
+            bus_tx_enqueue_byte('t');
+            bus_tx_enqueue_byte(' ');
+            bus_tx_enqueue_byte('B');
+            bus_tx_enqueue_byte('M');
+            bus_tx_enqueue_byte('S');
+            bus_tx_enqueue_byte(0x0D);
+            for (i = 0; i < 2000; i++) {
+                watchdog_kick();
+                systick_delay(1);
+                if (bus_rx_byte_locked(&rx_byte) != 0)
+                    g_log_putc(rx_byte);
+            }
+            break;
+        case 6:
+            g_log_func("Motor reset\r\n");
+            HAL_GPIO_WritePin(GPIOB_BASE, 0x200, 1);   /* PB9 pulse */
+            systick_delay(10);
+            HAL_GPIO_WritePin(GPIOB_BASE, 0x200, 0);
+            break;
+        }
+        g_reset_sm[0] = 0;
+        break;
+    }
 }

@@ -71,6 +71,56 @@ itself was saved after each session.
 
 ## Per-module decomp log
 
+- **Sleep + reset/factory-reset state machines** — sourced the two long-deferred
+  `status_process`/loop control functions into `states.c` (resolve → reconstruct →
+  adversarial-verify workflow, 10 agents, 156 symbols resolved; build clean, `text
+  1996`). A boundary surprise drove the framing: decompiling `reboot_restart_task`
+  (`0x08038A68`) returned a glued ~250-line state machine with a bogus
+  `unaff_r4 * 0x1000000` base. The cause was a **false fall-through** — Ghidra
+  hadn't marked `FUN_08038A14` no-return, so it ran the literal pool at the end of
+  `reboot_restart_task` straight into the *next* function. `FUN_08038A14` is
+  **`NVIC_SystemReset`** (DSB; `SCB->AIRCR = 0x05FA0004 | (AIRCR & 0x700)`; DSB;
+  spin) — marked no-return, after which three distinct functions resolved cleanly:
+  - **`enter_stop_mode`** (`0x080382D0`, `void(uint8_t reason)`) — low-power STOP
+    entry / wake-arm sequencer. Logs `"EnterSTOPMode %d min "` + a per-reason wake
+    string (`Wake:All`/`NoMems`/`RST`/`Shipping`/`No bat`/`ERROR`), runs the
+    peripheral de-init cascade (8 UART veneers, I2C×2, SPI, ADC, an AHB1 periph),
+    parks all of GPIOA..H to analog (enable→Init→disable the AHB1ENR clocks), arms
+    a per-reason EXTI wake-pin map on GPIOC/GPIOD (`GPIO_MODE_IT_FALLING/RISING`) +
+    the RTC wakeup timer (skipped for reason 6 "Shipping"), then `enter_low_power_wait`
+    (PWR STOP + **WFI** — sleeps here) and on wake re-inits the clock tree
+    (warm/cold from the `0x20000000` marker) and `system_software_reset()`s. The
+    per-reason sleep duration + wake mask live in one runtime RAM struct
+    `@0x20000094` (slot[reason] u32 ms; its low u16 = RTC wake seconds; `+0x24` =
+    write-through clear-ptr). Two **critical** reconstruction bugs were caught by
+    the adversarial pass and fixed: the wake-mask read used stride 2 instead of the
+    OEM's stride-4 `ldrh [base,reason<<2]`, and a stray pad pushed the clear-ptr off
+    its `+0x24` offset.
+  - **`reboot_restart_task`** (`0x08038A68`, `void(void)`) — the *actual* function:
+    a 5-line reboot wrapper (clear warm marker → cold boot, log `"NVICReset"`,
+    20 ms delay, `NVIC_SystemReset()`). Armed as a scheduler callback by
+    `console_cmd_reboot`, the OAD-failed path, and `factory_reset_sm_step`.
+  - **`factory_reset_sm_step`** (`0x08038A90`, `void(uint8_t *ctx)`) — the 6-state
+    USER/factory-reset & power-cycle machine ticked from `main()` (`g_reset_sm`
+    `@0x20006E44`: `[0]`=state, `[1]`=sub-step). Drives "USER Reset" → BLE notify
+    0x11D → `gas_gauge_reset`/`settings_factory_reset`/15-word EEPROM save → NVIC
+    reset, with a state-5 hardware-reset cascade (BLE/eShifter/`"\nReset BMS\r"`
+    over the inter-module bus/Motor). Verdict: faithful.
+
+  `~27` `FUN_` callees named in Ghidra this pass (prototypes + plate comments,
+  program saved): `system_software_reset` (a second inlined `NVIC_SystemReset` @
+  `0x080382AC`, no-return), `uart_handle_deinit_0..7` + the shared `uart_handle_deinit`
+  /`HAL_UART_MspDeInit` workers, `i2c_handle_deinit`/`spi_handle_deinit`/
+  `adc_handle_deinit`/`ahb1_periph_handle_deinit`, CMSIS `nvic_set_priority`/
+  `nvic_enable_irq`/`nvic_clear_pending_irq`, `enter_low_power_wait`, `systick_irq_
+  disable`/`enable`, `set_wakeup_done_flag`, `rtc_set_wakeup_seconds`/`rtc_wakeup_
+  timer_disable`/`rtc_wakeup_timer_set`, and `reset_ble_timeout_cb` (`0x08038A38`,
+  newly carved). The logger object `@0x20009D98` is confirmed a 3-slot fn-ptr table
+  (`[0]`=printf=`g_log_func`, `[1]`=putchar, `[2]`=alt-formatter). Note kept for a
+  future pass: `shifter_usart3_reinit` (`0x080338B4`, already sourced in `shifter.c`
+  as a "re-init/flush") is actually the 3rd UART **de-init** veneer — a misnomer to
+  revisit, left as-is to avoid destabilising existing verified code.
+
 - **Backup-code investigation + name correction** — chasing "what is the default
   backup code?" exposed a misnomer: the leaf I'd called `backup_code_init_default`
   (OEM `0x0803FAC0`) does **not** touch the backup code. It seeds the three
@@ -197,11 +247,12 @@ itself was saved after each session.
     `SCHED_SLOT_TELEMETRY` (0x20000110) but the OEM (and `motor_get_timer_cb`) use
     `SCHED_SLOT_REC` (0x2000010E, verified at pool `0x08042F08`/`0x08040EB0`) —
     corrected.
-  - **Deferred** (status_process-class, not leaves): `enter_stop_mode`
-    (`0x080382D0`, ~200-line low-power sequencer, ~28 mostly-unnamed peripheral-
-    deinit callees + infinite loops) and `reboot_restart_task` (`0x08038A68`,
-    ~150-line 6-state restart SM whose decompile has an unresolved ctx base) —
-    each warrants its own dedicated sourcing pass.
+  - ~~**Deferred** (status_process-class, not leaves): `enter_stop_mode` and
+    `reboot_restart_task`~~ — **done**, see the "Sleep + reset/factory-reset SMs"
+    entry at the top of this log. (The "unresolved ctx base" of the `0x08038A68`
+    decompile turned out to be a false fall-through artifact: `reboot_restart_task`
+    is a tiny 5-line NVIC-reset wrapper and the 6-state machine is the *adjacent*
+    `factory_reset_sm_step` @ `0x08038A90`, whose base is a clean `ctx` parameter.)
 
 - `display.c` — **the LED-matrix display engine**, now SOURCED (33 functions,
   faithful C; fan-out transcribed + adversarially verified). The bike's signature
