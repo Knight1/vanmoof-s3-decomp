@@ -1,7 +1,131 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "uart.h"
 #include "util.h"
+
+/* ---------------------------------------------------------------------------
+ * CubeF4 UART init/config/deinit (stm32f4xx_hal_uart.c). The eight
+ * uartX_init/usartX_init wrappers populate a UART_HandleTypeDef and call
+ * HAL_UART_Init; the BLE/modem/shifter reconfigure paths call HAL_UART_DeInit.
+ * ------------------------------------------------------------------------- */
+
+/* USART register bit masks (RM0430). */
+#define USART_CR1_RE       0x0004u
+#define USART_CR1_TE       0x0008u
+#define USART_CR1_PS       0x0200u
+#define USART_CR1_PCE      0x0400u
+#define USART_CR1_M        0x1000u
+#define USART_CR1_UE       0x2000u
+#define USART_CR1_OVER8    0x8000u
+
+#define USART_CR2_CLKEN    0x0800u
+#define USART_CR2_STOP     0x3000u
+#define USART_CR2_LINEN    0x4000u
+
+#define USART_CR3_IREN     0x0002u
+#define USART_CR3_HDSEL    0x0008u
+#define USART_CR3_SCEN     0x0020u
+#define USART_CR3_RTSE     0x0100u
+#define USART_CR3_CTSE     0x0200u
+
+/* APB2 USART/UART instances (clocked from PCLK2). On the STM32F413 these are
+ * USART1, USART6, UART9, UART10 at 0x40011000 + n*0x400; every other serial
+ * peripheral hangs off APB1 (PCLK1). */
+#define USART1_BASE   0x40011000u
+#define USART6_BASE   0x40011400u
+#define UART9_BASE    0x40011800u
+#define UART10_BASE   0x40011C00u
+
+/* MSP hooks and APB clock queries live in other HAL modules. */
+extern void     HAL_UART_MspInit(UART_HandleTypeDef *huart);    /* 0x080333C0 */
+extern void     HAL_UART_MspDeInit(UART_HandleTypeDef *huart);  /* 0x08033740 */
+extern uint32_t HAL_RCC_GetPCLK1Freq(void);                     /* 0x08027374 */
+extern uint32_t HAL_RCC_GetPCLK2Freq(void);                     /* 0x08027394 */
+
+/* Program BRR + the framing fields of CR1/CR2/CR3 from huart->Init.
+ * OEM UART_SetConfig, 0x08026AF0. The OEM evaluates the BRR numerator
+ * (pclk * 25) as a 64-bit dividend (__aeabi_uldivmod); the divisions below are
+ * the behaviour-equivalent form of the CubeF4 UART_DIV_SAMPLING macros. */
+static void UART_SetConfig(UART_HandleTypeDef *huart)
+{
+    USART_TypeDef *u = huart->Instance;
+    uint32_t pclk;
+    uint32_t usartdiv, mantissa, fraction;
+
+    u->CR2 = (u->CR2 & ~USART_CR2_STOP) | huart->Init.StopBits;
+
+    u->CR1 = (u->CR1 & ~(USART_CR1_M | USART_CR1_PCE | USART_CR1_PS |
+                         USART_CR1_TE | USART_CR1_RE | USART_CR1_OVER8)) |
+             huart->Init.OverSampling | huart->Init.WordLength |
+             huart->Init.Parity | huart->Init.Mode;
+
+    u->CR3 = (u->CR3 & ~(USART_CR3_RTSE | USART_CR3_CTSE)) | huart->Init.HwFlowCtl;
+
+    if (u == (USART_TypeDef *)USART1_BASE || u == (USART_TypeDef *)USART6_BASE ||
+        u == (USART_TypeDef *)UART9_BASE  || u == (USART_TypeDef *)UART10_BASE) {
+        pclk = HAL_RCC_GetPCLK2Freq();
+    } else {
+        pclk = HAL_RCC_GetPCLK1Freq();
+    }
+
+    if (huart->Init.OverSampling == UART_OVERSAMPLING_8) {
+        usartdiv = (uint32_t)(((uint64_t)pclk * 25u) / (2u * huart->Init.BaudRate));
+        mantissa = usartdiv / 100u;
+        fraction = ((usartdiv - mantissa * 100u) * 8u + 50u) / 100u;
+        u->BRR = (mantissa << 4) | ((fraction & 0xF8u) << 1) | (fraction & 0x07u);
+    } else {
+        usartdiv = (uint32_t)(((uint64_t)pclk * 25u) / (4u * huart->Init.BaudRate));
+        mantissa = usartdiv / 100u;
+        fraction = ((usartdiv - mantissa * 100u) * 16u + 50u) / 100u;
+        u->BRR = (mantissa << 4) | (fraction & 0xF0u) | (fraction & 0x0Fu);
+    }
+}
+
+/* OEM HAL_UART_Init, 0x08026CFC. */
+int HAL_UART_Init(UART_HandleTypeDef *huart)
+{
+    if (huart == NULL) {
+        return HAL_ERROR;
+    }
+
+    if (huart->gState == HAL_UART_STATE_RESET) {
+        huart->Lock = 0;                 /* HAL_UNLOCKED */
+        HAL_UART_MspInit(huart);
+    }
+
+    huart->gState = HAL_UART_STATE_BUSY;
+
+    huart->Instance->CR1 &= ~USART_CR1_UE;
+    UART_SetConfig(huart);
+    huart->Instance->CR2 &= ~(USART_CR2_LINEN | USART_CR2_CLKEN);
+    huart->Instance->CR3 &= ~(USART_CR3_SCEN | USART_CR3_HDSEL | USART_CR3_IREN);
+    huart->Instance->CR1 |= USART_CR1_UE;
+
+    huart->ErrorCode = HAL_UART_ERROR_NONE;
+    huart->gState  = HAL_UART_STATE_READY;
+    huart->RxState = HAL_UART_STATE_READY;
+    return HAL_OK;
+}
+
+/* OEM HAL_UART_DeInit (uart_handle_deinit), 0x08026D5A. */
+int HAL_UART_DeInit(UART_HandleTypeDef *huart)
+{
+    if (huart == NULL) {
+        return HAL_ERROR;
+    }
+
+    huart->gState = HAL_UART_STATE_BUSY;
+    huart->Instance->CR1 &= ~USART_CR1_UE;
+
+    HAL_UART_MspDeInit(huart);
+
+    huart->ErrorCode = HAL_UART_ERROR_NONE;
+    huart->gState  = HAL_UART_STATE_RESET;
+    huart->RxState = HAL_UART_STATE_RESET;
+    huart->Lock    = 0;                  /* HAL_UNLOCKED */
+    return HAL_OK;
+}
 
 /* UART/serial TX primitive (OEM uart_send_byte, 0x080364F0).
  *

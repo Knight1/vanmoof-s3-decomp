@@ -35,6 +35,62 @@ extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state); /* 0x0
 extern void HAL_GPIO_Init(void *GPIOx, gpio_init_record_t *init);         /* 0x080267D0 */
 extern int  HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);             /* 0x08026AB8 */
 
+/* GPIO_GET_INDEX: bank pointer -> SYSCFG EXTICR nibble value (A=0 .. H=7).
+ * The OEM open-codes this as the same chain of base-address compares. */
+static uint32_t GPIO_GetIndex(GPIO_TypeDef *GPIOx)
+{
+    if (GPIOx == (GPIO_TypeDef *)0x40020000u) return 0u;  /* GPIOA */
+    if (GPIOx == (GPIO_TypeDef *)0x40020400u) return 1u;  /* GPIOB */
+    if (GPIOx == (GPIO_TypeDef *)0x40020800u) return 2u;  /* GPIOC */
+    if (GPIOx == (GPIO_TypeDef *)0x40020C00u) return 3u;  /* GPIOD */
+    if (GPIOx == (GPIO_TypeDef *)0x40021000u) return 4u;  /* GPIOE */
+    if (GPIOx == (GPIO_TypeDef *)0x40021400u) return 5u;  /* GPIOF */
+    if (GPIOx == (GPIO_TypeDef *)0x40021800u) return 6u;  /* GPIOG */
+    return 7u;                                            /* GPIOH */
+}
+
+/* OEM HAL_GPIO_DeInit, 0x08026990. Walks pins 0..15; for each selected pin,
+ * tears down its EXTI line (only if SYSCFG still maps that line to this bank)
+ * then returns the pad to the reset config (analog input, no pull, no AF). */
+void HAL_GPIO_DeInit(GPIO_TypeDef *GPIOx, uint32_t GPIO_Pin)
+{
+    uint32_t position;
+
+    for (position = 0; position < 16u; position++) {
+        uint32_t iocurrent = (1u << position) & GPIO_Pin;
+        if (iocurrent == 0u) {
+            continue;
+        }
+
+        /* EXTI mode config — only clear if this bank still owns the line. */
+        uint32_t shift = (position & 3u) << 2;
+        uint32_t tmp = SYSCFG->EXTICR[position >> 2] & (0xFu << shift);
+        if (tmp == (GPIO_GetIndex(GPIOx) << shift)) {
+            EXTI->IMR  &= ~iocurrent;
+            EXTI->EMR  &= ~iocurrent;
+            EXTI->RTSR &= ~iocurrent;
+            EXTI->FTSR &= ~iocurrent;
+            SYSCFG->EXTICR[position >> 2] &= ~(0xFu << shift);
+        }
+
+        /* GPIO mode config — back to reset state. */
+        GPIOx->MODER   &= ~(3u << (position * 2u));
+        GPIOx->AFR[position >> 3] &= ~(0xFu << ((position & 7u) << 2));
+        GPIOx->PUPDR   &= ~(3u << (position * 2u));
+        GPIOx->OTYPER  &= ~(1u << position);
+        GPIOx->OSPEEDR &= ~(3u << (position * 2u));
+    }
+}
+
+/* OEM HAL_GPIO_EXTI_IRQHandler, 0x08026AD4. */
+void HAL_GPIO_EXTI_IRQHandler(uint16_t GPIO_Pin)
+{
+    if ((EXTI->PR & GPIO_Pin) != 0u) {
+        EXTI->PR = GPIO_Pin;          /* rc_w1: write 1 to clear pending */
+        HAL_GPIO_EXTI_Callback(GPIO_Pin);
+    }
+}
+
 void gpio_init(void)
 {
     gpio_init_record_t gi = { 0, 0, 0, 0 };
