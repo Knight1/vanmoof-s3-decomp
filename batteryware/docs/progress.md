@@ -617,6 +617,44 @@ deferred (toolchain-provided runtime + intentionally-skipped thunks/veneers),
 > `mov pc` continuations of `command_parser`, so `s_jump_table` stays NULL
 > until that dispatch is reworked; only the misleading comment and the
 > `protocol.md` console section were corrected.
+>
+> **2026-06-10 (all console handlers decoded from the full image).** Defined
+> the 12 jump-table handlers Ghidra had left undefined (the runtime pointers
+> point `+0x5000` away from the real code, so auto-analysis never reached
+> them) in `batteryware_1.17.1.bin` and decompiled each — superseding the
+> 2026-06-01 note's "10–23 past the dump end" (that was the truncated
+> `bmsv007` dump; the full 87 568 B image has them all). Handlers (Ghidra =
+> runtime − 0x5000): `Who?` `0x08009DF8` (identity + cal gains), version
+> `0x08009E3C` (BL/AP version print), `PF` `0x08009ECC`, `Reset BMS`
+> `0x08009F20`, `DF` `0x08009F50` (discharge FET), `Upgrade AP/BL`
+> `0x0800A01C`/`A036`, `Into Bootloader` `0x0800A050` (writes `0x5A` =
+> `BOOT_FLAG_WIPE` to EEPROM `0x08080000`, reset), CHG/DSG CAL
+> `0x0800A0E8`/`A146`/`A166`/`A1C4`, `Reset ESN` `0x0800A1E4` (zeroes
+> ESN/date/anti-replay), `Log Clear` `0x0800A29C` (wipes cfg + cfg2 +
+> event-log, preserving cal gains/phase markers), and the `0x0800A6AE` nop
+> stub shared by TS0/1/2/FCC/SOC (**unimplemented**). Created + plate-commented
+> in Ghidra and saved; full table in `cmd.c` and `protocol.md`. `Log Clear`
+> independently confirmed the event-log bases/stride/count (see `eeprom.md`
+> §2). Still frame-sharing continuations → `s_jump_table` stays NULL.
+>
+> **2026-06-10 (named 13 of the 48 unnamed FUN_ functions).** Resolved main_loop's
+> state-dispatch table (Ghidra `0x0801257C` / runtime `0x0801757C`, indexed by the
+> state byte → 6-byte `bl handler; b tail` thunks at `0x08005A38`). Its five unnamed
+> targets — the "~8 FUN_ targets" flagged for main's rewire — are periodic per-state
+> service routines, now named **state_timer_01** (`0x080063E0`, full UVP/OVP/threshold/
+> alert monitor + service-UART entry), **state_timer_07** (`0x08006810`) and
+> **state_timer_08** (`0x0800699C`) (discharge-OC monitors), **state_timer_09**
+> (`0x0800A794`) and **state_timer_0a** (`0x0800A988`) (charge-OC monitors + bootloader
+> entry). Each calls `fg_scan()` then dispatches to `state_handler_XX` on faults.
+> Also identified by behaviour/caller: **config_init** (`0x08007368`, called by
+> `bms_setup`; sets `s_ctx[0]=0x117` + the full protection-threshold table),
+> **command_parser** (`0x08009AC4`), **uart_protocol_handler** (`0x0800AFA4`),
+> **flash_stream_handler** (`0x0800D8F0`), **fg_cell_process** (`0x080138AC`, cell
+> min/max/avg + balance trigger + telemetry mirror), **coulomb_counter** (`0x08013228`,
+> signed-current SOC integration, `0x3840` divisor + `rsoc_set`), **nop_e290** (empty
+> stub), **dma_xfer_wait** (`0x080150DC`). Renamed + plate-commented in Ghidra, saved.
+> ~35 FUN_ remain (fuel-gauge/protection internals, HAL helpers, thunks) for later passes.
+
 ## Functions
 
 | Addr | Size | Name | Status | Notes |

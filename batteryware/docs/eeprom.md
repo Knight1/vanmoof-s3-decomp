@@ -112,10 +112,22 @@ indexed by a sequence number, into two regions:
 `0x08080200 + idx·0x38` (low half) and `0x08080E00 + (idx−0x32)·0x38`
 (high half). `modem.c` dumps both as hex over the service UART.
 
-> **Caveat:** the reconstructed `2 × 50 × 0x38` layout overlaps the config
-> block at `0x08080C00` and runs past the nominal 6 KB EEPROM. The exact
-> capacity / record size / index split is **not yet verified** — treat the
-> ring-buffer extent as approximate.
+The `Log Clear` console handler (`cmd_log_clear_h`, Ghidra `0x0800A29C`)
+**confirms the bases, stride and count**: it loops `idx = 0..99`, committing a
+zeroed `0x38`-byte record to `0x08080200 + idx·0x38` for `idx < 0x32` and to
+`0x08080E00 + (idx−0x32)·0x38` otherwise (so **2 × 50 × `0x38`**), right after
+re-persisting the config block to `0x08080C00`/`0x08080C80`.
+
+> **Unresolved (now concrete):** that exact layout still can't be literally
+> correct on a 6 KB EEPROM. The low half reaches `0x08080200 + 50·0x38 =
+> 0x08080CF0`, **overlapping the config block at `0x08080C00`** (records 46–49
+> would sit on cfg `+0x10`…, including the cal gains and phase markers that the
+> same handler just took care to preserve); the high half reaches
+> `0x08080E00 + 50·0x38 = 0x080818F0`, **past the nominal 6 KB end
+> (`0x080817FF`)** by 4 records. So either the data EEPROM on this part is
+> larger than 6 KB, or the live record count is smaller than the 100 the
+> clear-loop walks. Needs a hardware dump to settle — treat the *extent* as
+> approximate even though the bases/stride/clear-count are now firmware-exact.
 
 ## 3. ESN (serial number) & manufacture date
 

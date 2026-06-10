@@ -165,25 +165,39 @@ void cmd_send_8byte(void)
  *   bmsv007.bin, Ghidra 0x08012FD8 — the -0x5000 runtime/Ghidra offset
  *   documented in progress.md). It is fully present in the image; the
  *   23 name slots here mirror the OEM 47-byte entries at Ghidra
- *   0x08012B9C..0x08012FD5 (runtime 0x08017B9C..). Recovered handlers
- *   (runtime addr; subtract 0x5000 for Ghidra):
- *     [0] 0x0800f6e0 nop_a6e0 (unused/dispatch-error sink)
- *     [1] 0x0800edf8  [2] 0x0800ee3c  [3] 0x0800eecc
- *     [4] 0x0800ef20  "Reset BMS": persist reset flag, "\nOK\r", reboot
- *     [5] 0x0800ef50  [6] 0x0800f01c  [7] 0x0800f036  [8] 0x0800f050
- *     [9] 0x0800f0e8 ... (entries 10..23 sit past bmsv007.bin's 0x18000
- *     end and cannot be read from this dump).
+ *   0x08012B9C..0x08012FD5 (runtime 0x08017B9C..). All handlers decoded
+ *   from batteryware_1.17.1.bin (Ghidra addr = runtime - 0x5000):
  *
- *   jump[4] (Reset BMS) decompiles to:
- *     if (value_pos != 0) veneer_a6be();          // takes no =VALUE
- *     *(uint8_t*)0x20002C48 = 1;                   // arm reset flag
- *     memcmp_verify((char*)0x08080001, 1, (char*)0x20002C48); // -> EEPROM
- *     uart_printf("\nOK\r"); uart_tx_flush();
- *     nvic_system_reset_v3();                      // SCB->AIRCR=0x05FA0004
+ *     idx  Ghidra      command          behaviour
+ *     [0]  0800A6E0    (no match)       nop_a6e0 — dispatch-error sink
+ *     [1]  08009DF8    "Who?"           print "I am VanMoof AP" + "CHG CAL = <g_chg_cal_gain>"
+ *                                       + "DSG CAL = <g_dsg_cal_gain>"; set s_ctx[+5]=1
+ *     [2]  08009E3C    version          print "BL --> %s %s %d%d%d" + "AP --> %s %s %w"
+ *                                       (bootloader + app version/build, read from BL/AP headers)
+ *     [3]  08009ECC    "PF"             PF=0: EEPROM 0x08080001 (boot mode)=1 + reset;
+ *                                       PF=1: EEPROM 0x08080C39 (cfg+0x39)=1
+ *     [4]  08009F20    "Reset BMS"      EEPROM 0x08080001=1, "\nOK\r", nvic_system_reset
+ *     [5]  08009F50    "DF"             discharge FET off(=0)/on(=1) via bms_configure (FET bit0),
+ *                                       gated: state(0x20002B58)<0x14 AND (1<<state)&0x000C1F88
+ *     [6]  0800A01C    "Upgrade AP"     ctrl word 0x20002C00 |= 2, bms_configure(0) (FETs off), "\nOK\r"
+ *     [7]  0800A036    "Upgrade BL"     ctrl word 0x20002C00 |= 1, bms_configure(0), "\nOK\r"
+ *     [8]  0800A050    "Into Bootloader" FETs off, EEPROM 0x08080000 (bmsboot flag)=0x5A
+ *                                       (BOOT_FLAG_WIPE), reset -> loader wipes AP+Shadow, serial DL
+ *     [9-12] 0800A0E8/A146/A166/A1C4  CHG/DSG CAL set/get (see fg_coulomb_update, docs/eeprom.md §5)
+ *     [13] 0800A1E4    "Reset ESN"      zero EEPROM 0x0808000F-0x20 (ESN+date) and
+ *                                       0x08080021/25/29 (anti-replay triplet), "\nOK\r"
+ *     [14] 0800A29C    "Log Clear"      wipe cfg(0x08080C00) + cfg2(0x08080C80) + event-log
+ *                                       (lo 0x08080200 / hi 0x08080E00, 2x50x0x38 records),
+ *                                       PRESERVING cal gains cfg+0x3a/3c + phase markers
+ *                                       cfg+0x47/48/49; EEPROM 0x08080001=1; reset.
+ *                                       "Log Clear=<n>" instead dumps event-log record n.
+ *     [15-23] 0800A6AE  TS0/1/2,FCC,SOC  cmd_ts_fcc_soc_h — a bare nop_a6e0 stub: the names
+ *                                       match but the commands are UNIMPLEMENTED in this build.
  *
- *   These handlers share command_parser's frame, so they are not yet
- *   modelled as standalone C functions — the table below stays NULL
- *   until the frame-sharing dispatch is reworked.
+ *   These handlers tail-jump within command_parser's frame (value_buf@r7+0x24,
+ *   value_pos@r7+0x64) and fall through into one another via shared epilogues,
+ *   so they are NOT standalone C functions — the table below stays NULL and the
+ *   behaviour is documented here instead.
  */
 static const cmd_entry_t s_cmd_table[] = {
     {  1,  4, cmd_who             },  /* 0x08012b9c */
@@ -217,7 +231,8 @@ static const cmd_entry_t s_cmd_table[] = {
  * (file offset 0x17fd8, present in the image — see the dispatch note
  * above), indexed by entry.idx. Stubbed NULL here because the handlers
  * are frame-sharing continuations of command_parser, not standalone
- * functions. Indices 1..23 are valid; 0 is the dispatch-error sink. */
+ * functions. Indices 1..14 are real handlers; 0 is the dispatch-error
+ * sink; 15..23 (TS/FCC/SOC) all point at the nop stub (unimplemented). */
 static void (* const s_jump_table[24])(uint32_t, int, uint8_t) = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,

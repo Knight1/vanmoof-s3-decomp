@@ -154,10 +154,25 @@ on CR to `command_parser` (FUN_08009ac4), a 23-entry name table: `Who?`, `Now?`,
 `CHG CAL`/`CHG CAL?`, `DSG CAL`/`DSG CAL?`, `Reset ESN`, `Log Clear`,
 `TS0/1/2`(+`?`), `TS Reset`, `FCC`, `SOC`. After matching, `command_parser`
 tail-jumps (`mov pc`) into a 24-pointer dispatch table at runtime
-`0x08017FD8` (file `0x17fd8` in `bmsv007.bin`; Ghidra `0x08012FD8` via the
-−0x5000 runtime/Ghidra offset). The handlers run in `command_parser`'s own
-frame. The `Reset BMS` handler (action 4, runtime `0x0800ef20`) arms a reset
-flag at SRAM `0x20002C48`, persists it to data-EEPROM `0x08080001`, prints
-`"\nOK\r"`, flushes the UART, then `NVIC_SystemReset()`
-(`SCB->AIRCR = 0x05FA0004`). When the control word selects bootloader mode
-instead, bytes go to the YMODEM receiver (`ymodem_receive`).
+`0x08017FD8` (Ghidra `0x08012FD8` via the −0x5000 runtime/Ghidra offset). The
+handlers run in `command_parser`'s own frame (value digits at `r7+0x24`,
+length at `r7+0x64`) and fall through into shared epilogues, so they are not
+standalone functions. When the control word selects bootloader mode instead,
+bytes go to the YMODEM receiver (`ymodem_receive`).
+
+All handlers are decoded (Ghidra addr = runtime − 0x5000):
+
+| idx | Command | Ghidra | Effect |
+| ---: | --- | --- | --- |
+| 1 | `Who?` | `0x08009DF8` | print `"I am VanMoof AP"` + `"CHG CAL = <gain>"` + `"DSG CAL = <gain>"` (identity + current-cal gains) |
+| 2 | *version* | `0x08009E3C` | print `"BL --> …"` + `"AP --> …"` (bootloader + app version/build, read from the image headers) |
+| 3 | `PF` | `0x08009ECC` | `PF=0` → EEPROM `0x08080001` (boot mode) = 1 + reset; `PF=1` → EEPROM `0x08080C39` (cfg+0x39) = 1 |
+| 4 | `Reset BMS` | `0x08009F20` | EEPROM `0x08080001` = 1, `"\nOK\r"`, `NVIC_SystemReset` (`SCB->AIRCR=0x05FA0004`) |
+| 5 | `DF` | `0x08009F50` | discharge FET off(`=0`)/on(`=1`) via `bms_configure` (FET bit0), gated `state(0x20002B58) < 0x14` AND `(1<<state) & 0x000C1F88` |
+| 6 | `Upgrade AP` | `0x0800A01C` | ctrl word `0x20002C00 |= 2`, `bms_configure(0)` (FETs off), `"\nOK\r"` |
+| 7 | `Upgrade BL` | `0x0800A036` | ctrl word `0x20002C00 |= 1`, FETs off, `"\nOK\r"` |
+| 8 | `Into Bootloader` | `0x0800A050` | FETs off, EEPROM `0x08080000` (bmsboot flag) = `0x5A` (`BOOT_FLAG_WIPE`), reset → loader wipes AP+Shadow, enters serial download |
+| 9–12 | `CHG/DSG CAL`(`?`) | `0x0800A0E8`+ | current calibration set/get — see `eeprom.md` §5 |
+| 13 | `Reset ESN` | `0x0800A1E4` | zero EEPROM `0x0808000F`–`0x20` (ESN+date) and `0x08080021/25/29` (anti-replay), `"\nOK\r"` |
+| 14 | `Log Clear` | `0x0800A29C` | wipe cfg (`0x08080C00`) + cfg2 (`0x08080C80`) + the event log (lo `0x08080200` / hi `0x08080E00`, 2×50×`0x38`), **preserving** cal gains (cfg+0x3A/0x3C) and phase markers (cfg+0x47/48/49); EEPROM `0x08080001`=1; reset. `Log Clear=<n>` instead dumps event-log record *n* |
+| 15–23 | `TS0/1/2`,`FCC`,`SOC` | `0x0800A6AE` | **unimplemented** — the names match but all point at a bare `nop` stub in this build |
