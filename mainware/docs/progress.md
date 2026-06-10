@@ -45,12 +45,12 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 294 | pending (auto-named `FUN_xxxxxxxx`) |
+| 277 | pending (auto-named `FUN_xxxxxxxx`) |
 | 24  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `memset`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`; CMSIS `NVIC_DisableIRQ` (`0x080270FC`, writes `NVIC->ICER`); `memcmp`, `strstr`, `strchr`, `strncmp` (newlib — the last named `bounded_strncmp`, returns 0 == equal). (The CubeF4 **I²C** HAL — `HAL_I2C_Init`/`DeInit`/`Mem_Write`/`Mem_Read`/`Master_Transmit`/`Master_Receive` — is no longer vendor-stock: reconstructed as faithful C in `i2c.c`, see the per-module log.) |
 | 0   | in-progress |
-| 379 | decomp-c — `systick.c` (3), `console.c` (51), `scheduler.c` (8), `exceptions.c` (10), `panic.c` (2), `app.c` (24), `util.c` (5), `system_stm32f413.c` (1), `ssp.c` (13), `flash.c` (7), `crc.c` (3), `audio.c` (1), `log.c` (10), `sensor.c` (5), `uart.c` (1), `net.c` (2), `gpio.c` (3), `eeprom.c` (1), `i2c.c` (18), `watchdog.c` (6), `states.c` (7), `modem.c` (48), `ble.c` (4), `ble_read.c` (3), `rtc.c` (7), `update.c` (1), `main.c` (4), `battery.c` (25), `display.c` (33), `lighting.c` (9), `display_requests.c` (data: 38 descriptors), `shifter.c` (38), `lis3dh.c` (26) — see per-module log below |
+| 394 | decomp-c — `systick.c` (3), `console.c` (51), `scheduler.c` (8), `exceptions.c` (10), `panic.c` (2), `app.c` (24), `util.c` (5), `system_stm32f413.c` (1), `ssp.c` (16), `motor.c` (7), `flash.c` (7), `crc.c` (3), `audio.c` (1), `log.c` (10), `sensor.c` (5), `uart.c` (4), `net.c` (2), `gpio.c` (5), `eeprom.c` (1), `i2c.c` (18), `watchdog.c` (6), `states.c` (7), `modem.c` (48), `ble.c` (4), `ble_read.c` (3), `rtc.c` (7), `update.c` (1), `main.c` (4), `battery.c` (25), `display.c` (33), `lighting.c` (9), `display_requests.c` (data: 38 descriptors), `shifter.c` (38), `lis3dh.c` (26) — see per-module log below |
 | 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`) |
-| 113 | named (rename in Ghidra, no source yet) — `modem_sms_dispatch_command` (`0x0803D668`, the inbound-SMS remote-command interpreter, named this pass) + **24 named leaves were SOURCED into their home modules this pass** (see the "Named-leaf sourcing pass" log entry): the ble_read telemetry getters (`ble_get_charge_plug_state`/`ble_build_testmode_versions_blob`/`charge_level_adc_get`/`ble_get_led_channel_state`/`telemetry_map_clamp`/`gpio_pc0_is_low`/`gpio_pc1_is_low`/`hw_version_lookup`/`maybe_enqueue_tx_message`), the bike-state getters (`bike_status_coarse_get`/`bike_state_is_standby`/`ble_lock_state_get`/`ble_unlock_state_get`), the RTC helpers (`rtc_now_epoch_seconds`/`rtc_set_from_unix_time` → new `rtc.c`), app/state helpers (`app_ctx_clear_field_328`/`clear_flag_00e5`/`count_active_2bit_groups`/`announce_records_reset`/`display_announce_enter`/`display_timeout_timer_set`/`lock_poll_timer_arm`) and the BLE helpers (`sspm5_tx_timeout_cb`/`post_request_with_arg`). `config_persist_dual_bank` stays named (its OEM body memcpy's 0xC0 bytes from `&stack0x00000000` — a variadic stack passthrough that doesn't model cleanly in portable C). The rest still pending. — (the **LED-matrix display engine** is now **SOURCED → `display.c`** (`display_module_init`/`display_send_init_cmd`/`display_write_reg20_init`/`display_panel_reset`/`led_driver_panel_config`/`led_driver_brightness_write`/`led_driver_standby_write`/`led_driver_set·enter_shipping_mode`/`led_matrix_render·overlay_frame_region`/`led_matrix_transmit_step`/`matrix_draw_speed·number·icon·level_bar·level_bar_blink`/`matrix_set_corner_led·turn_indicator`/`matrix_glyph_src_addr·frame_delay`/`display_mode_sm_step`/`display_request_*`/`is_display_bus_ready`/etc.) and the **lamp engine + ambient sensor** → **`lighting.c`** (`light_pattern_step`/`light_pattern_action_apply`/`light_sensor_read_step·i2c_read·fault_count_get`/`obj_set_field34·38`/`led_channel3_set_brightness`), with **~25 FUN_ helpers named this pass**, fan-out transcribed + adversarially verified (`docs/display.md`, `docs/lighting.md`). Two name corrections: `dsp_recovery_telemetry_pump`→**`led_matrix_transmit_step`** ("dsp" in `" ERR dsp freeze"` = display, not the C28x DSP); and `light_tick_update` (`0x080371E8`) identified as a **console↔shifter/battery UART bridge**, NOT lamps (still named, out of scope). — The battery/BMS Modbus driver — `modbus_bat_submit`/`bms_modbus_read`/`bms_modbus_write`/`bat_modbus_master_step`/`bms_telemetry_unpack`/`battery_telemetry_step`/`battery_state_process`/`battery_charge_display_step`/`modbus_bat_service_step`/etc. — is now **SOURCED → `battery.c`**; the shared bus CRC/TX helpers `bus_crc16_get`/`update`/`reset`/`verify` + `bus_tx_enqueue_byte`/`_n` were named this pass, extern pending a future `bus.c`. The spine `main`/`boot_init_cold`/`boot_init_warm`/`mainware_boot_init_sequence` **and `status_process`** are now **SOURCED** — `status_process` → `states.c` (the 62-case behaviour engine, adversarially verified), the rest → `main.c`; with their **~74 callees named this pass**, `docs/boot.md`: peripheral init `hal_mcu_init`/`dma_controller_init`/`usart1·2·3·6_init`/`uart4·5·7·8_init`/`i2c2_init`/`tim1_pwm_init`/`tim6·7·10_init`/`adc1_init`/`rtc_init`/`crc_init`/`comm_buffers_register_all`, clock `rcc_oscillator_config`/`rcc_clock_config`/`rcc_periph_clock_config`/`tim_channel_enable_output`, loop services `light_tick_update`/`light_pattern_step`/`modbus_shifter_link_monitor`/`lipo_charge_state_monitor`/`ssp_ble_tx_queue_pump`/`motor_fw_update_fsm_step`/`sspm_rx_reply_handler`/`sspm_tx_queue_pump`/`led_matrix_render·overlay_frame_region`/`dsp_recovery_telemetry_pump`/`charger_and_pc1_sense_debounce`/`supply_voltage_sample_step`/`output_value_filter_step`/`ble_telemetry_change_broadcast`/`update_sm_is_idle`/`log_upload_sm_step`/`display_mode_sm_step`/`factory_reset_sm_step`/`staged_msg_validate_and_dispatch`/`button_press_state_machines_step`/`app_ctx_ptr_set`, boot devices `display_module_init`/`hdc1080_write_config_reg`/`stc3115_wake`/`stc3115_fuel_gauge_init`/`lis3dh_accel_init`/`audio_amp_init`/`display_write_reg20_init`/`eeprom_read_id_block`/`eeprom_read_config_with_crc_fallback`/`flash_read_config_with_crc_restore`/`sound_groups_init_default`/`region_speed_preset_table_load`/`flash_program_rdp_level_once`/`reset_reason_log_and_clear`/`log_wake_reason`/`log_console_subsystem_init`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int` — **SOURCED → `lis3dh.c` this pass**; `accel_enable`→`stc_gas_gauge_set_run`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
+| 115 | named (rename in Ghidra, no source yet) — `HAL_GPIO_EXTI_Callback` (`0x08038964`, the application's EXTI dispatch override, named this pass; its ~150-byte body is fired by the now-sourced `HAL_GPIO_EXTI_IRQHandler` — left for a future pass) + the UART-init HAL externs `HAL_RCC_GetPCLK2Freq` (`0x08027394`), `HAL_RCC_GetHCLKFreq` (`0x08027368`), `HAL_UART_MspInit` (`0x080333C0`) named this pass (called from `uart.c`'s reconstructed init path; `HAL_UART_MspDeInit`/`HAL_RCC_GetPCLK1Freq` were already named) + `modem_sms_dispatch_command` (`0x0803D668`, the inbound-SMS remote-command interpreter, named this pass) + **24 named leaves were SOURCED into their home modules this pass** (see the "Named-leaf sourcing pass" log entry): the ble_read telemetry getters (`ble_get_charge_plug_state`/`ble_build_testmode_versions_blob`/`charge_level_adc_get`/`ble_get_led_channel_state`/`telemetry_map_clamp`/`gpio_pc0_is_low`/`gpio_pc1_is_low`/`hw_version_lookup`/`maybe_enqueue_tx_message`), the bike-state getters (`bike_status_coarse_get`/`bike_state_is_standby`/`ble_lock_state_get`/`ble_unlock_state_get`), the RTC helpers (`rtc_now_epoch_seconds`/`rtc_set_from_unix_time` → new `rtc.c`), app/state helpers (`app_ctx_clear_field_328`/`clear_flag_00e5`/`count_active_2bit_groups`/`announce_records_reset`/`display_announce_enter`/`display_timeout_timer_set`/`lock_poll_timer_arm`) and the BLE helpers (`sspm5_tx_timeout_cb`/`post_request_with_arg`). `config_persist_dual_bank` stays named (its OEM body memcpy's 0xC0 bytes from `&stack0x00000000` — a variadic stack passthrough that doesn't model cleanly in portable C). The rest still pending. — (the **LED-matrix display engine** is now **SOURCED → `display.c`** (`display_module_init`/`display_send_init_cmd`/`display_write_reg20_init`/`display_panel_reset`/`led_driver_panel_config`/`led_driver_brightness_write`/`led_driver_standby_write`/`led_driver_set·enter_shipping_mode`/`led_matrix_render·overlay_frame_region`/`led_matrix_transmit_step`/`matrix_draw_speed·number·icon·level_bar·level_bar_blink`/`matrix_set_corner_led·turn_indicator`/`matrix_glyph_src_addr·frame_delay`/`display_mode_sm_step`/`display_request_*`/`is_display_bus_ready`/etc.) and the **lamp engine + ambient sensor** → **`lighting.c`** (`light_pattern_step`/`light_pattern_action_apply`/`light_sensor_read_step·i2c_read·fault_count_get`/`obj_set_field34·38`/`led_channel3_set_brightness`), with **~25 FUN_ helpers named this pass**, fan-out transcribed + adversarially verified (`docs/display.md`, `docs/lighting.md`). Two name corrections: `dsp_recovery_telemetry_pump`→**`led_matrix_transmit_step`** ("dsp" in `" ERR dsp freeze"` = display, not the C28x DSP); and `light_tick_update` (`0x080371E8`) identified as a **console↔shifter/battery UART bridge**, NOT lamps (still named, out of scope). — The battery/BMS Modbus driver — `modbus_bat_submit`/`bms_modbus_read`/`bms_modbus_write`/`bat_modbus_master_step`/`bms_telemetry_unpack`/`battery_telemetry_step`/`battery_state_process`/`battery_charge_display_step`/`modbus_bat_service_step`/etc. — is now **SOURCED → `battery.c`**; the shared bus CRC/TX helpers `bus_crc16_get`/`update`/`reset`/`verify` + `bus_tx_enqueue_byte`/`_n` were named this pass, extern pending a future `bus.c`. The spine `main`/`boot_init_cold`/`boot_init_warm`/`mainware_boot_init_sequence` **and `status_process`** are now **SOURCED** — `status_process` → `states.c` (the 62-case behaviour engine, adversarially verified), the rest → `main.c`; with their **~74 callees named this pass**, `docs/boot.md`: peripheral init `hal_mcu_init`/`dma_controller_init`/`usart1·2·3·6_init`/`uart4·5·7·8_init`/`i2c2_init`/`tim1_pwm_init`/`tim6·7·10_init`/`adc1_init`/`rtc_init`/`crc_init`/`comm_buffers_register_all`, clock `rcc_oscillator_config`/`rcc_clock_config`/`rcc_periph_clock_config`/`tim_channel_enable_output`, loop services `light_tick_update`/`light_pattern_step`/`modbus_shifter_link_monitor`/`lipo_charge_state_monitor`/`ssp_ble_tx_queue_pump`/`motor_fw_update_fsm_step`/`sspm_rx_reply_handler`/`sspm_tx_queue_pump`/`led_matrix_render·overlay_frame_region`/`dsp_recovery_telemetry_pump`/`charger_and_pc1_sense_debounce`/`supply_voltage_sample_step`/`output_value_filter_step`/`ble_telemetry_change_broadcast`/`update_sm_is_idle`/`log_upload_sm_step`/`display_mode_sm_step`/`factory_reset_sm_step`/`staged_msg_validate_and_dispatch`/`button_press_state_machines_step`/`app_ctx_ptr_set`, boot devices `display_module_init`/`hdc1080_write_config_reg`/`stc3115_wake`/`stc3115_fuel_gauge_init`/`lis3dh_accel_init`/`audio_amp_init`/`display_write_reg20_init`/`eeprom_read_id_block`/`eeprom_read_config_with_crc_fallback`/`flash_read_config_with_crc_restore`/`sound_groups_init_default`/`region_speed_preset_table_load`/`flash_program_rdp_level_once`/`reset_reason_log_and_clear`/`log_wake_reason`/`log_console_subsystem_init`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int` — **SOURCED → `lis3dh.c` this pass**; `accel_enable`→`stc_gas_gauge_set_run`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
 
 `function_count = 814` per `ghidra/exports/mainware_program.json` (3 OEM functions newly
 created this pass: `console_cmd_shipping`, `shiftdebug_pump_task`, `bat_reset_release_cb`).
@@ -81,8 +81,163 @@ program saved. The **I²C HAL pass** renamed **15 more** (the 10 transfer static
 `HAL_I2C_Master_Receive` `0x080248D8`, plus the 3 referenced externs
 `HAL_RCC_GetPCLK1Freq` `0x08027374` / `HAL_I2C_MspInit` `0x0803C69C` /
 `HAL_I2C_MspDeInit` `0x0803C820`) and set **12 prototypes** — program saved.
+The **UART HAL init pass** renamed **6 more** (`HAL_UART_Init` `0x08026CFC`,
+`UART_SetConfig` `0x08026AF0`, `HAL_UART_DeInit` `0x08026D5A` ← was
+`uart_handle_deinit`, `HAL_RCC_GetPCLK2Freq` `0x08027394`,
+`HAL_RCC_GetHCLKFreq` `0x08027368`, `HAL_UART_MspInit` `0x080333C0`) and set
+**6 prototypes** — program saved.
+The **GPIO HAL deinit/EXTI pass** renamed **3 more** (`HAL_GPIO_DeInit`
+`0x08026990`, `HAL_GPIO_EXTI_IRQHandler` `0x08026AD4`, `HAL_GPIO_EXTI_Callback`
+`0x08038964`) and set **3 prototypes** — program saved.
+The **SSPM-bus TX pass** renamed **1 more** (`sspm_bus_send_byte` `0x0803662C` ←
+was `FUN_0803662C`) and set **2 prototypes** (`sspm_bus_send_byte`,
+`sspm_bus_send_frame` `0x0803A008`) — program saved.
+The **motor-DSP download transport pass** renamed **5 more** (`sspm_bus_get_byte`
+`0x08036664`, `motor_dl_send_buf_step` `0x08030B70`, `motor_dl_recv_buf_step`
+`0x080309C4`, `motor_dl_recv_byte_step` `0x08030A50`, `motor_dl_recv_u16_step`
+`0x08030ADC`) and set **5 prototypes** — program saved.
+The **motor-DSP transaction-SM pass** renamed **3 more** (`motor_dl_send_verify_step`
+`0x08030BFC`, `motor_dl_autobaud_step` `0x08030CEC`, `motor_dl_stream_block_step`
+`0x08030D88`) and set **3 prototypes** — program saved.
 
 ## Per-module decomp log
+
+- **Motor-DSP (F2806x) transaction state machines → `src/motor.c`** — the handshake/
+  transfer layer that `motor_fw_update_fsm_step` drives on top of the four transport
+  pumps (prior pass). All three share the same download context (`0x20000654`) at
+  higher offsets and log via `g_log_func` (`0x20009D98`):
+  - `motor_dl_send_verify_step` (`0x08030BFC`) — send `count` bytes, verifying each is
+    **echoed** back (the C2000 SCI bootloader echoes every byte): per-byte send (state 1)
+    then receive+compare (state 2). Echo mismatch (non-final) logs "Fail 2 %d" + aborts;
+    final-byte mismatch silently completes (OEM quirk). ctx slice: +0x20 state, +0x24
+    cursor, +0x28 remaining.
+  - `motor_dl_autobaud_step` (`0x08030CEC`) — the SCI **autobaud lock**: send `'A'`
+    (0x41), expect `'A'` echoed → "Autobaud ok" / "Err Autobaud [%d]" / "Autobaud no
+    answer". ctx +0x2C state.
+  - `motor_dl_stream_block_step` (`0x08030D88`) — 6-state length-prefixed block streamer
+    with a running 16-bit additive checksum verified against the DSP's echoed checksum
+    (per-block in state 4, periodic every 2048 bytes in state 5). Block length parsed
+    from the first two streamed bytes (which are themselves also summed into the
+    checksum). End-of-block = counter == `(length+3)*2`. ctx +0x2D state, +0x30 cursor,
+    +0x34 checksum, +0x38 counter, +0x3C block length.
+  - **String fidelity:** all 14 log format strings re-read byte-exact from the OEM bin
+    (rodata 0x08050D20–0x08050DEC), and — per the standing discipline — **every
+    `g_log_func` argument resolved from the disassembly, not the decompiler** (which
+    drops the variadic register args): "Fail 2 %d"/"Err Autobaud [%d]" carry the
+    r1-leftover value (count / received byte), and the two `%04X %04X` strings pass
+    (received_u16, computed_checksum) in r1/r2.
+  - **Adversarially verified** instruction-by-instruction (all 3 PASS): the case-3 `tbh`
+    jump table, the no-double-advance length/checksum reads, the `len==0 && cnt>1`
+    returns-0 path, the (cnt-6)&0x7FF periodic test, and the per-case return values
+    (mismatch returns the old state value 2; case4 clears +0x38 on match but case5 does
+    not) all confirmed. Build clean (`text 1996`, 0 warnings); 3 renamed + 3 prototypes,
+    program saved. **Next pass:** the `motor_fw_update_fsm_step` body (`0x08030FF4`, ~14
+    cases — GPIO reset pulses, pack-header parse, state orchestration; "Resetting motor"
+    @0x08050DF0 onward) completes `motor.c`.
+
+- **Motor-DSP (F2806x) firmware-update transport → NEW `src/motor.c` + `include/motor.h`
+  (+ RX byte primitive → `src/ssp.c`)** — sourced the transport foundation of the
+  mainware→motor-controller firmware updater. The motor MCU is a TI **F2806x**
+  (TMS320F28054F, C28x DSP); the OEM translation unit is literally
+  **`src/F2806/f2806x.c`** (its assert-filename string @rodata 0x08050D0C), and the
+  whole block (`0x080309C4`–`0x08030FF4`) reprograms the DSP over the inter-module
+  ("SSPM") bus with a YMODEM-like block protocol under `motor_fw_update_fsm_step`
+  (`0x08030FF4`, already named). This pass took the bus RX byte primitive + the four
+  non-blocking transfer pumps; the three transaction SMs (`0x08030BFC`/`0x08030CEC`/
+  `0x08030D88`) and the top FSM body are the **explicit next pass** (string-heavy).
+  - `sspm_bus_get_byte` (`0x08036664`, was `FUN_`) → **`ssp.c`**: the exact RX twin
+    of `sspm_bus_send_byte` — same device-handle pointer (0x20009924), but masks/sets
+    **RXNEIE (CR1 bit 5, 0x20)** and reads the **RX** ring at bus-ctx slot **+0xA54**
+    (0x20002B3C) via `ringbuf_get_byte`; same ABI quirk (implicitly returns the get
+    status, 0 = ring empty). Also called by the SSPM RX de-framer `FUN_0803A0C0`
+    (counterpart of `sspm_bus_send_frame`, future).
+  - The four pumps → **`motor.c`**: `motor_dl_send_buf_step` (`0x08030B70`, sends N
+    bytes from a cursor via `sspm_bus_send_byte`), `motor_dl_recv_buf_step`
+    (`0x080309C4`, receives N bytes via `sspm_bus_get_byte`), `motor_dl_recv_byte_step`
+    (`0x08030A50`, one byte), `motor_dl_recv_u16_step` (`0x08030ADC`, little-endian
+    u16). All four are one-byte-per-tick state machines that share **one** transfer
+    context (`0x20000654`, disjoint slices: recv-buf +0x00/+0x04/+0x08, recv-byte
+    +0x0C, recv-u16 +0x0D/+0x0E/+0x10, send-buf +0x14/+0x18/+0x1C) and **one**
+    scheduler-timeout slot byte (`0x20000075`); they assert (not allocate) if the slot
+    is still `SCHED_SLOT_NONE` (0xFA) — the FSM allocates it first. Return convention
+    **1 = busy / 0 = complete / 2 = timed out**. Exact OEM assert line numbers
+    preserved (0x161/0x197/0x1C9/0x1F5). Note: `recv_u16` **sets** state=1 at arm
+    whereas the other three **increment** from 0 — reproduced exactly.
+  - **Adversarially verified** instruction-by-instruction (all 5 PASS): ctx offsets,
+    assert line numbers, increment-vs-set, RXNEIE/TXEIE bit, deref levels, and the
+    0/1/2 return mapping all match. Build clean (`text 1996`, 0 warnings); 5 renamed +
+    5 prototypes, program saved.
+
+- **SSPM inter-module-bus TX path → `src/ssp.c` + `include/ssp.h`** — sourced the
+  two outbound primitives for the *second* serial link (mainware↔battery/motor/
+  shifter, distinct from the BLE-coprocessor UART that `uart_send_byte` drives):
+  `sspm_bus_send_byte` (`0x0803662C`, was `FUN_0803662C`) and `sspm_bus_send_frame`
+  (`0x0803A008`, previously only a named `extern` in `ssp.c` — and wrongly typed
+  `void`: the disassembly returns `uint`, 0 / 2). `sspm_bus_send_byte` is the
+  structural twin of `uart_send_byte`: device reg block via the pointer at
+  `0x20009924`, TX-ring handle at fixed slot `+0xA50` into the bus context at
+  `0x20002B3C`; it masks TXEIE (CR1 bit 7, with a DSB/ISB pair) around the ring
+  push and re-enables it after re-loading the handle — same ABI quirk (implicitly
+  returns `ringbuf_push_byte`'s r0 status; 0 = ring full). It has two callers
+  (`sspm_bus_send_frame` and `FUN_08030b70`, a scheduler-paced buffer drainer left
+  for later), so it is exposed (not static) in `ssp.h`. `sspm_bus_send_frame` is
+  the SSPM-bus counterpart of `slip_send_frame`: SLIP framing (`0xC0` delimiters,
+  `0xC0→DB DC` / `0xDB→DB DD`) with a little-endian CRC-16 (poly `0xA001`, init
+  `0xFFFF`) trailer; returns 2 only if the closing `0xC0` can't be queued (matching
+  the OEM `cbz` at `0x0803A0A6`). Both adversarially verified instruction-by-
+  instruction against the disassembly — faithful, no discrepancies. Build clean
+  (`text 1996`, 0 warnings); renamed 1 + 2 prototypes, program saved.
+
+- **GPIO HAL deinit + EXTI ISR (CubeF4 `stm32f4xx_hal_gpio.c`)** — completed the
+  GPIO HAL surface in **`src/gpio.c`** + **`include/gpio.h`**: `HAL_GPIO_DeInit`
+  (`0x08026990`) and `HAL_GPIO_EXTI_IRQHandler` (`0x08026AD4`); Init/ReadPin/WritePin
+  were already done (vendor-stock). Confirmed stock CubeF4 from the literal pools
+  (SYSCFG `0x40013800`, GPIOA `0x40020000`, EXTI `0x40013C00`). `HAL_GPIO_DeInit`
+  walks pins 0..15: for each selected pin it checks `SYSCFG->EXTICR[pos>>2]` still
+  maps the line to this bank (open-coded `GPIO_GET_INDEX`, A=0..H=7) before clearing
+  `EXTI->{IMR,EMR,RTSR,FTSR}` + the EXTICR nibble, then unconditionally returns the
+  pad to reset (MODER/AFR/PUPDR/OTYPER/OSPEEDR). The OEM register-write **order is
+  not the textbook stock-source order** — it is MODER(`+0x00`)→AFR(`+0x20`)→
+  PUPDR(`+0x0C`)→OTYPER(`+0x04`)→OSPEEDR(`+0x08`); the C reproduces that exact
+  order and offset mapping. `HAL_GPIO_EXTI_IRQHandler` is the 4-line pending-bit
+  demux (`if (EXTI->PR & pin) { EXTI->PR = pin; HAL_GPIO_EXTI_Callback(pin); }`).
+  Added the `GPIO_TypeDef`/`EXTI_TypeDef`/`SYSCFG_TypeDef` register blocks to
+  `gpio.h`. The application's overriding `HAL_GPIO_EXTI_Callback` (`0x08038964`, a
+  real ~150-byte body, called directly by the ISR) was **named** + prototyped this
+  pass but its body left for a future pass (still `FUN_`-class work, not stock).
+  Adversarially verified against the raw Thumb-2 disassembly — all three faithful:
+  the non-textbook write order, every mask width (2-bit MODER/PUPDR/OSPEEDR, 1-bit
+  OTYPER, 4-bit AFR/EXTICR), the `position>>2`/`(position&3)<<2` EXTICR index math,
+  the A..H index table, and the rc_w1 PR-clear semantics all confirmed. Build clean
+  (`text 1996`, 0 warnings; gc'd like the rest — nothing roots it yet).
+
+- **UART HAL init/config/deinit (CubeF4 `stm32f4xx_hal_uart.c`)** — sourced the
+  UART bring-up path into **`src/uart.c`** + **`include/uart.h`** (`docs/uart.md`):
+  `HAL_UART_Init` (`0x08026CFC`), the static `UART_SetConfig` (`0x08026AF0`), and
+  `HAL_UART_DeInit` (`0x08026D5A`). This is the foundation beneath all eight
+  `uartX_init`/`usartX_init` wrappers (modem, e-shifter, display, inter-module
+  buses). Confirmed stock CubeF4 from the literal pools: handle layout matches
+  `UART_HandleTypeDef` exactly (`Instance@+0x00`, `Init@+0x04`, `Lock@+0x38`,
+  `gState@+0x39`, `RxState@+0x3A`, `ErrorCode@+0x3C`); `UART_SetConfig` reproduces
+  the CR1/CR2/CR3 framing masks and the `UART_DIV_SAMPLING8/16` BRR math
+  (OVER8 → `(pclk*25)/(2*baud)`, frac `(rem*8+50)/100`, BRR
+  `mant<<4 | (frac&0xF8)<<1 | frac&0x7`; OVER16 → `/(4*baud)`, frac
+  `(rem*16+50)/100`, BRR `mant<<4 | frac&0xF0 | frac&0xF`), with **PCLK2** for the
+  APB2 instances (`USART1`/`USART6`/`UART9`/`UART10` at `0x40011000 + n*0x400`)
+  and **PCLK1** for the rest. The OEM `pclk*25` numerator is a 64-bit dividend
+  (`__aeabi_uldivmod`, `0x08020AE4`); modelled behaviour-equivalently as a
+  `uint64_t` divide (the `0x51EB851F`/`>>37` ÷100 magic written as `/100`). The
+  runtime byte path stays the IRQ + ring-buffer `uart_send_byte` (already in
+  `uart.c`); the blocking `HAL_UART_Transmit`/`Receive` are not used by this
+  firmware. Adversarially verified against the raw Thumb-2 disassembly — all
+  three faithful, the OVER8/OVER16 branches confirmed not swapped, every bitmask
+  exact. Externs kept out of scope: `HAL_UART_MspInit` (`0x080333C0`,
+  per-USART GPIO-AF + RCC-enable + NVIC), `HAL_UART_MspDeInit` (`0x08033740`),
+  `HAL_RCC_GetPCLK1Freq` (`0x08027374`), `HAL_RCC_GetPCLK2Freq` (`0x08027394`).
+  Build clean (`text 1996`, 0 warnings). Triage note: the adjacent GPIO HAL is
+  one pass from complete — `HAL_GPIO_DeInit` (`0x08026990`) and
+  `HAL_GPIO_EXTI_IRQHandler` (`0x08026AD4`) remain `FUN_` (Init/ReadPin/WritePin
+  already done).
 
 - **I²C HAL driver (CubeF4 `stm32f4xx_hal_i2c.c` transfer layer)** — sourced the
   entire blocking master/memory I²C driver into **`src/i2c.c`** + **`include/i2c.h`**

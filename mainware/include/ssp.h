@@ -54,4 +54,20 @@ uint8_t ssp_ble_enqueue_tx_packet(uint16_t cmd, uint16_t len,
  * 0x0803F4F0. */
 uint32_t slip_send_frame(const uint8_t *buf, int len);
 
+/* Inter-module ("SSPM") bus TX path — the second serial link, to the
+ * battery/motor/shifter modules (distinct from the BLE-coprocessor UART). */
+
+/* Push one byte into the SSPM-bus TX ring; implicitly returns ringbuf_push_byte's
+ * status (1 = pushed, 0 = ring full). OEM sspm_bus_send_byte at 0x0803662C. */
+int sspm_bus_send_byte(uint8_t b);
+
+/* Pull one byte from the SSPM-bus RX ring into *out; implicitly returns
+ * ringbuf_get_byte's status (1 = byte produced, 0 = ring empty). The RX twin of
+ * sspm_bus_send_byte. OEM sspm_bus_get_byte at 0x08036664. */
+int sspm_bus_get_byte(uint8_t *out);
+
+/* SLIP-frame + transmit a buffer over the SSPM bus with a CRC-16 trailer.
+ * Returns 0 on success, 2 on TX error. OEM sspm_bus_send_frame at 0x0803A008. */
+uint32_t sspm_bus_send_frame(const uint8_t *buf, uint16_t len);
+
 #endif

@@ -654,6 +654,58 @@ deferred (toolchain-provided runtime + intentionally-skipped thunks/veneers),
 > signed-current SOC integration, `0x3840` divisor + `rsoc_set`), **nop_e290** (empty
 > stub), **dma_xfer_wait** (`0x080150DC`). Renamed + plate-commented in Ghidra, saved.
 > ~35 FUN_ remain (fuel-gauge/protection internals, HAL helpers, thunks) for later passes.
+>
+> **2026-06-10 (named ALL remaining FUN_ functions — zero FUN_ now remain).** Completed the
+> sweep of the other ~35 unnamed functions. Highlights:
+> - Completed main_loop's state-dispatch decode: the full slot->handler map is on `state_run_01`'s
+>   plate comment. Renamed the 5 from the prior pass to `state_run_NN` (NN = main-loop dispatch
+>   slot, decimal) to avoid colliding with the differently-numbered paired `state_timer_XX`, and
+>   added the 4 remaining pollers: **state_run_11** (`0x08000F3C`), **state_run_15** (`0x08006B28`),
+>   **state_run_16** (`0x08006CB4`), **state_run_17** (`0x08006E40`).
+> - **modem_command_dispatch** (`0x0800CE9E`, func-0x06 handler: cw 1–0x1a jumptable, `cw==0x95`
+>   ship, `cw==0x80` firmware-update with flash programming), **cmd_resp_thunk1/2** (`0x0800D846/4A`).
+> - HAL: **rcc_osc_config** (`0x0800FDAC`, HAL_RCC_OscConfig), **rcc_clock_config** (`0x08010554`),
+>   **dma_ch_setup** (`0x0800EDF0`), **gpio_init** (`0x08007D78`), **gpio_configure** (`0x0800F7E4`,
+>   HAL_GPIO_Init), **libc_init_array** (`0x08011E20`) + **init_stub** (`0x08011E8C`, empty _init),
+>   **comms_dma_init** (`0x08006FBC`), **return_r3** (`0x0801053E`).
+> - USART: **uart_irq_handler** (`0x08013FCC`), **uart_rxtx_handler** (`0x08014BFC`, RX ring 0x400),
+>   **uart_puthex_word** (`0x080080A8`), **uart_putdec_wide** (`0x080081A8`, the %d/%w printer).
+> - **store_bytes_be** (`0x0800EFF8`), **flash_erase_thunk** (`0x0800EDD6`), **veneer_155ac/bc/dc/fc**
+>   (indirect-call trampolines).
+> - Provisional (prefixed `maybe_`, behaviour clear but exact role unconfirmed): **maybe_op_poll**
+>   (`0x0800F3AC`, op-complete poll w/ timeout), **maybe_dma_align_config** (`0x0800F188`),
+>   **maybe_irq_flag_remap**/`maybe_irq_flag_remap2` (`0x0800F490`/`0x08015434`, peripheral flag
+>   remap), **maybe_protection_debounce**/`maybe_protection_mon2` (`0x08013E5C`/`0x08013F34`),
+>   **maybe_threshold_bin** (`0x08014AF8`), **maybe_fg_scale** (`0x08013860`),
+>   **maybe_cmd_dispatch_tail** (`0x0800D8C6`).
+> Renamed + saved in Ghidra. **Every function in batteryware_1.17.1.bin now has a name** (the
+> `maybe_*` ones are best-guess and flagged for confirmation).
+>
+> **2026-06-10 (refinement pass — confirmed names + folds + rodata labels).** No undefined or
+> FUN_ functions remain (313 functions; verified the 104 code-gaps are constant pools, in-function
+> switch arms, or the rodata/string block — not missing functions). Confirmed 5 of the 8
+> provisional `maybe_*` from their callers/registers and renamed them:
+> - **flash_wait_last_op** (`0x0800F3AC`, was maybe_op_poll) — polls FLASH_SR BSY at `0x40022018`
+>   + error flags, returns OK/ERR(1)/TIMEOUT(3); called by `flash_word_write`, `spi_register_write`,
+>   `dma_channel_reset_all` (FLASH base `0x40022000` confirmed via its literal pool).
+> - **flash_set_errorcode** (`0x0800F490`) / **flash_set_errorcode2** (`0x08015434`) — map FLASH_SR
+>   error bits into the HAL FLASH handle's ErrorCode (`0x200047E0`); the `_2` is the DMA-path copy
+>   called by `dma_wait_done`.
+> - **dma_config_align** (`0x0800F188`) — DMA transfer-width alignment check + CCR write (called by
+>   `dma_ch_setup`).
+> - **cmd_dispatch_tail** (`0x0800D8C6`) — shared command-response tail (called by
+>   `uart_protocol_handler`, `cmd_proc_blk_c278`, `cmd_send_response`).
+> The other 4 `maybe_*` (`maybe_protection_debounce`/`_mon2`, `maybe_threshold_bin`, `maybe_fg_scale`)
+> have **no direct caller** — they're invoked through runtime-populated function-pointer tables
+> (the `+0x5000` offset hides the xref), so they stay provisional; plate comments now record their
+> behaviour + dispatch nature.
+> Documented the uart_protocol_handler fold: plate comments on `uart_protocol_handler` (0x0800AFA4)
+> and its three interior blocks (`b328`/`c24c`/`c278`) mark them as one logical ~2.5 KB function
+> (not structurally merged — re-defining a multi-jumptable function risks breaking the flow analysis).
+> Labeled the rodata: `cmd_name_table` (`0x08012B9C`), `cmd_dispatch_jumptable` (`0x08012FD8`),
+> `rodata_strings_tables` (`0x08011F92`). Full string typing skipped on purpose — the program's
+> `+0x5000` pointer offset would make data-typing create xrefs to shadow addresses (noise), not
+> resolve the string references. Saved.
 
 ## Functions
 

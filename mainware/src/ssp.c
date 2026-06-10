@@ -36,8 +36,11 @@ extern void    state_flags_set(uint32_t set_mask, uint32_t clear_mask);
 extern uint8_t maybe_get_bike_state(void);
 extern void    update_mode_request(uint8_t mode);
 extern void    shifter_mode_command_dispatch(uint8_t cmd);
-extern void    sspm_bus_send_frame(const uint8_t *buf, uint16_t len);  /* OEM 0x0803A008 */
 extern void    HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
+
+/* Inter-module (SSPM) bus TX primitives — defined at the end of this file. */
+int      sspm_bus_send_byte(uint8_t b);                       /* OEM 0x0803662C */
+uint32_t sspm_bus_send_frame(const uint8_t *buf, uint16_t len); /* OEM 0x0803A008 */
 
 /* One outbound packet descriptor (12 bytes); type == 5 means the slot is in use. */
 typedef struct {
@@ -643,4 +646,104 @@ uint8_t ssp_ble_tx_queue_pump(void)
             return 0;
         }
     }
+}
+
+/* ── inter-module (SSPM) bus TX path ─────────────────────────────────────────
+ * The mainware reaches the battery/motor/shifter modules over a second serial
+ * link (distinct from the BLE-coprocessor UART used by uart_send_byte). This is
+ * its byte primitive and SLIP framer; sspm_tx_queue_pump above feeds it. */
+
+/* Push one byte into the SSPM-bus TX ring (OEM sspm_bus_send_byte, 0x0803662C).
+ * The twin of uart_send_byte, but for the inter-module-bus peripheral: the
+ * device register block is reached through the pointer at 0x20009924, and the
+ * TX-ring handle lives at a fixed slot 0xA50 into the bus context at 0x20002B3C.
+ * The control register at dev+0xC carries TX-interrupt-enable in bit 7; the OEM
+ * masks it (with a DSB/ISB pair so the disable lands) around the ring push, then
+ * re-enables it after re-loading the handle.
+ *
+ * Same ABI quirk as uart_send_byte: the function never recomputes a return value
+ * — ringbuf_push_byte's status survives in r0 through the trailing register
+ * re-enable, so it implicitly returns that status (1 = pushed, 0 = ring full).
+ * sspm_bus_send_frame maps a 0 here to a TX error. */
+int sspm_bus_send_byte(uint8_t b)
+{
+    volatile uint32_t *dev = *(volatile uint32_t * volatile *)0x20009924u;
+
+    dev[0xC / 4] &= ~0x80u;                       /* mask TX interrupt (TXEIE) */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    ringbuf_t *rb = *(ringbuf_t * volatile *)(0x20002B3Cu + 0xA50u);
+    uint32_t rc = ringbuf_push_byte(rb, b);
+
+    dev = *(volatile uint32_t * volatile *)0x20009924u;   /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x80u;                         /* re-enable TX interrupt */
+    return (int)rc;
+}
+
+/* SLIP byte emit with escaping (helper for sspm_bus_send_frame). Mirrors slip_put
+ * but routes through the SSPM-bus byte primitive. */
+static void sspm_put(uint8_t b)
+{
+    if (b == SLIP_END) {
+        sspm_bus_send_byte(SLIP_ESC);
+        sspm_bus_send_byte(SLIP_ESC_END);
+    } else if (b == SLIP_ESC) {
+        sspm_bus_send_byte(SLIP_ESC);
+        sspm_bus_send_byte(SLIP_ESC_ESC);
+    } else {
+        sspm_bus_send_byte(b);
+    }
+}
+
+/* SLIP-frame + transmit a buffer over the inter-module (SSPM) bus with a CRC-16
+ * trailer (OEM sspm_bus_send_frame, 0x0803A008). The SSPM-bus counterpart of
+ * slip_send_frame; wire format is identical —
+ *   0xC0 [escaped payload] [escaped CRC-lo] [escaped CRC-hi] 0xC0
+ * with the little-endian CRC-16 appended. Returns 0 on success, 2 if the closing
+ * delimiter could not be queued (only that final byte's TX status is checked,
+ * matching the OEM). */
+uint32_t sspm_bus_send_frame(const uint8_t *buf, uint16_t len)
+{
+    uint16_t crc = crc16(buf, len, 0xFFFFu);
+
+    sspm_bus_send_byte(SLIP_END);
+    while (len != 0) {
+        sspm_put(*buf);
+        buf++;
+        len--;
+    }
+    sspm_put((uint8_t)(crc & 0xFF));
+    sspm_put((uint8_t)((crc >> 8) & 0xFF));
+
+    if (sspm_bus_send_byte(SLIP_END) == 0) {
+        return 2;
+    }
+    return 0;
+}
+
+/* Pull one byte from the SSPM-bus RX ring (OEM sspm_bus_get_byte, 0x08036664).
+ * The RX twin of sspm_bus_send_byte: the same device register block (pointer at
+ * 0x20009924), but the RX-ring handle is at slot 0xA54 of the bus context at
+ * 0x20002B3C, and the control register at dev+0xC has RX-interrupt-enable in bit
+ * 5 (0x20) — masked (with a DSB/ISB pair) around the ring access, then restored.
+ *
+ * Same ABI quirk as ssp_rx_byte / sspm_bus_send_byte: the function leaves
+ * ringbuf_get_byte's status in r0 untouched through the trailing register
+ * re-enable, so it implicitly returns that status (1 = byte produced, 0 = empty).
+ * The motor-DSP download pumps and the SSPM RX de-framer rely on this. */
+int sspm_bus_get_byte(uint8_t *out)
+{
+    volatile uint32_t *dev = *(volatile uint32_t * volatile *)0x20009924u;
+
+    dev[0xC / 4] &= ~0x20u;                       /* mask RX interrupt (RXNEIE) */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    ringbuf_t *rb = *(ringbuf_t * volatile *)(0x20002B3Cu + 0xA54u);
+    uint32_t rc = ringbuf_get_byte(rb, out);
+
+    dev = *(volatile uint32_t * volatile *)0x20009924u;   /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x20u;                         /* re-enable RX interrupt */
+    return (int)rc;
 }
