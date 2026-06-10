@@ -104,11 +104,14 @@ soft float for now.
 | `0x20009360` | 6 | `g_button_sm` | `states.c` | three button/announce state machines (`button_press_state_machines_step`); `announce_records_reset(mask)` resets them — phase bytes `[0..2]`, dispatch-state bytes `[3..5]` (machine A re-arms to state 5, B/C to 0). |
 | `0x20006E44` | ≥2 | `g_reset_sm` | `ble.c` / (reset-SM) | factory-reset / power-cycle SM control block (`factory_reset_sm_step`): `[0]` main_state (4 = kick), `[1]` sub_step (0..6). `post_request_with_arg` seeds `[1]` then sets `[0]=4`. |
 | `0x20000944` | 4 | `g_app_ctx_ptr` | `app.c` | pointer to the app context used by `channel_resolve_status`; the three sound-group volume-tier masks (low/medium/high) are at `*ptr + 0xF4/0xF8/0xFC` (see `g_ctx` row; defaults from `sound_groups_init_default`). |
-| `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` | UART/bus driver context; `+0xB3C` = TX ring-buffer pointer (`uart_send_byte`), `+0xB40` = RX ring-buffer pointer (`ssp_rx_byte`). |
+| `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` / `bus.c` | shared serial driver context holding two UARTs' ring handles. **UART4** (BLE): `+0xB3C` TX ring (`uart_send_byte`), `+0xB40` RX ring (`ssp_rx_byte` / `uart4_irq_handler`). **UART5** (BMS/battery bus): `+0x330` TX ring (`bus_tx_enqueue_byte`), `+0x334` RX ring (`bus_rx_byte_locked` / `uart5_irq_handler`). |
 | `0x20007E14` | 16×24 + tail | `g_msg_tx_table` | `ssp.c` | inter-module-bus outbound message table (`maybe_enqueue_tx_message` fills, `sspm_tx_queue_pump` drains): 16 slots × 24 B (`[0]`=type, `[1]`=state/retry, `[3]`=handle, `[4..5]`=arg, `[6..7]`=len, `[8..23]`=payload); trailing `+0x181` committed counter, `+0x182` round-robin scan index, `+0x184` frame staging buffer (`0x20007F98`, sent via `sspm_bus_send_frame`). Distinct from the BLE/SSP queue at `0x20008A40`. |
 | `0x20008A40` | ≥0x60C | `g_ssp_ble_tx_queue` | `ssp.c` | BLE-side outbound SLIP queue (`ssp_ble_tx_queue_pump`): 128 slots × 0xC B (`[0]`=type, `[1]`=state/retry, `[3]`=u8, `[4..5]`=arg, `[6..7]`=len, `[8..0xB]`=malloc'd payload ptr); control `+0x601` stall counter, `+0x602` scan index, `+0x604..` SLIP frame staging buffer (`0x20009044`, sent via `slip_send_frame`). |
 | `0x200000F0` | 2 | `g_ssp_ble_tx_timers` | `ssp.c` | `ssp_ble_tx_queue_pump` pacing-timer slots: `[0]` "retry_tmr" (100t), `[1]` "packet_tmr" (1t). The rolling TX seq `g_ssp_tx_seq` is at `+0x10` (`0x20000100`). |
-| `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | pointer-to-pointer to the UART/bus peripheral block. `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TX-int); `ssp_rx_byte` masks/sets bit 5 of `(*(*g_uart_dev_pp))+0xC` (RX-int — a second deref hop). |
+| `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | **UART4** (BLE-coproc) device-handle pointer-to-pointer (set by `uart4_init`). `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TXEIE); `ssp_rx_byte` masks/sets bit 5 (RXNEIE — a second deref hop). `uart4_irq_handler` is the RX/TX byte pump. |
+| `0x20009964` | 4 | `g_uart5_dev_pp` | `bus.c` | **UART5** (BMS/battery Modbus bus, slave 0xAA) device-handle pointer-to-pointer (set by `uart5_init`). `bus_tx_enqueue_byte`/`bus_rx_byte_locked` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart5_irq_handler` is the RX/TX byte pump. Rings in `g_uart_ctx` `+0x330`/`+0x334`. |
+| `0x20009924` | 4 | `g_sspm_dev_pp` | `ssp.c` | **USART6** (inter-module SSPM bus) device-handle pointer-to-pointer (set by `usart6_init`). `sspm_bus_send_byte`/`sspm_bus_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart6_irq_handler` is the RX/TX byte pump (clears errors first, gates RX on RXNE+RXNEIE alone). |
+| `0x20002B3C` | ≥0xA56 | `g_sspm_ctx` | `ssp.c` | USART6 SSPM-bus ring context: `+0xA50` TX ring ptr, `+0xA54` RX ring ptr. |
 | `0x2000001C` | ≥0x3A | `g_shifter_sm` | `shifter.c` | shifter control-SM slot-record: `+1` step, `+3/4/5/7/9/0xA` scheduler slots, `+6` substate, `+8` current gear, `+0x34/0x35` retries. |
 | `0x2000008C` | 4 | `g_modbus_crc` | `shifter.c` | shifter Modbus CRC-16 accumulator (u16, init `0xFFFF`, poly `0xA001`); `+2` (`0x2000008E`) = the queue / RX-flush scheduler slot (`0xFA`=none). |
 | `0x2000019C` | ≥0x4C | `g_shifter_ctx` | `shifter.c` | shifter subsystem state: `+0` update step, `+1` commit, `+2` result, `+4` active flag, `+8` staged pack header, `+0x14` image len, `+0x30` prog offset, `+0x37` seq-poll step, `+0x38` link-fail, `+0x39` comm-fail. |
@@ -261,6 +264,15 @@ re-pointed to `0x08020200` as the first instruction of `main`.
 | CRC | `0x40023000` | HW CRC-32 | `crc_init` |
 | DMA1/DMA2 | `0x40026000/0400` | clocks + IRQ 0x0C/0x38 | `dma_controller_init` |
 | WWDG | `0x40002C00` | reload 0x7F each loop | `watchdog_init` |
+
+Four of the serial links carry interrupt-driven byte traffic through a SW
+ring-buffer pair; the RX/TX byte-pump ISR (invoked via a thin vector trampoline)
+moves bytes between the USART register block and the rings, and also clears any
+latched SR error flag (PE/FE/NE/ORE) by reading SR then DR (RM0430):
+`usart3_irq_handler` (USART3, eShifter — `shifter.c`), `uart4_irq_handler`
+(UART4, BLE coproc — `uart.c`), `uart5_irq_handler` (UART5, BMS/battery Modbus bus
+— `bus.c`), `usart6_irq_handler` (USART6, inter-module SSPM bus — `ssp.c`). The
+other instances (USART1/2, UART7/8) are not yet wired to decoded ISRs.
 
 On-board I2C devices, probed in the `mainware_boot_init_sequence` self-test
 (each failure increments a fault counter; ≥3 → I2C bus recovery + retry):

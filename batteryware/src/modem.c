@@ -147,10 +147,15 @@ void bootloader_entry(void)
  */
 void modem_send_2bytes(uint8_t b1, uint8_t b2)
 {
-    volatile uint32_t * const s_buf_idx   = (volatile uint32_t *)0x200047D0;
+    /* Widths match the OEM accesses verbatim: the index and remaining
+     * count are halfwords (ldrh/strh) and the tx counter is a byte
+     * (ldrb/strb). The index lives at 0x200047D0 and rx_state at the
+     * adjacent halfword 0x200047D2 — a 32-bit access here would fold
+     * rx_state into the high half and corrupt the write offset. */
+    volatile uint16_t * const s_buf_idx   = (volatile uint16_t *)0x200047D0;
     volatile uint8_t  * const s_buf_base  = (volatile uint8_t  *)0x20004648;
-    volatile uint32_t * const s_buf_rem   = (volatile uint32_t *)0x200047D4;
-    volatile uint32_t * const s_tx_count  = (volatile uint32_t *)0x20004748;
+    volatile uint16_t * const s_buf_rem   = (volatile uint16_t *)0x200047D4;
+    volatile uint8_t  * const s_tx_count  = (volatile uint8_t  *)0x20004748;
 
     s_buf_base[*s_buf_idx] = b1;
     *s_buf_idx += 1;
