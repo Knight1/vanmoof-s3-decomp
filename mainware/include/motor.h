@@ -46,4 +46,11 @@ int motor_dl_autobaud_step(void);
  * length is parsed from the first two streamed bytes. OEM 0x08030D88. */
 int motor_dl_stream_block_step(const uint8_t *buf, int start);
 
+/* The top-level motor-controller (F2806x) firmware-update FSM, ticked from the
+ * super-loop. 14 states: reset-pulse the DSP into its serial bootloader, SCI
+ * autobaud, upload a handshake payload + the staged motor pack (validating its
+ * magic/type/version header), then release the DSP. OEM motor_fw_update_fsm_step
+ * at 0x08030FF4. Returns 0 = done/idle, 1 = busy, 2 = failed, 3 = waiting. */
+unsigned int motor_fw_update_fsm_step(void);
+
 #endif
