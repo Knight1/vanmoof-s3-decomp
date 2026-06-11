@@ -101,4 +101,11 @@ uint8_t modem_registration_get(void);
  * "Wrong iccid" + Holder/PCB on mismatch. Runs at the POWEROFF recycle. */
 void sim_iccid_check(void);
 
+/* USART2 byte transport for the modem AT channel. modem_uart_putc is the locked
+ * single-byte TX (OEM 0x080360F8, returns the ring-push status); modem_uart_flush
+ * (above, extern) is its NUL-terminated-string wrapper. usart2_irq_handler is the
+ * RX/TX byte-pump ISR (OEM 0x0803617C). */
+int  modem_uart_putc(uint8_t b);
+void usart2_irq_handler(void);
+
 #endif

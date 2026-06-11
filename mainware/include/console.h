@@ -1,6 +1,8 @@
 #ifndef MAINWARE_CONSOLE_H
 #define MAINWARE_CONSOLE_H
 
+#include <stdint.h>
+
 /* Debug serial-console handlers for the "ES3" prompt exposed by
  * mainware on the main-controller's debug UART. The console reads a
  * line at a time and invokes one of several per-state callbacks
@@ -77,7 +79,7 @@ void console_cmd_swritereg(char *args);        /* `swritereg` 0x08041528 */
 void console_cmd_help(char *args);             /* `help`      0x08040AA0 */
 void console_cmd_logout(char *args);           /* `logout`    0x08040A4C */
 void console_cmd_blereset(char *args);         /* `blereset`  0x08041FB8 */
-void console_cmd_bledebug(char *args);         /* `bledebug`  0x08040C6C (→UART8) */
+void console_cmd_bledebug(char *args);         /* `bledebug`  0x08040C6C (→UART7) */
 void console_cmd_loop(char *args);             /* `loop`      0x08040C28 */
 void console_cmd_logapp(char *args);           /* `logapp`    0x08041E94 */
 void console_cmd_powerchange(char *args);      /* `powerchange` 0x080412BC */
@@ -90,5 +92,27 @@ void console_cmd_bmsdebug(char *args);         /* `bmsdebug`  0x08040CD8 */
 void console_cmd_stcreset(char *args);         /* `stcreset`  0x080415EC */
 void console_cmd_setoad(char *args);           /* `setoad`    0x080415B4 */
 void console_cmd_setgear(char *args);          /* `setgear`   0x080413B4 */
+
+/* ── UART8 (the ES3 console prompt) byte transport ──────────────────────────
+ * Installed into the g_log_func dispatch table by console_io_table_install:
+ * [0]=console_printf, [1]=uart8_tx_byte, [2]=uart8_puts, [3]=uart8_write,
+ * [4]=uart_rx_ringbuf_get_byte. console_printf is g_log_func[0], the
+ * firmware-wide printf. */
+int  console_printf(const char *fmt, ...);          /* OEM 0x080367F0 */
+int  uart8_tx_byte(uint8_t b);                       /* OEM 0x08036754 */
+void uart8_puts(const char *s);                      /* OEM 0x0803678C */
+void uart8_write(const uint8_t *buf, uint16_t len);  /* OEM 0x0803679E */
+int  uart_rx_ringbuf_get_byte(uint8_t *out);         /* OEM 0x080367B8 (1 = got a byte) */
+void uart8_irq_handler(void);                        /* OEM 0x080368D4 */
+
+/* ── USART1 (the second ES3 console port, twin of UART8) byte transport ──────
+ * Bound into g_log_func by usart1_io_table_install while USART1 is the active
+ * console; usart1_printf is then g_log_func[0]. */
+int  usart1_printf(const char *fmt, ...);            /* OEM 0x08035EBC */
+int  usart1_tx_byte(uint8_t b);                      /* OEM 0x08035E28 */
+void usart1_puts(const char *s);                     /* OEM 0x08035E5C */
+void usart1_write(const uint8_t *buf, uint16_t len); /* OEM 0x08035E6E */
+int  usart1_rx_byte(uint8_t *out);                   /* OEM 0x08035E88 (1 = got a byte) */
+void usart1_irq_handler(void);                       /* OEM 0x08035F98 */
 
 #endif

@@ -22,6 +22,7 @@
 #include "modem.h"
 #include "log.h"
 #include "scheduler.h"
+#include "util.h"   /* ringbuf_t + ring primitives for the USART2 transport */
 
 /* ------------------------------------------------------------------ *
  *  externs — HAL / libc / cross-module helpers (OEM addresses noted)
@@ -31,10 +32,13 @@ extern int   HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);             /* 0x
 extern int   snprintf(char *s, unsigned int n, const char *fmt, ...);
 extern void *memset(void *s, int c, unsigned int n);
 
-/* The modem UART (the SARA AT channel) ring transport. */
-extern int   modem_uart_rx_byte(char *out);          /* 0x08036144: 0 = got a byte */
+/* The modem UART (the SARA AT channel) ring transport == USART2. The locked
+ * RX getter and the string-flush (puts) are sourced at the bottom of this file;
+ * modem_uart_tx_byte is a *different* function — a software line-buffer append,
+ * not a USART driver — so it stays a true extern. */
+extern int   modem_uart_rx_byte(char *out);          /* 0x08036144: 1 = got a byte */
 extern int   modem_uart_tx_byte(void *h, char b);    /* 0x08035C94: 0/2 status      */
-extern void  modem_uart_flush(void *buf);            /* 0x08036130                  */
+extern void  modem_uart_flush(void *buf);            /* 0x08036130 (USART2 puts)    */
 extern void  modem_at_response_copy(void *dst, int src); /* 0x0802F404              */
 
 /* Bounded byte compare (OEM 0x0802181C — the GNU word-at-a-time strncmp).
@@ -1249,4 +1253,112 @@ int modem_build_ugaop(void *pkt)
     if (n < 1)
         return 3;
     return ((unsigned)n < (unsigned)(uintptr_t)p[1]) ? 0 : 3;
+}
+
+/* ------------------------------------------------------------------ *
+ *  USART2 — the GSM/SARA AT-channel byte transport
+ *
+ *  The modem hangs off USART2. Its register-block handle is reached through a
+ *  pointer-to-pointer at 0x200099A4 (set by usart2_init); the TX ring handle is
+ *  at ctx+0x410 and the RX ring at +0x414 (the ctx block at 0x2000094C is shared
+ *  with USART3 — the offsets differ). The locked TX/RX primitives mask the
+ *  relevant CR1 interrupt-enable bit (TXEIE 0x80 / RXNEIE 0x20) behind a DSB/ISB
+ *  before touching the ring, then re-enable it. ABI quirk preserved: the ring
+ *  status that ringbuf_push_byte / ringbuf_get_byte leave in r0 survives the
+ *  trailing re-enable and is the implicit return value (1 = byte moved).
+ * ------------------------------------------------------------------ */
+
+#define GSM_HANDLE   (*(volatile uint32_t * volatile *)0x200099A4u)
+#define GSM_CTX      0x2000094Cu
+#define GSM_TX_RING  (*(ringbuf_t * volatile *)(GSM_CTX + 0x410u))
+#define GSM_RX_RING  (*(ringbuf_t * volatile *)(GSM_CTX + 0x414u))
+
+/* Clear a latched USART error flag the RM0430 way: if `flag` (PE 0x1 / FE 0x2 /
+ * NE 0x4 / ORE 0x8) is set in SR, read SR then DR — that read sequence clears the
+ * sticky error bit (and discards the offending byte). Reading DR is what actually
+ * de-asserts ORE, so dropping it would wedge RX on an overrun. */
+static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
+{
+    volatile uint32_t tmp;
+    if ((d[0] & flag) != 0) {
+        tmp = 0;
+        tmp = d[0];   /* SR */
+        tmp = d[1];   /* DR */
+        (void)tmp;
+    }
+}
+
+/* Locked single-byte TX into the USART2 TX ring (OEM 0x080360F8). */
+int modem_uart_putc(uint8_t b)
+{
+    volatile uint32_t *dev = GSM_HANDLE;
+
+    dev[0xC / 4] &= ~0x80u;                        /* mask TXEIE */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    uint32_t rc = ringbuf_push_byte(GSM_TX_RING, b);
+
+    dev = GSM_HANDLE;                              /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x80u;                         /* re-enable TXEIE */
+    return (int)rc;
+}
+
+/* Transmit a NUL-terminated string over USART2 (OEM modem_uart_flush, 0x08036130). */
+void modem_uart_flush(void *buf)
+{
+    const char *s = (const char *)buf;
+
+    for (; *s != '\0'; s++) {
+        modem_uart_putc((uint8_t)*s);
+    }
+}
+
+/* Locked single-byte RX from the USART2 RX ring (OEM 0x08036144).
+ * Returns 1 when a byte was dequeued into *out, 0 when the ring was empty. */
+int modem_uart_rx_byte(char *out)
+{
+    volatile uint32_t *dev = GSM_HANDLE;
+
+    dev[0xC / 4] &= ~0x20u;                        /* mask RXNEIE */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    uint32_t rc = ringbuf_get_byte(GSM_RX_RING, (uint8_t *)out);
+
+    dev = GSM_HANDLE;                              /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x20u;                         /* re-enable RXNEIE */
+    return (int)rc;
+}
+
+/* USART2 RX/TX byte-pump ISR (OEM 0x0803617C), invoked via a thin vector
+ * trampoline. On RXNE with no parity/framing/noise/overrun error (SR bits 0-3
+ * clear) and RXNEIE set, push DR into the RX ring; then clear any latched
+ * PE/FE/NE/ORE error (read SR+DR); on TXE with TXEIE set, pop the next TX byte
+ * and write it to DR, disabling TXEIE when the ring drains. The RX/TX gates use
+ * SR/CR1 sampled once; the error-clear block and TX writes re-load the handle. */
+void usart2_irq_handler(void)
+{
+    volatile uint32_t *dev = GSM_HANDLE;
+    uint32_t sr  = dev[0];
+    uint32_t cr1 = dev[0xC / 4];
+
+    if ((sr & 0xFu) == 0 && (sr & 0x20u) != 0 && (cr1 & 0x20u) != 0) {
+        ringbuf_push_byte(GSM_RX_RING, (uint8_t)dev[1]);
+    }
+
+    volatile uint32_t *d = GSM_HANDLE;
+    usart_clear_error_flag(d, 0x1u);
+    usart_clear_error_flag(d, 0x2u);
+    usart_clear_error_flag(d, 0x4u);
+    usart_clear_error_flag(d, 0x8u);
+
+    if ((sr & 0x80u) != 0 && (cr1 & 0x80u) != 0) {
+        uint8_t b;
+        if (ringbuf_get_byte(GSM_TX_RING, &b) == 0) {
+            GSM_HANDLE[0xC / 4] &= ~0x80u;
+        } else {
+            GSM_HANDLE[1] = b;
+        }
+    }
 }

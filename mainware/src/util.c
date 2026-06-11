@@ -69,6 +69,17 @@ uint32_t ringbuf_get_byte(ringbuf_t *rb, uint8_t *out)
     return 1;
 }
 
+/* Bytes of free space left in the ring (cap - count); 0 if rb is NULL. OEM
+ * ringbuf_free_space at 0x080318EC. console_printf busy-waits on this reaching
+ * cap (the FIFO fully drained) to push the next byte synchronously. */
+uint32_t ringbuf_free_space(const ringbuf_t *rb)
+{
+    if (rb == 0) {
+        return 0;
+    }
+    return (uint32_t)((int16_t)rb->cap - rb->count);
+}
+
 /* Linear-map v from input range [a,b] onto output range [c,d], clamping v to
  * [a,b] first (OEM telemetry_map_clamp, 0x0803a588). Used by the BLE 0x5541 SoC
  * scale (telemetry_map_clamp(soc, 0, 0x61, 0, 100)) and matrix_draw_speed. The

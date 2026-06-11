@@ -157,3 +157,125 @@ int uart_send_byte(uint8_t b)
     dev[0xC / 4] |= 0x80u;                         /* re-enable TX interrupt */
     return (int)rc;
 }
+
+/* Clear a latched USART error flag the RM0430 way: if `flag` (PE 0x1 / FE 0x2 /
+ * NE 0x4 / ORE 0x8) is set in SR, read SR then DR — that read sequence clears the
+ * sticky error bit (and discards the offending byte). The OEM inlines this CubeF4
+ * __HAL_UART_CLEAR_*FLAG idiom once per error bit. */
+static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
+{
+    volatile uint32_t tmp;
+    if ((d[0] & flag) != 0) {
+        tmp = 0;
+        tmp = d[0];   /* SR */
+        tmp = d[1];   /* DR */
+        (void)tmp;
+    }
+}
+
+/* UART4 RX/TX byte-pump ISR (OEM 0x08036560), the BLE-coprocessor link, invoked
+ * via a thin vector trampoline. On RXNE with no parity/framing/noise/overrun
+ * error (SR bits 0-3 clear) and RXNEIE set, push the data byte into the BLE RX
+ * ring (g_uart_ctx+0xB40, drained by ssp_rx_byte); then clear any latched
+ * PE/FE/NE/ORE error (read SR+DR); on TXE with TXEIE set, pop the next TX byte
+ * (g_uart_ctx+0xB3C, fed by uart_send_byte) and write it to DR, disabling TXEIE
+ * when the ring drains. The RX/TX gates use SR/CR1 sampled once; the error-clear
+ * block and TX-path register writes re-load the handle. */
+void uart4_irq_handler(void)
+{
+    volatile uint32_t *dev = *g_uart_dev_pp;
+    uint32_t sr  = dev[0];
+    uint32_t cr1 = dev[0xC / 4];
+
+    if ((sr & 0xFu) == 0 && (sr & 0x20u) != 0 && (cr1 & 0x20u) != 0) {
+        ringbuf_push_byte(*(ringbuf_t **)(g_uart_ctx + 0xB40u), (uint8_t)dev[1]);
+    }
+
+    volatile uint32_t *d = *g_uart_dev_pp;
+    usart_clear_error_flag(d, 0x1u);
+    usart_clear_error_flag(d, 0x2u);
+    usart_clear_error_flag(d, 0x4u);
+    usart_clear_error_flag(d, 0x8u);
+
+    if ((sr & 0x80u) != 0 && (cr1 & 0x80u) != 0) {
+        uint8_t b;
+        if (ringbuf_get_byte(*(ringbuf_t **)(g_uart_ctx + 0xB3Cu), &b) == 0) {
+            (*g_uart_dev_pp)[0xC / 4] &= ~0x80u;
+        } else {
+            (*g_uart_dev_pp)[1] = b;
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * UART7 — the BLE-coprocessor *debug* link (distinct from UART4's data link
+ * above). It is reached only through the command-mode passthrough bridge: the
+ * `bledebug` console command raises the bridge's UART7 flag, after which the
+ * bridge shuttles bytes between the debug console and this UART. The handle is a
+ * pointer-to-pointer at 0x200098E4; its TX ring handle sits at ctx+0x970 and the
+ * RX ring at +0x974 (the same ctx block UART8 uses, at a different offset pair).
+ * Same locked TX/RX primitives + RX/TX byte-pump ISR as UART4. The ring-push /
+ * ring-get status that survives in r0 is the implicit return value (1 = byte
+ * moved, 0 = ring full/empty); the bridge tests both.
+ * ------------------------------------------------------------------------- */
+
+#define UART7_HANDLE   (*(volatile uint32_t * volatile *)0x200098E4u)
+#define UART7_CTX      0x20003C34u
+#define UART7_TX_RING  (*(ringbuf_t * volatile *)(UART7_CTX + 0x970u))
+#define UART7_RX_RING  (*(ringbuf_t * volatile *)(UART7_CTX + 0x974u))
+
+int uart7_tx_byte(uint8_t b)
+{
+    volatile uint32_t *dev = UART7_HANDLE;
+
+    dev[0xC / 4] &= ~0x80u;                        /* mask TXEIE */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    uint32_t rc = ringbuf_push_byte(UART7_TX_RING, b);
+
+    dev = UART7_HANDLE;                            /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x80u;                         /* re-enable TXEIE */
+    return (int)rc;
+}
+
+int uart7_rx_byte(uint8_t *out)
+{
+    volatile uint32_t *dev = UART7_HANDLE;
+
+    dev[0xC / 4] &= ~0x20u;                        /* mask RXNEIE */
+    __asm volatile ("dsb 0xf" ::: "memory");
+    __asm volatile ("isb 0xf" ::: "memory");
+
+    uint32_t rc = ringbuf_get_byte(UART7_RX_RING, out);
+
+    dev = UART7_HANDLE;                            /* OEM re-loads the handle */
+    dev[0xC / 4] |= 0x20u;                         /* re-enable RXNEIE */
+    return (int)rc;
+}
+
+void uart7_irq_handler(void)
+{
+    volatile uint32_t *dev = UART7_HANDLE;
+    uint32_t sr  = dev[0];
+    uint32_t cr1 = dev[0xC / 4];
+
+    if ((sr & 0xFu) == 0 && (sr & 0x20u) != 0 && (cr1 & 0x20u) != 0) {
+        ringbuf_push_byte(UART7_RX_RING, (uint8_t)dev[1]);
+    }
+
+    volatile uint32_t *d = UART7_HANDLE;
+    usart_clear_error_flag(d, 0x1u);
+    usart_clear_error_flag(d, 0x2u);
+    usart_clear_error_flag(d, 0x4u);
+    usart_clear_error_flag(d, 0x8u);
+
+    if ((sr & 0x80u) != 0 && (cr1 & 0x80u) != 0) {
+        uint8_t b;
+        if (ringbuf_get_byte(UART7_TX_RING, &b) == 0) {
+            UART7_HANDLE[0xC / 4] &= ~0x80u;
+        } else {
+            UART7_HANDLE[1] = b;
+        }
+    }
+}

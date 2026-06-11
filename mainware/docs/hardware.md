@@ -112,6 +112,16 @@ soft float for now.
 | `0x20009964` | 4 | `g_uart5_dev_pp` | `bus.c` | **UART5** (BMS/battery Modbus bus, slave 0xAA) device-handle pointer-to-pointer (set by `uart5_init`). `bus_tx_enqueue_byte`/`bus_rx_byte_locked` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart5_irq_handler` is the RX/TX byte pump. Rings in `g_uart_ctx` `+0x330`/`+0x334`. |
 | `0x20009924` | 4 | `g_sspm_dev_pp` | `ssp.c` | **USART6** (inter-module SSPM bus) device-handle pointer-to-pointer (set by `usart6_init`). `sspm_bus_send_byte`/`sspm_bus_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart6_irq_handler` is the RX/TX byte pump (clears errors first, gates RX on RXNE+RXNEIE alone). |
 | `0x20002B3C` | ≥0xA56 | `g_sspm_ctx` | `ssp.c` | USART6 SSPM-bus ring context: `+0xA50` TX ring ptr, `+0xA54` RX ring ptr. |
+| `0x200099A4` | 4 | `g_gsm_dev_pp` | `modem.c` | **USART2** (GSM/SARA modem AT channel) device-handle pointer-to-pointer (set by `usart2_init`). `modem_uart_putc`/`modem_uart_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart2_irq_handler` is the RX/TX byte pump. Rings in `g_usart3_rings` (`0x2000094C`) `+0x410` TX / `+0x414` RX. |
+| `0x200098E4` | 4 | `g_uart7_dev_pp` | `uart.c` | **UART7** (BLE-coproc *debug* link, reached via the `bledebug` passthrough) device-handle pointer-to-pointer (set by `uart7_init`). `uart7_tx_byte`/`uart7_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart7_irq_handler` is the RX/TX byte pump. Rings in `g_console_uart_ctx` `+0x970` TX / `+0x974` RX. |
+| `0x200097E4` | 4 | `g_uart8_dev_pp` | `console.c` | **UART8** (the ES3 debug-console prompt) device-handle pointer-to-pointer (set by `uart8_init`). `uart8_tx_byte`/`uart_rx_ringbuf_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart8_irq_handler` is the RX/TX byte pump + command-key escape handler. Rings in `g_console_uart_ctx` `+0x164` TX / `+0x168` RX. |
+| `0x200098A4` | 4 | `g_usart1_dev_pp` | `console.c` | **USART1** (the *second* ES3 console port, twin of UART8) device-handle pointer-to-pointer (set by `usart1_init`). `usart1_tx_byte`/`usart1_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart1_irq_handler` is the RX/TX byte pump + command-key escape handler (boot-magic `0x55AA5501`). Rings in `g_usart3_rings` (`0x2000094C`) `+0x04` TX / `+0x08` RX. |
+| `0x20000114` | 1 | `g_console_port_sel` | `console.c` | active-console selector (`g_console_table_ctrl+6`): `usart1_io_table_install` sets **1** (USART1 active), `console_io_table_install` sets **7** (UART8 active) when binding the port's I/O functions into `g_log_func`. |
+| `0x20003C34` | ≥0x978 | `g_console_uart_ctx` | `console.c` / `uart.c` | shared serial context for **UART7** (`+0x970` TX ring, `+0x974` RX ring) and **UART8** (`+0x164` TX ring, `+0x168` RX ring). |
+| `0x20004D2C` | ≥0x85 | `g_console_state` | `console.c` | console line-discipline block: `+0x82` command-mode flag (set by 10× TAB), `+0x83` consecutive-ESC counter, `+0x84` consecutive-TAB counter (both reset on any other byte; both fire their action at 10). |
+| `0x20000083` | 1 | `g_console_log_echo` | `console.c` | when non-zero, `console_printf` also mirrors each line (with an `"%ld "` epoch prefix) into the SRAM log via `log_emit_string`. |
+| `0x20009D98` | 0x14 | `g_log_func` | `log.c` / `console.c` | 5-slot console-I/O dispatch table for the **active** console port: `[0]` `…_printf` (the firmware-wide printf), `[1]` tx_byte, `[2]` puts, `[3]` write, `[4]` rx_byte. `console_io_table_install` (`0x080430D8`) binds UART8's five (`console_printf`/`uart8_tx_byte`/`uart8_puts`/`uart8_write`/`uart_rx_ringbuf_get_byte`); `usart1_io_table_install` (`0x0804309C`) binds USART1's five (`usart1_printf`/`usart1_tx_byte`/…). The ubiquitous `g_log_func("…")` calls invoke slot `[0]`. |
+| `0x20000000` | 4 | `g_boot_flag` | `console.c` (& boot) | bootloader hand-off word; `uart8_irq_handler` writes the magic `0x55AA5507` here before the 10×-ESC `system_reset`, requesting the loader stay in download mode. |
 | `0x2000001C` | ≥0x3A | `g_shifter_sm` | `shifter.c` | shifter control-SM slot-record: `+1` step, `+3/4/5/7/9/0xA` scheduler slots, `+6` substate, `+8` current gear, `+0x34/0x35` retries. |
 | `0x2000008C` | 4 | `g_modbus_crc` | `shifter.c` | shifter Modbus CRC-16 accumulator (u16, init `0xFFFF`, poly `0xA001`); `+2` (`0x2000008E`) = the queue / RX-flush scheduler slot (`0xFA`=none). |
 | `0x2000019C` | ≥0x4C | `g_shifter_ctx` | `shifter.c` | shifter subsystem state: `+0` update step, `+1` commit, `+2` result, `+4` active flag, `+8` staged pack header, `+0x14` image len, `+0x30` prog offset, `+0x37` seq-poll step, `+0x38` link-fail, `+0x39` comm-fail. |
@@ -265,14 +275,28 @@ re-pointed to `0x08020200` as the first instruction of `main`.
 | DMA1/DMA2 | `0x40026000/0400` | clocks + IRQ 0x0C/0x38 | `dma_controller_init` |
 | WWDG | `0x40002C00` | reload 0x7F each loop | `watchdog_init` |
 
-Four of the serial links carry interrupt-driven byte traffic through a SW
+**All eight** serial links now carry interrupt-driven byte traffic through a SW
 ring-buffer pair; the RX/TX byte-pump ISR (invoked via a thin vector trampoline)
 moves bytes between the USART register block and the rings, and also clears any
 latched SR error flag (PE/FE/NE/ORE) by reading SR then DR (RM0430):
-`usart3_irq_handler` (USART3, eShifter — `shifter.c`), `uart4_irq_handler`
-(UART4, BLE coproc — `uart.c`), `uart5_irq_handler` (UART5, BMS/battery Modbus bus
-— `bus.c`), `usart6_irq_handler` (USART6, inter-module SSPM bus — `ssp.c`). The
-other instances (USART1/2, UART7/8) are not yet wired to decoded ISRs.
+`usart1_irq_handler` (USART1, 2nd ES3 console — `console.c`), `usart2_irq_handler`
+(USART2, GSM/SARA modem — `modem.c`), `usart3_irq_handler` (USART3, eShifter —
+`shifter.c`), `uart4_irq_handler` (UART4, BLE coproc data link — `uart.c`),
+`uart5_irq_handler` (UART5, BMS/battery Modbus bus — `bus.c`), `usart6_irq_handler`
+(USART6, inter-module SSPM bus — `ssp.c`), `uart7_irq_handler` (UART7, BLE coproc
+*debug* link — `uart.c`), `uart8_irq_handler` (UART8, ES3 debug console —
+`console.c`). The two console ISRs (`usart1`/`uart8`) additionally run the console
+command-key escape handler (10× ESC → boot-magic + `system_reset`; 10× TAB →
+command mode). The serial byte-pump layer is now complete.
+
+The ES3 console is dual-ported: **UART8** and **USART1** are two physical ports for
+the same console (shared command-mode + log-echo flags; separate ESC/TAB counters).
+Whichever port's I/O functions are bound into the `g_log_func` table (`0x20009D98`)
+is the active console — so `g_log_func[0]` is that port's `…_printf` (the variadic
+printf every module calls), `[1..4]` its tx_byte/puts/write/rx_byte.
+`console_io_table_install` binds UART8 (selector `g_console_port_sel`=7),
+`usart1_io_table_install` binds USART1 (=1). Both printfs write synchronously,
+busy-waiting (kicking the watchdog) for the TX ring to drain whenever it fills.
 
 On-board I2C devices, probed in the `mainware_boot_init_sequence` self-test
 (each failure increments a fault counter; ≥3 → I2C bus recovery + retry):

@@ -11,11 +11,13 @@
 /* Helpers sourced in their home modules (the FSM below drives them). */
 extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 extern int  state_flags_test(uint32_t set_mask, uint32_t clr_mask);  /* OEM 0x0802A28C */
+extern unsigned int maybe_enqueue_tx_message(uint16_t id, uint32_t len,
+                                             const void *payload, uint8_t type);  /* ssp.c */
 
 /* One-shot scheduler callback armed 200 ticks after the motor reset completes,
- * for both the success (state 0xC) and failure (state 0xD) exits. Not yet
- * decoded (OEM 0x08030994). */
-extern void motor_post_update_cb(void);
+ * for both the success (state 0xC) and failure (state 0xD) exits. Defined below,
+ * after the FSM control-block macros it touches (OEM 0x08030994). */
+static void motor_post_update_cb(void);
 
 /* OEM assert filename for this translation unit (rodata 0x08050D0C). */
 static const char F2806X_C[] = "src/F2806/f2806x.c";
@@ -434,6 +436,218 @@ int motor_dl_stream_block_step(const uint8_t *buf, int start)
         }
         return (int)rc;
     }
+
+    default:
+        return 1;
+    }
+}
+
+/* ===========================================================================
+ * Top-level motor-controller (F2806x) firmware-update FSM (OEM 0x08030FF4),
+ * ticked once per super-loop iteration. Sequence: reset-pulse the DSP into its
+ * SCI ROM bootloader (GPIOB PB9 = reset, PB10 = boot-mode select), autobaud-lock
+ * ('A'/'A'), upload a fixed handshake payload, validate the staged motor pack
+ * header (magic 0xAA55AA55, type 0xA1, "Motorpcb Application" version), stream
+ * the C28x boot-stream payload, then release the DSP. Progress is logged as
+ * F_init/F_reset/F_autobaud/F_upload/F_ready.
+ *
+ * Its own little control block sits at 0x20000075: [0] = the download timer slot
+ * the transfer pumps share (F2806_DL_SLOT), [1] = FSM state, [2] = an auxiliary
+ * timer slot, [3] = a one-shot flag. The +0x3E byte of the download context
+ * (0x20000654) records whether the bike was put into the "updating" state, which
+ * gates the exit transition (0x1D ok / 0x1B fail).
+ * =========================================================================== */
+#define MOTOR_FSM   ((volatile uint8_t *)0x20000075u)   /* [0] dl slot, [1] state, [2] aux slot, [3] flag */
+#define MOTOR_GPIO  ((void *)0x40020400u)               /* GPIOB: PB9 (0x200) reset, PB10 (0x400) boot-mode */
+#define MOTOR_PACK  ((volatile uint8_t *)0x080A0000u)   /* staged motor pack: magic +0, ver +4, size +0xC, data +0x28 */
+#define MOTOR_UPLOAD_BUF ((const uint8_t *)0x0804463Cu) /* 0x95E-byte handshake payload sent before the pack stream */
+
+/* Armed (200 ticks) by both FSM exits (states 0xC/0xD) once the DSP is released:
+ * log the reset, free the shared download timer slot, and drop PB9 (reset) low. */
+static void motor_post_update_cb(void)
+{
+    g_log_func("Reset F2806\r\n");
+    scheduler_release((uint8_t *)&MOTOR_FSM[0]);
+    HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 0);
+}
+
+unsigned int motor_fw_update_fsm_step(void)
+{
+    switch (MOTOR_FSM[1]) {
+    case 0:                                   /* wait for the timer slot, then announce the update */
+        if (scheduler_slot_is_idle(MOTOR_FSM[2]) == 0) {
+            return 3;
+        } else {
+            unsigned int slot = maybe_enqueue_tx_message(10, 0, 0, 1);
+            if (slot > 0x10) {
+                g_log_func("  ERROR SSP place\r\n");
+            }
+            scheduler_start(MOTOR_FSM[2], 1000, (sched_cb_t)0);
+            MOTOR_FSM[1] = 1;
+            return 3;
+        }
+
+    case 1:                                   /* wait for the module ack (flag 0x400000), then begin */
+        if (state_flags_test(0x400000, 0) == 0) {
+            log_print_timestamp_prefix();
+            g_log_func("Recover Motor ok\r\n");
+            scheduler_release((uint8_t *)&MOTOR_FSM[2]);
+            F2806_CTX[0x3E] = 0;
+            MOTOR_FSM[1] = 2;
+        }
+        if (scheduler_slot_is_idle(MOTOR_FSM[2]) == 0) {
+            return 3;
+        }
+        scheduler_release((uint8_t *)&MOTOR_FSM[2]);
+        maybe_set_state_if_unlocked(0x19);
+        F2806_CTX[0x3E] = 1;
+        MOTOR_FSM[1] = 4;
+        return 3;
+
+    case 2:                                   /* idle / settled */
+        return 3;
+
+    case 3:                                   /* reset pulse on PB9, then loop back to state 0 */
+        log_print_timestamp_prefix();
+        g_log_func("Resetting motor\r\n");
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 1);
+        systick_delay(10);
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 0);
+        if (MOTOR_FSM[2] == SCHED_SLOT_NONE) {
+            MOTOR_FSM[2] = scheduler_alloc();
+        }
+        scheduler_start(MOTOR_FSM[2], 1000, (sched_cb_t)0);
+        MOTOR_FSM[1] = 0;
+        return 1;
+
+    case 4: {                                 /* drive boot pins, drain RX, enter bootloader */
+        int drained;
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x400, 0);   /* PB10 low: select bootloader */
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 1);   /* PB9 high: release reset */
+        do {
+            drained = sspm_bus_get_byte((uint8_t *)0);   /* flush stale RX (OEM sink is NULL) */
+        } while (drained != 0);
+        MOTOR_FSM[0] = scheduler_alloc();
+        scheduler_start(MOTOR_FSM[0], 100, (sched_cb_t)0);
+        MOTOR_FSM[1] = 5;
+        MOTOR_FSM[3] = 1;
+        g_log_func("F_init\r\n");
+        return 1;
+    }
+
+    case 5: {                                 /* settle delay -> drop PB9, start autobaud */
+        unsigned int r = (unsigned int)((scheduler_slot_is_idle(MOTOR_FSM[0]) ^ 1) & 0xFF);
+        if (r == 0) {
+            HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 0);
+            systick_delay(100);
+            MOTOR_FSM[1] = 6;
+            g_log_func("F_reset\r\n");
+            r = 1;
+        }
+        return r;
+    }
+
+    case 6: {                                 /* autobaud handshake */
+        int rc = motor_dl_autobaud_step();
+        if (rc == 1) {
+            return 1;
+        }
+        systick_delay(100);
+        MOTOR_FSM[1] = (uint8_t)((rc == 0) ? 7 : 0x0D);
+        g_log_func("F_autobaud\r\n");
+        return 1;
+    }
+
+    case 7: {                                 /* upload the fixed handshake payload (echo-verified) */
+        int rc = motor_dl_send_verify_step(MOTOR_UPLOAD_BUF, 0x95E);
+        if (rc == 1) {
+            return 1;
+        }
+        scheduler_start(MOTOR_FSM[0], 5000, (sched_cb_t)0);
+        MOTOR_FSM[1] = (uint8_t)((rc == 0) ? 8 : 0x0D);
+        g_log_func("F_upload\r\n");
+        return 1;
+    }
+
+    case 8: {                                 /* settle -> second autobaud */
+        unsigned int r = (unsigned int)((scheduler_slot_is_idle(MOTOR_FSM[0]) ^ 1) & 0xFF);
+        if (r == 0) {
+            MOTOR_FSM[1] = 9;
+            g_log_func("F_ready\r\n");
+            r = 1;
+        }
+        return r;
+    }
+
+    case 9: {                                 /* second autobaud -> validate the pack */
+        int rc = motor_dl_autobaud_step();
+        if (rc == 1) {
+            return 1;
+        }
+        MOTOR_FSM[1] = (uint8_t)((rc == 0) ? 0x0A : 0x0D);
+        return 1;
+    }
+
+    case 0x0A:                                /* validate the staged motor pack header */
+        if (*(volatile uint32_t *)MOTOR_PACK != 0xAA55AA55u) {
+            MOTOR_FSM[1] = 0x0D;
+            g_log_func("No Motorpcb Application\r\n");
+            return 1;
+        } else {
+            uint32_t ver = *(volatile uint32_t *)(MOTOR_PACK + 4);
+            if ((ver & 0xFF) != 0xA1) {       /* low byte = firmware type; 0xA1 = motor */
+                g_log_func("Not a F2806 file\r\n");
+                MOTOR_FSM[1] = 0x0D;
+                return 1;
+            }
+            g_log_func("Motorpcb Application: v%x.%02x.%02X (%s %s)",
+                       ver >> 24, (ver >> 16) & 0xFF, (ver >> 8) & 0xFF,
+                       (const char *)(MOTOR_PACK + 0x10),
+                       (const char *)(MOTOR_PACK + 0x1C));
+            g_log_func(" size %d bytes\r\n", *(volatile uint32_t *)(MOTOR_PACK + 0x0C));
+            MOTOR_FSM[1] = 0x0B;
+            return 1;
+        }
+
+    case 0x0B: {                              /* stream the C28x boot-stream payload */
+        unsigned int rc = (unsigned int)motor_dl_stream_block_step(
+            (const uint8_t *)(MOTOR_PACK + 0x28),
+            *(int *)(MOTOR_PACK + 0x0C) - 0x28);
+        if (rc == 0) {
+            MOTOR_FSM[1] = 0x0C;
+            return 1;
+        }
+        if (rc == 2) {
+            MOTOR_FSM[1] = 0x0D;
+            g_log_func("F2806-err\r\n");
+            return 1;
+        }
+        return rc;                            /* busy (1) */
+    }
+
+    case 0x0C:                                /* success: release the DSP, log, settle to state 2 */
+        scheduler_start(MOTOR_FSM[0], 200, motor_post_update_cb);
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 1);
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x400, 1);
+        g_log_func("F2806-OK\r\n");
+        MOTOR_FSM[3] = 0;
+        if (F2806_CTX[0x3E] != 0) {
+            maybe_set_state_if_unlocked(0x1D);
+        }
+        MOTOR_FSM[1] = 2;
+        return 0;
+
+    case 0x0D:                                /* failure: release the DSP, settle / signal */
+        scheduler_start(MOTOR_FSM[0], 200, motor_post_update_cb);
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x200, 1);
+        HAL_GPIO_WritePin(MOTOR_GPIO, 0x400, 1);
+        MOTOR_FSM[3] = 2;
+        if (F2806_CTX[0x3E] == 0) {
+            MOTOR_FSM[1] = 2;
+            return 2;
+        }
+        maybe_set_state_if_unlocked(0x1B);
+        return 2;
 
     default:
         return 1;

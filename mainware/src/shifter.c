@@ -112,6 +112,7 @@ void     shift_rx_flush_timeout_cb(void);
 void     shifter_uart_tx_byte(uint8_t b);
 void     shifter_uart_tx_buf(const uint8_t *buf, uint32_t count);
 int      shifter_uart_rx_byte(uint8_t *out);
+void     usart3_irq_handler(void);
 uint32_t shifter_modbus_rtu_step(uint8_t *frame);
 
 uint32_t shifter_modbus_pump(void);
@@ -394,6 +395,58 @@ int shifter_uart_rx_byte(uint8_t *out)
     usart3 = *(volatile uint32_t * volatile *)g_usart3_handle;
     usart3[0xC / 4] |= 0x20u;
     return (int)rc;
+}
+
+/* Clear a latched USART error flag the RM0430 way: if `flag` (PE 0x1 / FE 0x2 /
+ * NE 0x4 / ORE 0x8) is set in SR, read SR then DR — that read sequence is what
+ * actually clears the sticky error bit (and discards the offending byte). The OEM
+ * inlines this CubeF4 __HAL_UART_CLEAR_*FLAG idiom (a volatile scratch the result
+ * is thrown into) once per error bit. */
+static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
+{
+    volatile uint32_t tmp;
+    if ((d[0] & flag) != 0) {
+        tmp = 0;
+        tmp = d[0];   /* SR */
+        tmp = d[1];   /* DR */
+        (void)tmp;
+    }
+}
+
+/*
+ * usart3_irq_handler @ 0x080362D0
+ * USART3 RX/TX byte-pump ISR (eShifter link), invoked via a thin vector
+ * trampoline. On RXNE with no parity/framing/noise/overrun error (SR bits 0-3
+ * clear) and RXNEIE set, push the data byte into the RX ring; then clear any
+ * latched PE/FE/NE/ORE error (read SR+DR); on TXE with TXEIE set, pop the next TX
+ * byte and write it to DR, disabling TXEIE when the ring drains. The RX/TX gates
+ * use SR/CR1 sampled once up front; the error-clear block and the TX-path
+ * register writes re-load the device handle.
+ */
+void usart3_irq_handler(void)
+{
+    volatile uint32_t *usart3 = *(volatile uint32_t * volatile *)g_usart3_handle;
+    uint32_t sr  = usart3[0];
+    uint32_t cr1 = usart3[0xC / 4];
+
+    if ((sr & 0xFu) == 0 && (sr & 0x20u) != 0 && (cr1 & 0x20u) != 0) {
+        ringbuf_push_byte(*(ringbuf_t **)(g_usart3_rings + 0xC20u), (uint8_t)usart3[1]);
+    }
+
+    volatile uint32_t *d = *(volatile uint32_t * volatile *)g_usart3_handle;
+    usart_clear_error_flag(d, 0x1u);
+    usart_clear_error_flag(d, 0x2u);
+    usart_clear_error_flag(d, 0x4u);
+    usart_clear_error_flag(d, 0x8u);
+
+    if ((sr & 0x80u) != 0 && (cr1 & 0x80u) != 0) {
+        uint8_t b;
+        if (ringbuf_get_byte(*(ringbuf_t **)(g_usart3_rings + 0xC1Cu), &b) == 0) {
+            (*(volatile uint32_t * volatile *)g_usart3_handle)[0xC / 4] &= ~0x80u;
+        } else {
+            (*(volatile uint32_t * volatile *)g_usart3_handle)[1] = b;
+        }
+    }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

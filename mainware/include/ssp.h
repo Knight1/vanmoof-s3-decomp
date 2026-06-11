@@ -70,4 +70,8 @@ int sspm_bus_get_byte(uint8_t *out);
  * Returns 0 on success, 2 on TX error. OEM sspm_bus_send_frame at 0x0803A008. */
 uint32_t sspm_bus_send_frame(const uint8_t *buf, uint16_t len);
 
+/* USART6 (inter-module SSPM bus) RX/TX byte-pump interrupt service routine,
+ * invoked via a thin vector trampoline (OEM 0x0803669C). */
+void usart6_irq_handler(void);
+
 #endif

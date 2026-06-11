@@ -747,3 +747,50 @@ int sspm_bus_get_byte(uint8_t *out)
     dev[0xC / 4] |= 0x20u;                         /* re-enable RX interrupt */
     return (int)rc;
 }
+
+/* Clear a latched USART error flag the RM0430 way: if `flag` is set in SR, read
+ * SR then DR — that read sequence clears the sticky error bit (and discards the
+ * offending byte). The OEM inlines this CubeF4 __HAL_UART_CLEAR_*FLAG idiom once
+ * per error bit. */
+static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
+{
+    volatile uint32_t tmp;
+    if ((d[0] & flag) != 0) {
+        tmp = 0;
+        tmp = d[0];   /* SR */
+        tmp = d[1];   /* DR */
+        (void)tmp;
+    }
+}
+
+/* USART6 RX/TX byte-pump ISR (OEM 0x0803669C), the inter-module (SSPM) bus,
+ * invoked via a thin vector trampoline. The twin of usart3/uart4/uart5's ISRs but
+ * with deliberate differences preserved from the OEM: it clears latched errors
+ * FIRST (and only PE/NE/ORE — there is no FE 0x2 clear here), so the RX path then
+ * gates on RXNE && RXNEIE alone (no SR error mask); and the device handle is
+ * re-loaded fresh for the TX-path status read as well as the writes (SR/CR1 are
+ * not cached across the RX and TX halves). On RX, push DR into the bus RX ring
+ * (ctx+0xA54, drained by sspm_bus_get_byte); on TX, pop the next byte (ctx+0xA50,
+ * fed by sspm_bus_send_byte), disabling TXEIE when the ring drains. */
+void usart6_irq_handler(void)
+{
+    volatile uint32_t *dev = *(volatile uint32_t * volatile *)0x20009924u;
+
+    usart_clear_error_flag(dev, 0x1u);
+    usart_clear_error_flag(dev, 0x4u);
+    usart_clear_error_flag(dev, 0x8u);
+
+    if ((dev[0] & 0x20u) != 0 && (dev[0xC / 4] & 0x20u) != 0) {
+        ringbuf_push_byte(*(ringbuf_t * volatile *)(0x20002B3Cu + 0xA54u), (uint8_t)dev[1]);
+    }
+
+    dev = *(volatile uint32_t * volatile *)0x20009924u;
+    if ((dev[0] & 0x80u) != 0 && (dev[0xC / 4] & 0x80u) != 0) {
+        uint8_t b;
+        if (ringbuf_get_byte(*(ringbuf_t * volatile *)(0x20002B3Cu + 0xA50u), &b) == 0) {
+            (*(volatile uint32_t * volatile *)0x20009924u)[0xC / 4] &= ~0x80u;
+        } else {
+            (*(volatile uint32_t * volatile *)0x20009924u)[1] = b;
+        }
+    }
+}

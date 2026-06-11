@@ -111,7 +111,7 @@ extern void button_press_state_machines_step(void);   /* 0x08040380 */
 extern void log_console_subsystem_init(uint32_t magic, void *app_ctx); /* 0x08043114 */
 extern void log_wake_reason(void);                    /* 0x0803DA3C */
 extern void dma_peripheral_transfer_4word_step(void); /* 0x08032CA4 */
-extern void uart_rx_ringbuf_get_byte(uint8_t *out);   /* 0x080367B8 */
+extern int  uart_rx_ringbuf_get_byte(uint8_t *out);   /* 0x080367B8 (console.c) */
 extern void app_ctx_ptr_set(void *app_ctx);           /* 0x08033964 → *0x20000944 */
 extern void clear_buffer_0x180(void);                 /* 0x0803A4FC */
 extern void clear_buffer_0x600(void);                 /* 0x0803FA84 */
