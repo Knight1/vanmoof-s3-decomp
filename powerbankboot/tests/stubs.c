@@ -35,7 +35,10 @@ void     flash_lock(void)                                    { }
 void     flash_hal_unlock(void)                              { }
 void     flash_hal_clear_errors(void)                        { }
 uint32_t flash_hal_erase_page(uint32_t page_addr, uint32_t *page_error) { (void)page_addr; if (page_error) *page_error = 0xFFFFFFFFu; return 0; }
-uint32_t flash_hal_program_word(uint32_t addr, uint32_t data){ (void)addr; (void)data; return 0; }
+/* Write-through so flash_program()'s per-word read-back verify (`*p != w`)
+ * succeeds — letting the OTA data-phase test observe the payload land in the
+ * mapped flash region instead of looping forever on a verify mismatch. */
+uint32_t flash_hal_program_word(uint32_t addr, uint32_t data){ *(volatile uint32_t *)(uintptr_t)addr = data; return 0; }
 
 /* ---- CRC-32 (MPEG-2). Return a fixed value so image_verify's CRC check fails on
  * an empty bank, keeping the loader resident instead of jumping into a blank AP

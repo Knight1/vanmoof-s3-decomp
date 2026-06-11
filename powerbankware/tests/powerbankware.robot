@@ -358,3 +358,82 @@ Modbus Write Single To A Read-Only Register Is Acked
     ${e1}=    Execute Command    sysbus ReadByte ${e1addr}
     Should Be Equal As Integers    ${e0}    0xAA
     Should Be Equal As Integers    ${e1}    0x06
+
+# --- Telemetry register decode (the modbus_telemetry cascade) -----------------
+# A full Read Holding Registers of 0x2B registers from reg 0 streams the whole
+# telemetry block; each register lands big-endian at offset 3 + N*2. These seed a
+# single live source and assert the cascade decodes/scales it into the right slot,
+# verifying the register map rather than just the framing.
+
+Modbus Read Maps The BMS State To A Status Word
+    [Documentation]    Register 2 is a status bitword derived from the live BMS state
+    ...                (0x200005ac) via the modbus_state_reg2 jump table for states in
+    ...                [7,0x1c): state 0x17 -> 0xFFFF, state 0x11 -> 0x0001. Confirm both
+    ...                map to the documented bitmask at response offset 7.
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte 0x200005ac 0x17
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    7    0xFFFF
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte 0x200005ac 0x11
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    7    0x0001
+
+Modbus Read Reports SOC And Hardware Version From Config
+    [Documentation]    Register 5 is the SOC byte cfg[0x5a] (0x2000052a) and register 0xA
+    ...                is the 16-bit hardware version at cfg+0x54 (0x20000524). Seed both in
+    ...                the BMS record block and confirm they surface at offsets 13 and 23.
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte 0x2000052a 0x5A          # SOC -> reg 5
+    Execute Command    sysbus WriteWord 0x20000524 0x1234        # HW version -> reg 0xA
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    13    0x005A
+    Response Word At Offset Should Be    23    0x1234
+
+Modbus Read Applies The Temperature Scaling
+    [Documentation]    Register 3 is the hotter of the two pack thermistors (s_temp[1]/[2]
+    ...                at 0x20000219/0x2000021a) run through mb_push_temp's scaling:
+    ...                (raw - 0x28) * 10 + 0xAAB. Seed both to 0x28 so the scaled value is
+    ...                exactly the 0xAAB offset (0 °C reference) at response offset 9.
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte 0x20000219 0x28
+    Execute Command    sysbus WriteByte 0x2000021a 0x28
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    9    0x0AAB
+
+Modbus Read Applies The Current Scaling And Deadband
+    [Documentation]    Register 6 is the signed average current (s_current at 0x20000424)
+    ...                scaled by mb_scale_current: |v|>199 -> v/10, else 0 (a deadband).
+    ...                Seed 2000 -> 200 (0x00C8); seed 100 (inside the deadband) -> 0.
+    Create Leaf Machine
+    Execute Command    sysbus WriteDoubleWord 0x20000424 2000
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    15    0x00C8
+    Create Leaf Machine
+    Execute Command    sysbus WriteDoubleWord 0x20000424 100
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x2B  0x1C  0x0E
+    Process Rx Ring
+    Response Word At Offset Should Be    15    0x0000
+
+Modbus Read Truncates To The Requested Register Count
+    [Documentation]    A read of only 2 registers (AA 03 00 00 00 02) must emit exactly
+    ...                two: RESP_COUNT gates the cascade so reg 2 onward are skipped. The
+    ...                frame is header(3) + 2*2 + CRC(2) = 9 bytes, its byte-count field is
+    ...                4, and the trailing CRC is valid — confirming the count gate, not
+    ...                just that *some* response came back.
+    Create Leaf Machine
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x02  0xDD  0xD0
+    Process Rx Ring
+    ${len}=    Read Sram Word    ${RESP_WR}
+    Should Be Equal As Integers    ${len}    9
+    # Byte-count field (resp[2]) = 2 registers * 2 = 4.
+    ${bcaddr}=    Evaluate    ${RESP_BUF} + 2
+    ${bc}=    Execute Command    sysbus ReadByte ${bcaddr}
+    Should Be Equal As Integers    ${bc}    4
+    ${valid}=    Response Is Crc Valid    ${len}
+    Should Be True    ${valid}
