@@ -212,7 +212,7 @@ void cmd_counter_inc_v3(uint16_t frame_word);
 void cmd_write_and_inc(uint16_t frame_word, volatile uint8_t *struct_base, volatile uint8_t *verify_buf);
 void cmd_send_response(void);
 void cmd_send_8byte(void);
-void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte);
+void command_parser(uint32_t flag, uint32_t buf_addr, uint8_t buf_len);
 
 /* BMS configuration */
 void bms_configure(uint8_t cfg);
