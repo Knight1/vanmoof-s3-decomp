@@ -238,6 +238,28 @@ Read Sram Word
     ${v}=    Convert To Integer    ${v}    16
     [Return]    ${v}
 
+Read Sram Dword
+    [Documentation]    Read a 32-bit SRAM word and return it as an integer.
+    [Arguments]    ${addr}
+    ${v}=    Execute Command    sysbus ReadDoubleWord ${addr}
+    ${v}=    Strip String       ${v}
+    ${v}=    Convert To Integer    ${v}    16
+    [Return]    ${v}
+
+Response Word At Offset Should Be
+    [Documentation]    Assert the big-endian 16-bit value at byte offset ${off} of the
+    ...                assembled response (${RESP_BUF}) equals ${expected}. Telemetry
+    ...                fields are appended hi-byte-first by modem_send_2bytes/send_be.
+    [Arguments]    ${off}    ${expected}
+    ${hiaddr}=    Evaluate    ${RESP_BUF} + ${off}
+    ${loaddr}=    Evaluate    ${RESP_BUF} + ${off} + 1
+    ${hi}=    Execute Command    sysbus ReadByte ${hiaddr}
+    ${hi}=    Strip String       ${hi}
+    ${lo}=    Execute Command    sysbus ReadByte ${loaddr}
+    ${lo}=    Strip String       ${lo}
+    ${val}=   Evaluate    ((${hi}) << 8) | (${lo})
+    Should Be Equal As Integers    ${val}    ${expected}
+
 Patch Dispatch Capture
     [Documentation]    The ASCII console handlers are frame-sharing continuations of
     ...                command_parser, so the reconstruction leaves s_jump_table all
@@ -587,3 +609,45 @@ Bootloader Entry Reaches The Deep-Sleep Loop
     ${pc}=    Execute Command    cpu PC
     ${pc}=    Strip String    ${pc}
     Should Be Equal As Integers    ${pc}    ${loop}
+
+# --- Telemetry register map + stateful write commands ------------------------
+
+Modbus Read Reflects Seeded Telemetry Values
+    [Documentation]    Seed distinctive values at the documented telemetry SRAM sources
+    ...                and confirm a full Read Holding Registers (start reg 0) streams
+    ...                them back at the expected response offsets — verifying the
+    ...                telemetry register map against the firmware, not just the CRC.
+    ...                Offsets are fixed by the cmd-3 cascade order (header is 3 bytes,
+    ...                each field 2 bytes, big-endian).
+    Create Leaf Machine
+    Execute Command    sysbus WriteWord 0x2000281C 0xAA11    # pack voltage   -> offset 11
+    Execute Command    sysbus WriteWord 0x200028A4 0xBB22    # cell 1 voltage -> offset 57
+    Execute Command    sysbus WriteWord 0x200027FA 0xCC33    # max cell mV    -> offset 85
+    Execute Command    sysbus WriteWord 0x2000282A 0xDD44    # min cell mV    -> offset 87
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0xD2
+    Process Rx Ring
+    Response Word At Offset Should Be    11    0xAA11
+    Response Word At Offset Should Be    57    0xBB22
+    Response Word At Offset Should Be    85    0xCC33
+    Response Word At Offset Should Be    87    0xDD44
+
+Charge MOSFET Command Sets The Control Bits
+    [Documentation]    Write Single Register to command word 0x1A (arg 1) is the
+    ...                "charge MOSFET on" command. arm_state_bit only acts when the live
+    ...                BMS state (0x20002B58) is in {1..3, 0xD..0x11}; seed state 2, then
+    ...                confirm it sets control-word bit 12 (0x1000 at 0x20002C00) and bit
+    ...                1 (0x20002870). bms_configure is stubbed (GPIO/SPI driver).
+    Create Leaf Machine
+    ${bms}=    Resolve Symbol    bms_configure
+    Execute Command    cpu AddHook ${bms} "cpu.PC = cpu.LR"
+    Execute Command    sysbus WriteByte 0x20002B58 0x02      # live state in the allowed set
+    Execute Command    sysbus WriteByte 0x20002870 0x00
+    Inject Modbus Frame    0xAA  0x06  0x00  0x1A  0x00  0x01  0x70  0x16
+    Process Rx Ring
+    ${ctrl}=    Read Sram Dword    ${MODE_WORD}
+    ${ctrlbit}=    Evaluate    ${ctrl} & 0x1000
+    Should Be Equal As Integers    ${ctrlbit}    0x1000
+    ${mode870}=    Execute Command    sysbus ReadByte 0x20002870
+    ${mode870}=    Strip String    ${mode870}
+    ${b1}=    Evaluate    (${mode870}) & 0x2
+    Should Be Equal As Integers    ${b1}    0x2
