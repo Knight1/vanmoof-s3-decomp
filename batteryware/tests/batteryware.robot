@@ -31,6 +31,7 @@ ${RESP_LEN}       0x200047D0      # response length so far (uint16)
 ${TX_FIELD_CNT}   0x20004748      # # of fields emitted (non-zero ⇒ a response was built)
 ${MODE_WORD}      0x20002C00      # 0 selects binary Modbus command mode
 ${TESTMODE_FLAG}  0x200028D5      # cfg_blk+5: set by a 0x06 write to register 9
+${CMD_IDX}        0x20004000      # scratch byte: console-dispatch index capture (tests)
 
 *** Keywords ***
 Create Battery Machine
@@ -237,6 +238,59 @@ Read Sram Word
     ${v}=    Convert To Integer    ${v}    16
     [Return]    ${v}
 
+Patch Dispatch Capture
+    [Documentation]    The ASCII console handlers are frame-sharing continuations of
+    ...                command_parser, so the reconstruction leaves s_jump_table all
+    ...                NULL (the OEM stores the real pointers at flash 0x08017FD8) —
+    ...                i.e. commands *parse and match* but execute nothing in this
+    ...                build. To still verify the parse → match → dispatch-index path
+    ...                for every command, point all 24 jump-table slots at an inert
+    ...                flash address and hook it to record the action index (passed in
+    ...                R2) into ${CMD_IDX}. crc8_verify is just a convenient never-run
+    ...                hook target here; its body never executes (the hook returns first).
+    ${jt}=     Resolve Symbol    s_jump_table
+    ${cap}=    Resolve Symbol    crc8_verify
+    ${capt}=   Evaluate    ${cap} | 1
+    FOR    ${i}    IN RANGE    24
+        ${slot}=    Evaluate    ${jt} + ${i}*4
+        Execute Command    sysbus WriteDoubleWord ${slot} ${capt}
+    END
+    Execute Command    sysbus WriteByte ${CMD_IDX} 0xFF
+    Execute Command    cpu AddHook ${cap} "self.Bus.WriteByte(${CMD_IDX}, cpu.GetRegisterUlong(2)); cpu.PC = cpu.LR"
+
+Inject Console Line
+    [Documentation]    Put the BMS in command mode and write an ASCII line terminated
+    ...                by CR into the RX ring. uart_resp_handler accumulates the
+    ...                printable bytes into its line buffer and dispatches the line to
+    ...                command_parser on the CR.
+    [Arguments]    ${text}
+    Execute Command    sysbus WriteByte ${TX_ENABLE} 1
+    Execute Command    sysbus WriteDoubleWord ${MODE_WORD} 0
+    Execute Command    sysbus WriteWord ${RX_STATE} 0
+    ${bytes}=    Evaluate    [ord(c) for c in "${text}"] + [0x0D]
+    ${n}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${RX_RING} + ${n}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${n}=    Evaluate    ${n} + 1
+    END
+    Execute Command    sysbus WriteWord ${RX_HEAD} ${n}
+    Execute Command    sysbus WriteWord ${RX_TAIL} 0
+
+Console Command Dispatches To
+    [Documentation]    Drive an ASCII console command end to end — write "NAME\\r" into
+    ...                the RX ring and let uart_resp_handler → command_parser run — then
+    ...                assert it resolves to the expected jump-table index. (Exercises
+    ...                the real path now that the command_parser argument-order bug is
+    ...                fixed; see docs/console-command-bug.md.)
+    [Arguments]    ${name}    ${expected}
+    Create Leaf Machine
+    Patch Dispatch Capture
+    Inject Console Line    ${name}
+    Process Rx Ring
+    ${idx}=    Execute Command    sysbus ReadByte ${CMD_IDX}
+    Should Be Equal As Integers    ${idx}    ${expected}
+
 *** Test Cases ***
 Vector Table Is Well Formed
     [Documentation]    Static check (no execution): the reset SP points into SRAM
@@ -440,3 +494,96 @@ Modbus Write Single Register Takes Effect
     Process Rx Ring
     ${flag}=    Execute Command    sysbus ReadByte ${TESTMODE_FLAG}
     Should Be Equal As Integers    ${flag}    0x01
+
+# --- ASCII console command tests (KEY=VALUE over the same UART) ---------------
+# In command mode, printable RX bytes are gathered into a line buffer and dispatched
+# on CR to command_parser, which prefix-matches a 23-entry name table and calls a
+# 24-slot jump table. One reconstruction gap remains (see docs/console-command-bug.md):
+# the jump-table is all-NULL — the handler bodies are frame-sharing continuations the
+# decomp couldn't extract (OEM keeps the real pointers at flash 0x08017FD8), so a
+# matched command executes nothing. The tests patch the table to capture the dispatch
+# index instead. (The earlier command_parser argument-order bug, which made every
+# command collapse to entry 1, is fixed.)
+
+All Console Commands Dispatch To Their Action Index
+    [Documentation]    For every documented console command name, assert command_parser
+    ...                routes it to the right jump-table index (1..23). Covers the
+    ...                prefix-match table including the '?'-suffixed getters and the
+    ...                space-containing multi-word names.
+    Console Command Dispatches To    Who?               ${1}
+    Console Command Dispatches To    Now?               ${2}
+    Console Command Dispatches To    PF                 ${3}
+    Console Command Dispatches To    Reset BMS          ${4}
+    Console Command Dispatches To    DF                 ${5}
+    Console Command Dispatches To    Upgrade AP         ${6}
+    Console Command Dispatches To    Upgrade BL         ${7}
+    Console Command Dispatches To    Into BootLoader    ${8}
+    Console Command Dispatches To    CHG CAL            ${9}
+    Console Command Dispatches To    CHG CAL?           ${10}
+    Console Command Dispatches To    DSG CAL            ${11}
+    Console Command Dispatches To    DSG CAL?           ${12}
+    Console Command Dispatches To    Reset ESN          ${13}
+    Console Command Dispatches To    Log Clear          ${14}
+    Console Command Dispatches To    TS0                ${15}
+    Console Command Dispatches To    TS1                ${16}
+    Console Command Dispatches To    TS2                ${17}
+    Console Command Dispatches To    TS0?               ${18}
+    Console Command Dispatches To    TS1?               ${19}
+    Console Command Dispatches To    TS2?               ${20}
+    Console Command Dispatches To    TS Reset           ${21}
+    Console Command Dispatches To    FCC                ${22}
+    Console Command Dispatches To    SOC                ${23}
+
+Unknown Console Command Hits The Dispatch-Error Sink
+    [Documentation]    A name that matches nothing in the table leaves the action
+    ...                index at 0 (the dispatch-error slot), not a valid command — so
+    ...                the matcher doesn't false-positive on garbage input.
+    Console Command Dispatches To    ZZNotACommand      ${0}
+
+# --- Shipping mode / deep-sleep ----------------------------------------------
+
+Shipping Mode Command Clears The Run Flag
+    [Documentation]    Modbus write of command word 0x95 (AA 06 00 95 00 00) invokes
+    ...                shipping_mode: charge MOSFET off, enable line low, and clear
+    ...                bit 11 (0x800, "running") of the control word 0x20002C00. Seed
+    ...                the bit set and confirm shipping_mode clears it. bms_configure
+    ...                is stubbed (it drives GPIO/SPI the bare platform doesn't model);
+    ...                the flag is cleared before that call regardless.
+    Create Leaf Machine
+    ${bms}=    Resolve Symbol    bms_configure
+    Execute Command    cpu AddHook ${bms} "cpu.PC = cpu.LR"
+    Inject Modbus Frame    0xAA  0x06  0x00  0x95  0x00  0x00  0x80  0x3D
+    Execute Command    sysbus WriteDoubleWord ${MODE_WORD} 0x800
+    Process Rx Ring
+    ${mode}=    Execute Command    sysbus ReadDoubleWord ${MODE_WORD}
+    ${mode}=    Strip String       ${mode}
+    ${bit}=     Evaluate    ${mode} & 0x800
+    Should Be Equal As Integers    ${bit}    0
+
+Bootloader Entry Reaches The Deep-Sleep Loop
+    [Documentation]    bootloader_entry — the "Into Bootloader"/shipping deepest-sleep
+    ...                path — prints "Shipping Mode", turns the FETs off, sets BMS state
+    ...                6, and when the power-on button check passes enters an infinite
+    ...                wait-for-reset loop at bootloader_entry+0x62. Stub the I/O-bound
+    ...                calls (UART print/flush, BMS/GPIO drivers, flash verify) and force
+    ...                the button check true, then confirm the CPU parks in that loop.
+    Create Leaf Machine
+    Hook Return    uart_printf
+    Hook Return    uart_tx_flush
+    Hook Return    bms_set_state
+    Hook Return    bms_configure
+    Hook Return    charge_mosfet_off
+    Hook Return    memcmp_verify
+    Hook Return    gpio_bit_write
+    ${btn}=    Resolve Symbol    button_entry_check
+    Execute Command    cpu AddHook ${btn} "self.SetRegisterUlong(0, 1); cpu.PC = cpu.LR"
+    ${entry}=    Resolve Symbol    bootloader_entry
+    ${loop}=     Evaluate    "0x%X" % (${entry} + 0x62)
+    ${trap}=     Return Trap
+    Execute Command    cpu SetRegister 13 ${STACKTOP}
+    Execute Command    cpu SetRegister 14 ${trap}
+    Execute Command    cpu PC ${entry}
+    Execute Command    emulation RunFor "0.02"
+    ${pc}=    Execute Command    cpu PC
+    ${pc}=    Strip String    ${pc}
+    Should Be Equal As Integers    ${pc}    ${loop}
