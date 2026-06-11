@@ -32,7 +32,13 @@ uint8_t  hal_flash_program(int type, uint8_t *addr, uint32_t data) {
     else           *(volatile uint32_t *)addr = data;
     return 0;
 }
-uint32_t hal_flash_program_halfpage(uint32_t addr, const uint8_t *src) { (void)addr; (void)src; return 0; }
+/* Write-through (64-byte half-page) so flash_program_verify() actually lands the
+ * payload in the mapped flash region — letting the OTA data-phase test read the
+ * programmed block back instead of seeing an unwritten page. */
+uint32_t hal_flash_program_halfpage(uint32_t addr, const uint8_t *src) {
+    for (int i = 0; i < 0x40; i++) ((volatile uint8_t *)(uintptr_t)addr)[i] = src[i];
+    return 0;
+}
 
 /* ---- GPIO ---- */
 void hal_gpio_init(uint32_t port, void *gpio)               { (void)port; (void)gpio; }

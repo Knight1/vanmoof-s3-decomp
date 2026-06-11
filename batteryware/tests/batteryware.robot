@@ -33,6 +33,13 @@ ${TX_FIELD_CNT}   0x20004748      # # of fields emitted (non-zero ⇒ a response
 ${MODE_WORD}      0x20002C00      # 0 selects binary Modbus command mode
 ${TESTMODE_FLAG}  0x200028D5      # cfg_blk+5: set by a 0x06 write to register 9
 ${CMD_IDX}        0x20004000      # scratch byte: console-dispatch index capture (tests)
+# --- MOS Failure / secondary-fuse simulation (src/main.c boot check, state_handlers.c) ---
+${BOOT_MODE_EE}   0x08080001      # EEPROM power-on mode byte; 0x17 = fuse fired (hard MOS failure)
+${FAULT_FLAGS}    0x20002C44      # central fault register; bit6 discharge-OC, bit7 charge-OC latched
+${BMS_STATUS}     0x20002C00      # s_bms_cfg/status word; bit15 = MOS-failure / mid-update interlock
+${PROT_STATUS}    0x2000286C      # OVP/UVP protection-status; bit11 = recoverable class
+${FUSE_CAP}       0x20004020      # test scratch: 0xFF once the fuse heater (PB7) is energized
+${STATE_CAP}      0x20004024      # test scratch: the state bms_set_state() was dispatched with
 
 *** Keywords ***
 Create Battery Machine
@@ -313,6 +320,56 @@ Console Command Dispatches To
     Process Rx Ring
     ${idx}=    Execute Command    sysbus ReadByte ${CMD_IDX}
     Should Be Equal As Integers    ${idx}    ${expected}
+
+Temperature Offset Should Be
+    [Documentation]    Reset the modem response-builder cells (write index, remaining
+    ...                count, field count) so the emitted value lands at the start of the
+    ...                response buffer, load the raw thermistor byte into R0, call the leaf
+    ...                temp_offset_send, and assert the 16-bit big-endian value it appended
+    ...                at offset 0 equals ${expected}.
+    [Arguments]    ${raw}    ${expected}
+    Create Leaf Machine
+    Execute Command    sysbus WriteWord ${RESP_LEN} 0          # s_buf_idx (write offset)
+    Execute Command    sysbus WriteWord 0x200047D4 0x0100      # s_buf_rem (avoid underflow)
+    Execute Command    sysbus WriteByte ${TX_FIELD_CNT} 0      # s_tx_count
+    Execute Command    cpu SetRegister 0 ${raw}
+    Call Leaf Function    temp_offset_send
+    Response Word At Offset Should Be    0    ${expected}
+
+Fuse Decision Should Be
+    [Documentation]    Drive state_handler_17_19 (the secondary-fuse controller) as a leaf
+    ...                with seeded protection (${prot} -> s_prot_status), fault (${fault} ->
+    ...                s_fault_flags) and status (${status} -> s_bms_cfg) globals, and assert
+    ...                whether it energizes the PB7 fuse heater (${exp_fuse}: 0xFF fired / 0
+    ...                not) and which latched state it dispatches to (${exp_state}). The PB7
+    ...                fire is captured by intercepting gpio_bit_write(port=GPIOB, mask=0x80,
+    ...                val=1) — GPIOB is unmodelled, so the write itself is observed via the
+    ...                hook. The FET/SPI side effects (bms_configure, charge_mosfet_off) are
+    ...                stubbed and bms_set_state is intercepted, so nothing touches absent
+    ...                silicon and the fuse is never actually driven.
+    [Arguments]    ${prot}    ${fault}    ${status}    ${exp_fuse}    ${exp_state}
+    Create Leaf Machine
+    Hook Return    bms_configure
+    Hook Return    charge_mosfet_off
+    ${bss}=    Resolve Symbol    bms_set_state
+    Execute Command    cpu AddHook ${bss} "self.Bus.WriteByte(${STATE_CAP}, cpu.GetRegisterUlong(0)); cpu.PC = cpu.LR"
+    ${gbw}=    Resolve Symbol    gpio_bit_write
+    Execute Command    cpu AddHook ${gbw} "self.Bus.WriteByte(${FUSE_CAP}, 0xFF) if (cpu.GetRegisterUlong(1) == 0x80 and cpu.GetRegisterUlong(2) == 1) else None; cpu.PC = cpu.LR"
+    Execute Command    sysbus WriteByte ${FUSE_CAP} 0
+    Execute Command    sysbus WriteByte ${STATE_CAP} 0
+    Execute Command    sysbus WriteWord ${PROT_STATUS} ${prot}
+    Execute Command    sysbus WriteWord ${FAULT_FLAGS} ${fault}
+    Execute Command    sysbus WriteDoubleWord ${BMS_STATUS} ${status}
+    ${fn}=    Resolve Symbol    state_handler_17_19
+    ${trap}=    Return Trap
+    Execute Command    cpu SetRegister 13 ${STACKTOP}
+    Execute Command    cpu SetRegister 14 ${trap}
+    Execute Command    cpu PC ${fn}
+    Execute Command    emulation RunFor "0.005"
+    ${f}=    Execute Command    sysbus ReadByte ${FUSE_CAP}
+    Should Be Equal As Integers    ${f}    ${exp_fuse}
+    ${s}=    Execute Command    sysbus ReadByte ${STATE_CAP}
+    Should Be Equal As Integers    ${s}    ${exp_state}
 
 *** Test Cases ***
 Vector Table Is Well Formed
@@ -679,3 +736,100 @@ Charge MOSFET Command Sets The Control Bits
     ${mode870}=    Strip String    ${mode870}
     ${b1}=    Evaluate    (${mode870}) & 0x2
     Should Be Equal As Integers    ${b1}    0x2
+
+# --- Telemetry value scaling (direct leaf call) ------------------------------
+# The telemetry cascade reports each pack thermistor through temp_offset_send,
+# which maps a raw byte to the BMS's centi-kelvin-ish scale: (raw - 0x28) * 10,
+# clamped around a 0x0AAB (2731) base. This checks that scaling against external
+# reference values the same way the powerbankware suite checks its mb_push_temp.
+
+Temperature Register Applies The BMS Scaling
+    [Documentation]    temp_offset_send: raw 0x28 is the 0 °C reference -> exactly the
+    ...                0x0AAB base; 0x32 (50) -> (50-40)*10 + 0x0AAB = 0x0B0F; 0x00 ->
+    ...                (0x28-0)*-10 + 0x0AAB = 0x091B (the below-reference negative leg).
+    ...                Each case runs in its own machine (one leaf call per machine).
+    Temperature Offset Should Be    0x28    0x0AAB
+    Temperature Offset Should Be    0x32    0x0B0F
+    Temperature Offset Should Be    0x00    0x091B
+
+# --- MOS Failure Mode / blown-fuse startup check -----------------------------
+# The pack carries a one-shot secondary (pyro/thermal) fuse: a resistive heater
+# leg on GPIOB PB7 that, once energized, melts the fuse and permanently severs the
+# pack. The firmware fires it only as a last resort when the discharge/charge MOSFET
+# fails to interrupt a latched over-current. After it fires, state 0x17 is persisted
+# to EEPROM 0x08080001 so the NEXT power-on recognises the blown fuse and boots
+# straight into "MOS Failure Mode" instead of trying to run the pack.
+
+Startup In MOS Failure Mode Announces The Blown Fuse
+    [Documentation]    The startup check the question asks about: main() latches the
+    ...                persisted power-on mode from EEPROM 0x08080001. A value of 0x17 means
+    ...                the secondary fuse was fired on a prior run (hard MOS failure). On
+    ...                boot batteryware latches the discharge-OC fault (s_fault_flags bit 6),
+    ...                raises the MOS-failure interlock (status bit 15), runs the fuse handler
+    ...                and prints "MOS Failure Mode". Seed the EEPROM byte = 0x17 and confirm
+    ...                the announcement fires and both flags latch. The fuse handler's FET/SPI
+    ...                internals are skipped — this is the startup *detection*, not a re-fire.
+    Create Battery Machine
+    Execute Command    sysbus WriteByte ${BOOT_MODE_EE} 0x17
+    Create Log Tester    30
+    ${h}=    Resolve Symbol    state_handler_17_19
+    # main sets the discharge-OC fault (s_fault_flags+0 bit6) and the MOS interlock
+    # (s_bms_cfg+1 bit7 == status bit15) just before calling the fuse handler. Freeze
+    # both into scratch at the handler entry (the boot keeps free-running afterwards,
+    # so an SRAM read at the end of the test would race the super-loop), then skip the
+    # handler's FET/SPI internals.
+    Execute Command    cpu AddHook ${h} "self.Bus.WriteByte(${FUSE_CAP}, self.Bus.ReadByte(0x20002C44)); self.Bus.WriteByte(${STATE_CAP}, self.Bus.ReadByte(0x20002C01)); self.Log(LogLevel.Error, 'MOS_HANDLER'); cpu.PC = cpu.LR"
+    ${mos}=    Resolve Symbol    s_mos_failure_mode
+    ${up}=     Resolve Symbol    uart_printf
+    # GetSymbolAddress rounds the odd-addressed rodata string down by one, so mask the
+    # low bit on both sides when matching the printed-string pointer in R0.
+    Execute Command    cpu AddHook ${up} "self.Log(LogLevel.Error, 'MOS_FAILURE_BANNER') if (cpu.GetRegisterUlong(0) & ~1) == (${mos} & ~1) else None"
+    Start Emulation
+    Wait For Log Entry    MOS_HANDLER    timeout=30
+    Wait For Log Entry    MOS_FAILURE_BANNER    timeout=10
+    # Discharge-OC fault bit 6 — latched by the startup path only for mode 0x17.
+    ${ff}=    Execute Command    sysbus ReadByte ${FUSE_CAP}
+    ${ff}=    Strip String    ${ff}
+    ${b6}=    Evaluate    ${ff} & 0x40
+    Should Be Equal As Integers    ${b6}    0x40
+    # MOS-failure interlock — status bit 15 (bit 7 of the byte at 0x20002C01).
+    ${st}=    Execute Command    sysbus ReadByte ${STATE_CAP}
+    ${st}=    Strip String    ${st}
+    ${b15}=    Evaluate    ${st} & 0x80
+    Should Be Equal As Integers    ${b15}    0x80
+
+Normal Power-On Mode Does Not Enter MOS Failure
+    [Documentation]    Contrast: with a normal persisted power-on mode (EEPROM 0x08080001
+    ...                = 0) the startup check skips the MOS-failure branch — the fuse handler
+    ...                is never called and the discharge-OC fault bit stays clear as the
+    ...                firmware proceeds into its service super-loop.
+    Create Battery Machine
+    Execute Command    sysbus WriteByte ${BOOT_MODE_EE} 0x00
+    Create Log Tester    60
+    ${h}=    Resolve Symbol    state_handler_17_19
+    Execute Command    cpu AddHook ${h} "self.Log(LogLevel.Error, 'MOS_HANDLER')"
+    ${loop}=    Resolve Symbol    uart_resp_handler
+    Execute Command    cpu AddHook ${loop} "self.Log(LogLevel.Error, 'SUPERLOOP')"
+    Start Emulation
+    Wait For Log Entry    SUPERLOOP    timeout=60
+    ${ff}=    Execute Command    sysbus ReadWord ${FAULT_FLAGS}
+    ${ff}=    Strip String    ${ff}
+    ${b6}=    Evaluate    ${ff} & 0x40
+    Should Be Equal As Integers    ${b6}    0x0
+
+MOS Failure Handler Fires The Fuse Only On A Latched Over-Current
+    [Documentation]    The fuse-blow decision itself (state_handler_17_19), as a truth
+    ...                table. The PB7 heater fires iff (1) the protection is NOT the
+    ...                recoverable bit-11 class, (2) a discharge- or charge-OC is latched —
+    ...                i.e. the MOSFET failed to interrupt the current — and (3) no telemetry/
+    ...                EEPROM update is in flight (status bit 15 clear). Whatever the outcome,
+    ...                the handler force-opens the pack and dispatches the resulting latched
+    ...                state (0x17 fired / 0x18 protection-no-fire / 0x19 recoverable).
+    # (1) latched discharge OC, recoverable bit clear, no interlock -> FUSE FIRES, state 0x17.
+    Fuse Decision Should Be    0x0000    0x0040    0x00000000    0xFF    0x17
+    # Already-blown reboot: the startup interlock (status bit 15) blocks a re-fire -> 0x17, no fire.
+    Fuse Decision Should Be    0x0000    0x0040    0x00008000    0x00    0x17
+    # Recoverable bit-11 protection class -> the fuse is never touched, state 0x19.
+    Fuse Decision Should Be    0x0800    0x0000    0x00000000    0x00    0x19
+    # Protection with no over-current latched (MOSFET did its job) -> no fire, state 0x18.
+    Fuse Decision Should Be    0x0000    0x0000    0x00000000    0x00    0x18

@@ -365,3 +365,30 @@ OTA Data Block Is Programmed Into Flash
     Should Match Regexp    ${w}    (?i)0x0*44332211
     # The data block was ACKed (command ACK, arg ACK, block ACK = three 0x79s).
     Tx Byte At Should Be    2    0x79
+
+OTA Verify With The Matching End Address Finalises
+    [Documentation]    The verify/finalise command '!' 0xDE (0x21 + ~0x21) followed by an
+    ...                address argument equal to the expected end address (g_ota_end_addr)
+    ...                completes the transfer: the loader ACKs the command, ACKs the
+    ...                argument and flushes (the busy/upgrade-finished bookkeeping the server
+    ...                loop watches). Seed g_ota_end_addr = 0x08008000, short-circuit the
+    ...                blocking uart_tx_flush, and confirm both ACKs.
+    Create Loader Machine
+    Hook Return    uart_tx_flush
+    ${endaddr}=    Resolve Symbol    g_ota_end_addr
+    Execute Command    sysbus WriteDoubleWord ${endaddr} 0x08008000
+    Drive OTA Bytes    0x21  0xDE  0x08  0x00  0x80  0x00  0x88
+    Tx Byte At Should Be    0    0x79          # command-header ACK
+    Tx Byte At Should Be    1    0x79          # finalise (matching address) ACK
+
+OTA Verify With A Wrong End Address Is NAKed
+    [Documentation]    A verify/finalise whose address argument does not match the expected
+    ...                end address is refused with a NAK — the loader won't finalise a
+    ...                transfer that didn't reach the staged end. Seed a different
+    ...                g_ota_end_addr (0x08009000) and confirm the argument NAK.
+    Create Loader Machine
+    ${endaddr}=    Resolve Symbol    g_ota_end_addr
+    Execute Command    sysbus WriteDoubleWord ${endaddr} 0x08009000
+    Drive OTA Bytes    0x21  0xDE  0x08  0x00  0x80  0x00  0x88
+    Tx Byte At Should Be    0    0x79          # command-header ACK
+    Tx Byte At Should Be    1    0x1F          # finalise NAK (address mismatch)
