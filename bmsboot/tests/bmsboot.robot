@@ -1,9 +1,10 @@
 *** Settings ***
 Documentation     Renode smoke tests for the VanMoof bmsboot (STM32L072) loader image.
-...               Build the test ELF first:  bash bmsboot/tests/build-test-elf.sh
+...               Build the test image first:  make -C bmsboot test
 ...               then run:  renode-test bmsboot/tests/bmsboot.robot
-...               (the ELF links the real src/ objects against tests/stubs.c, which
-...               stands in for the STM32L0 HAL/CMSIS leaves the decomp leaves extern).
+...               `make test` links the real src/ objects against tests/stubs.c (which
+...               stands in for the STM32L0 HAL/CMSIS leaves the decomp leaves extern)
+...               into build/bmsboot_test.elf, and generates build/eeprom_test.bin.
 Suite Setup       Setup
 Suite Teardown    Teardown
 Test Teardown     Test Teardown
@@ -12,6 +13,7 @@ Resource          ${RENODEKEYWORDS}
 *** Variables ***
 ${ELF}            @${CURDIR}/../build/bmsboot_test.elf
 ${REPL}           @${CURDIR}/bmsboot.repl
+${EEPROM}         @${CURDIR}/../build/eeprom_test.bin
 ${VTOR_RAM}       0x20000000      # boot_hw_init relocates the vector table here
 ${SCB_VTOR}       0xE000ED08      # SCB->VTOR register
 
@@ -161,3 +163,20 @@ Reset Cause Is Persisted To EEPROM
     # RCC_CSR low byte (0x00) lands at +2; byte 3 (0x0A) lands at +5.
     ${cause3}=    Execute Command    sysbus ReadByte 0x08080005
     Should Be Equal As Integers    ${cause3}    0x0A
+
+Real Provisioned EEPROM Boots Normally
+    [Documentation]    Real-data variant: load a complete tool-generated EEPROM image
+    ...                (make test — tools/eeprom_example.py, boot flag 0x55 = normal)
+    ...                instead of seeding individual bytes, and confirm the loader reads
+    ...                it, takes the normal-boot path, and leaves the flag at 0x55 (it
+    ...                only rewrites the 0x33/0x5A flags). Exercises the boot decision
+    ...                against a realistic provisioned EEPROM.
+    Create Loader Machine
+    Execute Command    sysbus LoadBinary ${EEPROM} 0x08080000
+    Create Log Tester         10
+    ${drain}=    Resolve Symbol    uart_rx_drain
+    Execute Command           cpu AddHook ${drain} "self.Log(LogLevel.Error, 'IN_LOOP')"
+    Start Emulation
+    Wait For Log Entry        IN_LOOP
+    ${flag}=    Execute Command    sysbus ReadByte 0x08080000
+    Should Be Equal As Integers    ${flag}    0x55

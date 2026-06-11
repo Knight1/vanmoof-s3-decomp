@@ -10,6 +10,7 @@ Resource          ${RENODEKEYWORDS}
 *** Variables ***
 ${ELF}            @${CURDIR}/../build/batteryware.elf
 ${REPL}           @${CURDIR}/batteryware.repl
+${EEPROM}         @${CURDIR}/../build/eeprom_test.bin
 ${VTOR}           0x08005028
 # Scratch buffer + stack used by the direct-call (leaf function) tests. Both sit
 # inside the 20 KB SRAM (0x20000000..0x20005000) modelled in batteryware.repl.
@@ -643,6 +644,20 @@ Modbus Read Streams The ESN From EEPROM
     Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0xD2
     Process Rx Ring
     Response Word At Offset Should Be    27    0x4E53
+
+Modbus Read Streams A Real Provisioned ESN
+    [Documentation]    Real-data variant: load a complete tool-generated EEPROM image
+    ...                (make eeprom-fixture — tools/eeprom_example.py, ESN
+    ...                "VM3SCANNED0001", boot flag 0x55) into the modelled EEPROM and
+    ...                confirm the firmware streams the real serial back. Register 0x0C
+    ...                (offset 27) carries the first ESN pair "VM" = 0x564D. This checks
+    ...                the firmware against the actual on-disk field layout the
+    ...                provisioning tool produces, not hand-seeded bytes.
+    Create Leaf Machine
+    Execute Command    sysbus LoadBinary ${EEPROM} 0x08080000
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0xD2
+    Process Rx Ring
+    Response Word At Offset Should Be    27    0x564D
 
 Charge MOSFET Command Sets The Control Bits
     [Documentation]    Write Single Register to command word 0x1A (arg 1) is the

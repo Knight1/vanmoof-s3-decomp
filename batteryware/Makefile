@@ -47,10 +47,18 @@ LDFLAGS      := $(ARCH_FLAGS) \
 
 LDLIBS       := -lgcc
 
-.PHONY: all clean compare size disasm help renode-test
+.PHONY: all clean compare size disasm help renode-test eeprom-fixture
 .DEFAULT_GOAL := all
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
+
+# Known-good 6 KB EEPROM fixture (real field layout: boot flag, ESN, config,
+# cal gains) from tools/eeprom_example.py — loaded by the suite's real-data
+# tests. ESN "VM3SCANNED0001" surfaces as 0x564D ("VM") in telemetry.
+$(BUILD_DIR)/eeprom_test.bin: tools/eeprom_example.py | $(BUILD_DIR)
+	python3 tools/eeprom_example.py --esn "VM3SCANNED0001" -o $@
+
+eeprom-fixture: $(BUILD_DIR)/eeprom_test.bin
 
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -91,7 +99,7 @@ compare: $(BUILD_DIR)/$(PROJECT).bin
 
 # Renode emulation smoke tests. Runs from the repo root so the suite's
 # @batteryware/... paths resolve. Requires `renode-test` on PATH.
-renode-test: $(BUILD_DIR)/$(PROJECT).elf
+renode-test: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/eeprom_test.bin
 	@command -v renode-test >/dev/null 2>&1 || { \
 		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
 	cd .. && renode-test batteryware/tests/$(PROJECT).robot

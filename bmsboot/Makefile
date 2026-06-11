@@ -44,8 +44,36 @@ LDFLAGS      := $(ARCH_FLAGS) \
 
 LDLIBS       := -lgcc
 
-.PHONY: all clean compare size disasm help
+.PHONY: all clean compare size disasm help test
 .DEFAULT_GOAL := all
+
+# ---- Renode test image -------------------------------------------------------
+# The normal targets can't link standalone (the HAL/CMSIS leaves are extern).
+# `make test` links the real firmware objects against tests/stubs.c (vendor-leaf
+# stand-ins) into a self-contained ELF + bin for Renode, and generates a
+# known-good 6 KB EEPROM fixture (real field layout) the suite loads for its
+# real-data tests.
+TEST_ELF     := $(BUILD_DIR)/$(PROJECT)_test.elf
+TEST_BIN     := $(BUILD_DIR)/$(PROJECT)_test.bin
+TEST_EEPROM  := $(BUILD_DIR)/eeprom_test.bin
+EEPROM_GEN   := ../batteryware/tools/eeprom_example.py
+TEST_OBJS    := $(OBJS) $(BUILD_DIR)/stubs.o
+
+$(BUILD_DIR)/stubs.o: tests/stubs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(TEST_ELF): $(TEST_OBJS) $(LD_SCRIPT) | $(BUILD_DIR)
+	$(LD) $(LDFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
+$(TEST_BIN): $(TEST_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(TEST_EEPROM): $(EEPROM_GEN) | $(BUILD_DIR)
+	python3 $(EEPROM_GEN) --boot-flag 0x55 --esn "VM3SCANNED0001" -o $@
+
+test: $(TEST_BIN) $(TEST_EEPROM)
+	@$(SIZE) $(TEST_ELF)
+	@echo "built $(TEST_ELF) + $(TEST_BIN) + $(TEST_EEPROM) (Renode test images)"
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
 
