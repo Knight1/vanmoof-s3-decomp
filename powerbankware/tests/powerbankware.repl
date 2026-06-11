@@ -1,0 +1,42 @@
+// STM32F091xC — minimal Renode platform for the VanMoof powerbankware
+// application image.
+//
+// The application is linked at 0x08008000 (the first 32 KB of flash belongs to
+// powerbankboot). Only what the firmware needs to boot and to drive the USART2
+// Modbus host link is modelled here; the clock/flash *status* registers it polls
+// during bring-up are left unmodelled (read back 0 — Renode warns, never faults)
+// and the Modbus/leaf tests call the routines directly without running the
+// clock-init path, so this description stays model-agnostic and loads on any
+// recent Renode.
+//
+// Peripheral bases (STM32F0): RCC 0x40021000, FLASH 0x40022000, CRC 0x40023000,
+// GPIOA 0x48000000, USART1 0x40013800 (debug trace), USART2 0x40004400 (Modbus).
+// This part is Cortex-M0 (no VTOR): the app relocates its vector table by copying
+// it to SRAM 0x20000000 and setting SYSCFG_CFGR1.MEM_MODE = 3 (in hal_bringup).
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+// Whole 256 KB flash bank: powerbankboot (0x08000000) + application (0x08008000)
+// + Shadow/OTA staging (0x08024000). The app's image header + vector table sit
+// at 0x08008000 / 0x08008028.
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x40000
+
+// 32 KB SRAM (stack top _estack = 0x20008000).
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x8000
+
+// USART1 — debug trace console (log_print), IRQ 27.
+usart1: UART.STM32_UART @ sysbus <0x40013800, +0x100>
+    IRQ -> nvic@27
+
+// USART2 — the inter-module Modbus RTU host link (the BMS answers as slave 0xAA),
+// IRQ 28. This is the port the Modbus test talks to.
+usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
+    IRQ -> nvic@28

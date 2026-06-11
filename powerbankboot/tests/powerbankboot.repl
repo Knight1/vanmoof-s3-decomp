@@ -1,0 +1,41 @@
+// STM32F091xC — minimal Renode platform for the VanMoof powerbankboot loader.
+//
+// The loader owns the first 32 KB of flash and the CPU resets straight into its
+// vector table at 0x08000000 (no VanMoof image header). It brings up USART2 as
+// the serial-download / OTA bus and, when neither application bank validates,
+// stays resident announcing itself with the "I am VM-BATT BL" banner. Clock /
+// flash / CRC / IWDG status registers it touches are unmodelled (read back 0 —
+// Renode warns, never faults); tests/stubs.c stands in for the HAL + X-CUBE-STL
+// leaves. This part is Cortex-M0 (no VTOR): the loader runs with its vectors at
+// flash base.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+// 256 KB flash: loader (0x08000000, 32 KB) + AP bank (0x08008000, 112 KB) +
+// Shadow / OTA staging (0x08024000, 112 KB).
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x40000
+
+// 32 KB SRAM (initial SP _estack = 0x20008000).
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x8000
+
+// RTC — modelled as memory so the loader's persisted boot flag survives. The F091
+// loader keeps the "upgrade finished" flag (+ its complement) in the RTC backup
+// registers BKP0R/BKP1R at RTC_BASE + 0x50 / +0x54, not in a data EEPROM.
+rtc: Memory.MappedMemory @ sysbus 0x40002800
+    size: 0x400
+
+// USART1 — debug trace console (dbg_printf), IRQ 27.
+usart1: UART.STM32_UART @ sysbus <0x40013800, +0x100>
+    IRQ -> nvic@27
+
+// USART2 — the serial-download / OTA bus (115200 8N1, PA2/PA3), IRQ 28.
+usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
+    IRQ -> nvic@28

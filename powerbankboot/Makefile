@@ -44,8 +44,38 @@ LDFLAGS      := $(ARCH_FLAGS) \
 
 LDLIBS       := -lgcc
 
-.PHONY: all clean compare size disasm help
+.PHONY: all clean compare size disasm help test renode-test
 .DEFAULT_GOAL := all
+
+# ---- Renode test image -------------------------------------------------------
+# The normal targets can't link standalone (the STM32F0 HAL and X-CUBE-STL leaves
+# are extern). `make test` links the real firmware objects against tests/stubs.c
+# (vendor-leaf stand-ins) into a self-contained ELF + bin for Renode. The F091
+# loader persists its boot flag in the RTC backup registers, not a data EEPROM,
+# so there is no EEPROM fixture (unlike bmsboot).
+TEST_ELF     := $(BUILD_DIR)/$(PROJECT)_test.elf
+TEST_BIN     := $(BUILD_DIR)/$(PROJECT)_test.bin
+TEST_OBJS    := $(OBJS) $(BUILD_DIR)/stubs.o
+
+$(BUILD_DIR)/stubs.o: tests/stubs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(TEST_ELF): $(TEST_OBJS) $(LD_SCRIPT) | $(BUILD_DIR)
+	$(LD) $(LDFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
+$(TEST_BIN): $(TEST_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+test: $(TEST_BIN)
+	@$(SIZE) $(TEST_ELF)
+	@echo "built $(TEST_ELF) + $(TEST_BIN) (Renode test images)"
+
+# Renode emulation smoke tests. Runs from the repo root so the suite's
+# @powerbankboot/... paths resolve. Requires `renode-test` on PATH.
+renode-test: $(TEST_ELF)
+	@command -v renode-test >/dev/null 2>&1 || { \
+		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
+	cd .. && renode-test powerbankboot/tests/$(PROJECT).robot
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
 
