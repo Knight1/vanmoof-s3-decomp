@@ -151,12 +151,12 @@ void cmd_send_8byte(void)
  *   `'A'..'F'` (uppercase hex), storing into `value_buf[value_pos]`
  *   (cap 20). Anything else → state 6.
  *
- * Matching (first-match-wins prefix scan):
- *   For each table entry, count chars of name_buf that equal the
- *   entry's name[0..name_pos-1]. If `match_count == name_pos`, take
- *   the entry's `idx` byte and break (first match wins).
- *   Failed match calls `veneer_a6aa()` then continues anyway — that
- *   thunk is OEM logging, not a fatal abort.
+ * Matching (exact-length, first match wins):
+ *   Only entries whose `name_len == name_pos` are considered; for each,
+ *   every name_buf byte must equal the entry's name (`match_count ==
+ *   name_pos`) to take its `idx` byte and stop. A parse that never reached
+ *   state 5, or a name matching nothing, calls `veneer_a6aa()` — that thunk
+ *   is OEM logging, not a fatal abort.
  *
  * Dispatch: `jump_table[best_action]()` via a `mov pc` tail-jump (NOT a
  *   call) — each handler continues in command_parser's own frame and
@@ -242,8 +242,14 @@ static void (* const s_jump_table[24])(uint32_t, int, uint8_t) = {
 extern void veneer_a6aa(void);  /* OEM parse-error log hook */
 extern void veneer_a6e0(void);  /* OEM dispatch-error log hook */
 
-void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte)
+void command_parser(uint32_t flag, uint32_t buf_addr, uint8_t buf_len)
 {
+    /* OEM ABI: r0 = `flag` (always the literal 1 from the only call site —
+     * stored to the frame but never read), r1 = `buf_addr` (the byte buffer
+     * the parser reads), r2 = `buf_len` (the length: empty-check + loop bound).
+     * A prior reconstruction bound these one register too low (buffer from r0,
+     * length from r1), which made every console command read from address
+     * 0x1 and collapse to entry 0/1 — fixed here to match the image. */
     const uint8_t *buf = (const uint8_t *)(uintptr_t)buf_addr;
 
     char     name_buf[21];
@@ -254,101 +260,110 @@ void command_parser(uint32_t buf_addr, int buf_len, uint8_t cmd_byte)
     uint8_t  parse_state = 0;
     uint8_t  i;
 
-    (void)cmd_byte;
+    (void)flag;
     (void)value_buf;
 
+    memset_byte_fill((uint8_t *)name_buf, 0, 0x14);
+    memset_byte_fill((uint8_t *)value_buf, 0, 0x14);
+
+    /* OEM logs the empty-buffer case but does NOT return — it falls through
+     * the (skipped) loops to the dispatch-error sink at index 0. */
     if (buf_len == 0) {
         veneer_a6aa();
-        return;
     }
 
     /* --- Name extraction ------------------------------------ */
-    while (read_idx < (uint8_t)buf_len && parse_state == 0) {
+    while (read_idx < buf_len && parse_state == 0) {
         uint8_t c = buf[read_idx];
 
         if (c == '=') {
             read_idx++;
             parse_state = 3;
-            break;
-        }
-        /* OEM: reject c <= 31 or c with high bit set (sxtb < 0). */
-        if (c <= 31 || (int8_t)c < 0) {
+        } else if (c <= 0x1f || (int8_t)c < 0) {
+            /* reject c <= 31 or c with high bit set (sxtb < 0) */
             parse_state = 4;
-            break;
-        }
-        name_buf[name_pos++] = (char)c;
-        if (name_pos > 20) {
-            parse_state = 4;
-            break;
-        }
-        read_idx++;
-        if (read_idx >= (uint8_t)buf_len && parse_state == 0) {
-            /* OEM falls through to state 3 check; with state still 0
-             * the matching phase proceeds with whatever name has so far. */
-            break;
-        }
-    }
-
-    /* --- Value extraction (only if we saw '=') -------------- */
-    if (parse_state == 3) {
-        parse_state = 0;
-        if (read_idx >= (uint8_t)buf_len) {
-            parse_state = 5;
-        }
-        while (read_idx < (uint8_t)buf_len && parse_state == 0) {
-            uint8_t c = buf[read_idx];
-
-            /* Accept '0'..'9' OR 'A'..'F'. */
-            int is_digit = (c >= '0' && c <= '9');
-            int is_hex   = (c >= 'A' && c <= 'F');
-            if (!(is_digit || is_hex)) {
-                parse_state = 6;
-                break;
-            }
-            value_buf[value_pos++] = (char)c;
-            if (value_pos > 20) {
-                parse_state = 6;
-                break;
+        } else {
+            name_buf[name_pos++] = (char)c;
+            if (name_pos > 0x14) {
+                parse_state = 4;
             }
             read_idx++;
-            if (read_idx >= (uint8_t)buf_len) {
-                parse_state = 5;
-                break;
+            if (read_idx == buf_len) {
+                parse_state = 3;
             }
-        }
-
-        /* OEM: if state != 5 after the value loop, log the error,
-         * but continue into matching anyway. */
-        if (parse_state != 5) {
-            veneer_a6aa();
         }
     }
 
-    /* --- Matching (first prefix match wins) ----------------- */
+    /* --- Value extraction (only if we saw '=' or ran out reading the
+     *     name) ------------------------------------------------ */
+    if (parse_state == 3) {
+        parse_state = 0;
+        if (read_idx == buf_len) {
+            parse_state = 5;
+        } else {
+            while (read_idx < buf_len && parse_state == 0) {
+                uint8_t c = buf[read_idx];
+
+                /* Accept '0'..'9' OR 'A'..'F'. */
+                if ((c < '0' || c > '9') && (c < 'A' || c > 'F')) {
+                    parse_state = 6;
+                } else {
+                    value_buf[value_pos++] = (char)c;
+                    if (value_pos > 0x14) {
+                        parse_state = 6;
+                    }
+                    read_idx++;
+                    if (read_idx == buf_len) {
+                        parse_state = 5;
+                    }
+                }
+            }
+        }
+    }
+
+    /* OEM: unconditionally (not just on the state==3 path) log if the parse
+     * didn't end cleanly in state 5, then continue into matching anyway. */
+    if (parse_state != 5) {
+        veneer_a6aa();
+    }
+
+    /* --- Matching (exact-length, first match wins) ---------- */
     uint8_t best_action = 0;
     uint8_t matched     = 0;
-    for (i = 0; i < CMD_TABLE_LEN; i++) {
-        uint8_t score = 0;
-        for (uint8_t j = 0; j < name_pos; j++) {
-            if (j < s_cmd_table[i].name_len &&
-                name_buf[j] == s_cmd_table[i].name[j]) {
-                score++;
+    i = 0;
+    while (i < CMD_TABLE_LEN && !matched) {
+        if (name_pos == s_cmd_table[i].name_len) {
+            uint8_t score = 0;
+            for (uint8_t j = 0; j < name_pos; j++) {
+                if (name_buf[j] == s_cmd_table[i].name[j]) {
+                    score++;
+                }
             }
-        }
-        if (score == name_pos) {
-            best_action = s_cmd_table[i].idx;
-            matched = 1;
-            break;
+            if (score == name_pos) {
+                matched = 1;
+                best_action = s_cmd_table[i].idx;
+            } else {
+                i++;
+            }
+        } else {
+            i++;
         }
     }
 
-    /* --- Dispatch ------------------------------------------- */
     if (!matched) {
         veneer_a6aa();
     }
-    if (best_action > 23) {
+
+    /* --- Dispatch ------------------------------------------- */
+    /* OEM does an unconditional `jump_table[best_action]()` tail-jump after
+     * the error sink; best_action is always an idx byte (1..23) so the >0x17
+     * sink is unreachable. The handlers are frame-sharing continuations not
+     * lifted to standalone functions, so the table stays NULL-stubbed and the
+     * call is guarded (the >0x17 guard also keeps the index in bounds). */
+    if (best_action > 0x17) {
         veneer_a6e0();
-    } else if (s_jump_table[best_action] != NULL) {
-        s_jump_table[best_action](buf_addr, buf_len, best_action);
+    }
+    if (best_action <= 0x17 && s_jump_table[best_action] != NULL) {
+        s_jump_table[best_action](flag, (int)buf_addr, best_action);
     }
 }

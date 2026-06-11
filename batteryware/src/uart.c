@@ -267,7 +267,7 @@ void uart_resp_handler(void)
             }
             if (data == 0xd) {
                 if (*line_len != 0) {
-                    command_parser(1, (int)(uintptr_t)line_buf, (uint8_t)*line_len);
+                    command_parser(1, (uint32_t)(uintptr_t)line_buf, (uint8_t)*line_len);
                 }
                 *line_len = 0;
             } else if (data < 0x20 || (int8_t)data < 0) {
