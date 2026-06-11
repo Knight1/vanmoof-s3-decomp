@@ -1,0 +1,27 @@
+// STM32L072CZT6 — minimal Renode platform for the VanMoof bmsboot loader image.
+//
+// The loader boots from flash 0x08000000 (its own vector table; no VanMoof
+// header — the CPU resets straight into it). It relocates the vector table into
+// SRAM and drives USART1 for the serial-download server. Clock/flash/CRC/IWDG
+// status registers it touches are unmodelled (read as 0, Renode warns, never
+// faults); the test stubs (tests/stubs.c) stand in for the HAL leaves.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 32000000
+    IRQ -> cpu@0
+
+// 256 KB flash: loader (0x08000000) + AP bank (0x08005000) + Shadow (0x0801A800).
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x40000
+
+// 20 KB SRAM (vector table is relocated to 0x20000000; _estack = 0x20005000).
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x5000
+
+// USART1 — the serial-download / OTA bus (9600 8N1, PA9/PA10), IRQ 27.
+usart1: UART.STM32_UART @ sysbus <0x40013800, +0x100>
+    IRQ -> nvic@27
