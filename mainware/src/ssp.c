@@ -764,7 +764,7 @@ static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
 }
 
 /* USART6 RX/TX byte-pump ISR (OEM 0x0803669C), the inter-module (SSPM) bus,
- * invoked via a thin vector trampoline. The twin of usart3/uart4/uart5's ISRs but
+ * invoked via a thin vector trampoline. The twin of usart3/uart5/uart4's ISRs but
  * with deliberate differences preserved from the OEM: it clears latched errors
  * FIRST (and only PE/NE/ORE — there is no FE 0x2 clear here), so the RX path then
  * gates on RXNE && RXNEIE alone (no SR error mask); and the device handle is

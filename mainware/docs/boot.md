@@ -69,11 +69,11 @@ ctx)` (installs the UART log vtable into `g_log_func`) · `log_buffer_crc_check`
 | USART1 | 0x40011000 | 115200 | `usart1_init` |
 | USART2 | 0x40004400 | 115200 | `usart2_init` |
 | USART3 | 0x40004800 | 9600 | `usart3_init` |
-| UART4 | 0x40005000 | 115200 | `uart4_init` |
-| UART5 | 0x40004C00 | 9600 | `uart5_init` |
+| UART5 | 0x40005000 | 115200 | `uart5_init` |
+| UART4 | 0x40004C00 | 9600 | `uart4_init` |
 | USART6 | 0x40011400 | 38400 | `usart6_init` |
-| UART7 | 0x40007C00 | 115200 | `uart7_init` |
-| UART8 | 0x40007800 | 115200 | `uart8_init` |
+| UART8 | 0x40007C00 | 115200 | `uart8_init` |
+| UART7 | 0x40007800 | 115200 | `uart7_init` |
 
 ## `mainware_boot_init_sequence` (`0x0803FC94`)
 

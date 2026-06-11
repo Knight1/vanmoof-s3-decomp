@@ -83,16 +83,16 @@ int HAL_UART_DeInit(UART_HandleTypeDef *huart);
  * 0 = ring full). */
 int uart_send_byte(uint8_t b);
 
-/* UART4 (BLE-coprocessor link) RX/TX byte-pump interrupt service routine, invoked
+/* UART5 (BLE-coprocessor link) RX/TX byte-pump interrupt service routine, invoked
  * via a thin vector trampoline (OEM 0x08036560). */
-void uart4_irq_handler(void);
+void uart5_irq_handler(void);
 
-/* UART7 — the BLE-coprocessor *debug* link, bridged to the console by the
+/* UART8 — the BLE-coprocessor *debug* link, bridged to the console by the
  * `bledebug` command. Locked TX/RX byte primitives (OEM 0x08036A38 / 0x08036A70;
  * each returns the ring-buffer status, 1 = byte moved) and the RX/TX byte-pump
  * ISR (OEM 0x08036AA8). */
-int  uart7_tx_byte(uint8_t b);
-int  uart7_rx_byte(uint8_t *out);
-void uart7_irq_handler(void);
+int  uart8_tx_byte(uint8_t b);
+int  uart8_rx_byte(uint8_t *out);
+void uart8_irq_handler(void);
 
 #endif

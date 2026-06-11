@@ -311,7 +311,7 @@ void console_region_set(char *input)
 #define CTX_LOG_TO_APP        0x313   /* log sink: APP (1) vs Serial (0) */
 #define CTX_DISTANCE          0x31C   /* manual trip distance, tenths of a km (u32) */
 #define CTX_SHIFT_COUNTER     0x338   /* eShifter operation counter (u32) */
-#define CTX_REDIRECT_BLE      0x34C   /* console→UART8 (CC2642 BLE chip) redirect */
+#define CTX_REDIRECT_BLE      0x34C   /* console→UART7 (CC2642 BLE chip) redirect */
 #define CTX_REDIRECT_GSM      0x34D   /* console→UART2 (u-blox modem) redirect */
 #define CTX_DBG_SHIFTER       0x34E   /* stream Modbus-shifter debug */
 #define CTX_DBG_BMS           0x34F   /* stream Modbus-BMS debug */
@@ -1040,12 +1040,12 @@ void console_cmd_blereset(char *args)
     HAL_GPIO_WritePin((void *)GPIOE_BASE, 0x20, 0);   /* PE5 low (release) */
 }
 
-/* `bledebug` — open the CC2642 BLE-chip sub-shell: log "Connect to UART8" and
+/* `bledebug` — open the CC2642 BLE-chip sub-shell: log "Connect to UART7" and
  * arm the console UART-redirect selector (ctx+CTX_REDIRECT_BLE = 1) (OEM 0x08040C6C). */
 void console_cmd_bledebug(char *args)
 {
     (void)args;
-    g_log_func("Connect to UART8\r\n");
+    g_log_func("Connect to UART7\r\n");
     CTXB[CTX_REDIRECT_BLE] = 1;
 }
 
@@ -1249,21 +1249,21 @@ void console_cmd_setgear(char *args)
 }
 
 /* ===========================================================================
- *  UART8 — the ES3 debug-console byte transport
+ *  UART7 — the ES3 debug-console byte transport
  *
- *  The console prompt lives on UART8. Its register-block handle is a pointer-to-
- *  pointer at 0x200097E4 (set by uart8_init); the TX ring handle is at ctx+0x164
- *  and the RX ring at +0x168 (ctx block 0x20003C34, shared with UART7). The five
+ *  The console prompt lives on UART7. Its register-block handle is a pointer-to-
+ *  pointer at 0x200097E4 (set by uart7_init); the TX ring handle is at ctx+0x164
+ *  and the RX ring at +0x168 (ctx block 0x20003C34, shared with UART8). The five
  *  functions below are installed into the g_log_func dispatch table by
- *  console_io_table_install: [0]=console_printf, [1]=uart8_tx_byte,
- *  [2]=uart8_puts, [3]=uart8_write, [4]=uart_rx_ringbuf_get_byte — so
+ *  console_io_table_install: [0]=console_printf, [1]=uart7_tx_byte,
+ *  [2]=uart7_puts, [3]=uart7_write, [4]=uart_rx_ringbuf_get_byte — so
  *  console_printf is g_log_func[0], the system-wide printf.
  * ======================================================================== */
 
-#define UART8_HANDLE   (*(volatile uint32_t * volatile *)0x200097E4u)
-#define UART8_CTX      0x20003C34u
-#define UART8_TX_RING  (*(ringbuf_t * volatile *)(UART8_CTX + 0x164u))
-#define UART8_RX_RING  (*(ringbuf_t * volatile *)(UART8_CTX + 0x168u))
+#define UART7_HANDLE   (*(volatile uint32_t * volatile *)0x200097E4u)
+#define UART7_CTX      0x20003C34u
+#define UART7_TX_RING  (*(ringbuf_t * volatile *)(UART7_CTX + 0x164u))
+#define UART7_RX_RING  (*(ringbuf_t * volatile *)(UART7_CTX + 0x168u))
 
 /* Console line-discipline state block (OEM 0x20004D2C): +0x82 command-mode flag,
  * +0x83 consecutive-ESC counter, +0x84 consecutive-TAB counter. */
@@ -1278,56 +1278,56 @@ extern int snprintf(char *s, unsigned int n, const char *fmt, ...);
 
 /* Cross-module leaves the escape handler invokes (OEM addresses noted). */
 extern void system_reset(void);             /* 0x08035CE8 — AIRCR SYSRESETREQ, no return */
-extern void console_io_table_install(void); /* 0x080430D8 — bind g_log_func to UART8 */
+extern void console_io_table_install(void); /* 0x080430D8 — bind g_log_func to UART7 */
 
-/* Locked single-byte TX into the UART8 TX ring (OEM 0x08036754). Returns the
+/* Locked single-byte TX into the UART7 TX ring (OEM 0x08036754). Returns the
  * ring-push status (ABI quirk: it survives in r0 through the TXEIE re-enable). */
-int uart8_tx_byte(uint8_t b)
+int uart7_tx_byte(uint8_t b)
 {
-    volatile uint32_t *dev = UART8_HANDLE;
+    volatile uint32_t *dev = UART7_HANDLE;
 
     dev[0xC / 4] &= ~0x80u;                        /* mask TXEIE */
     __asm volatile ("dsb 0xf" ::: "memory");
     __asm volatile ("isb 0xf" ::: "memory");
 
-    uint32_t rc = ringbuf_push_byte(UART8_TX_RING, b);
+    uint32_t rc = ringbuf_push_byte(UART7_TX_RING, b);
 
-    dev = UART8_HANDLE;                            /* OEM re-loads the handle */
+    dev = UART7_HANDLE;                            /* OEM re-loads the handle */
     dev[0xC / 4] |= 0x80u;                         /* re-enable TXEIE */
     return (int)rc;
 }
 
-/* Transmit a NUL-terminated string over UART8 (OEM 0x0803678C). */
-void uart8_puts(const char *s)
+/* Transmit a NUL-terminated string over UART7 (OEM 0x0803678C). */
+void uart7_puts(const char *s)
 {
     for (; *s != '\0'; s++) {
-        uart8_tx_byte((uint8_t)*s);
+        uart7_tx_byte((uint8_t)*s);
     }
 }
 
-/* Transmit `len` raw bytes over UART8 (OEM 0x0803679E). The OEM masks the length
+/* Transmit `len` raw bytes over UART7 (OEM 0x0803679E). The OEM masks the length
  * decrement to 16 bits. */
-void uart8_write(const uint8_t *buf, uint16_t len)
+void uart7_write(const uint8_t *buf, uint16_t len)
 {
     while (len != 0) {
-        uart8_tx_byte(*buf++);
+        uart7_tx_byte(*buf++);
         len = (uint16_t)(len - 1);
     }
 }
 
-/* Locked single-byte RX from the UART8 RX ring (OEM 0x080367B8). Returns the
+/* Locked single-byte RX from the UART7 RX ring (OEM 0x080367B8). Returns the
  * ring-get status (1 = byte dequeued into *out, 0 = ring empty). */
 int uart_rx_ringbuf_get_byte(uint8_t *out)
 {
-    volatile uint32_t *dev = UART8_HANDLE;
+    volatile uint32_t *dev = UART7_HANDLE;
 
     dev[0xC / 4] &= ~0x20u;                        /* mask RXNEIE */
     __asm volatile ("dsb 0xf" ::: "memory");
     __asm volatile ("isb 0xf" ::: "memory");
 
-    uint32_t rc = ringbuf_get_byte(UART8_RX_RING, out);
+    uint32_t rc = ringbuf_get_byte(UART7_RX_RING, out);
 
-    dev = UART8_HANDLE;                            /* OEM re-loads the handle */
+    dev = UART7_HANDLE;                            /* OEM re-loads the handle */
     dev[0xC / 4] |= 0x20u;                         /* re-enable RXNEIE */
     return (int)rc;
 }
@@ -1335,7 +1335,7 @@ int uart_rx_ringbuf_get_byte(uint8_t *out)
 /* console_printf (OEM 0x080367F0) — installed as g_log_func[0], the firmware-wide
  * printf. Formats into a 256-byte stack buffer; if CONSOLE_LOG_ECHO is set, also
  * mirrors an "<epoch> " prefix and the message into the SRAM log. Then it pushes
- * the message out the UART8 TX ring synchronously: TXEIE is masked while bytes
+ * the message out the UART7 TX ring synchronously: TXEIE is masked while bytes
  * are queued directly, and whenever the ring fills it re-enables TXEIE and busy-
  * waits (kicking the watchdog) until the ISR has fully drained the FIFO before
  * resuming; TXEIE is left enabled on exit so the tail is sent by the ISR. */
@@ -1357,22 +1357,22 @@ int console_printf(const char *fmt, ...)
         log_emit_string(msg);
     }
 
-    UART8_HANDLE[0xC / 4] &= ~0x80u;               /* mask TXEIE */
+    UART7_HANDLE[0xC / 4] &= ~0x80u;               /* mask TXEIE */
     __asm volatile ("dsb 0xf" ::: "memory");
     __asm volatile ("isb 0xf" ::: "memory");
 
     for (i = 0; i < len && i <= 255 && msg[i] != '\0'; i++) {
-        while (ringbuf_push_byte(UART8_TX_RING, (uint8_t)msg[i]) == 0) {
+        while (ringbuf_push_byte(UART7_TX_RING, (uint8_t)msg[i]) == 0) {
             /* ring full: let the ISR drain it completely, then retry the push */
-            UART8_HANDLE[0xC / 4] |= 0x80u;
+            UART7_HANDLE[0xC / 4] |= 0x80u;
             do {
                 watchdog_kick();
-            } while (ringbuf_free_space(UART8_TX_RING) != 0x400u);
-            UART8_HANDLE[0xC / 4] &= ~0x80u;
+            } while (ringbuf_free_space(UART7_TX_RING) != 0x400u);
+            UART7_HANDLE[0xC / 4] &= ~0x80u;
         }
     }
 
-    UART8_HANDLE[0xC / 4] |= 0x80u;                /* re-enable so the ISR sends the tail */
+    UART7_HANDLE[0xC / 4] |= 0x80u;                /* re-enable so the ISR sends the tail */
     return len;
 }
 
@@ -1391,7 +1391,7 @@ static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
     }
 }
 
-/* UART8 RX/TX byte-pump ISR (OEM 0x080368D4), invoked via a thin vector
+/* UART7 RX/TX byte-pump ISR (OEM 0x080368D4), invoked via a thin vector
  * trampoline. RX: on RXNE with no error and RXNEIE set, push DR into the RX ring,
  * then watch the byte for two command keys — ten consecutive ESC (0x1B) writes
  * the bootloader magic to SRAM 0, logs "NVICReset", and resets; ten consecutive
@@ -1399,16 +1399,16 @@ static void usart_clear_error_flag(volatile uint32_t *d, uint32_t flag)
  * each comparison exactly as the OEM does.) Then clear any latched PE/FE/NE/ORE
  * error; TX: on TXE with TXEIE set, pop the next byte to DR, disabling TXEIE when
  * the ring drains. The RX/TX gates use SR/CR1 sampled once. */
-void uart8_irq_handler(void)
+void uart7_irq_handler(void)
 {
-    volatile uint32_t *dev = UART8_HANDLE;
+    volatile uint32_t *dev = UART7_HANDLE;
     uint32_t sr  = dev[0];
     uint32_t cr1 = dev[0xC / 4];
 
     if ((sr & 0xFu) == 0 && (sr & 0x20u) != 0 && (cr1 & 0x20u) != 0) {
-        ringbuf_push_byte(UART8_RX_RING, (uint8_t)dev[1]);
+        ringbuf_push_byte(UART7_RX_RING, (uint8_t)dev[1]);
 
-        volatile uint32_t *rxdev = UART8_HANDLE;   /* OEM re-derefs the handle */
+        volatile uint32_t *rxdev = UART7_HANDLE;   /* OEM re-derefs the handle */
         if ((uint8_t)rxdev[1] == 0x1Bu) {          /* ESC */
             CONSOLE_STATE[0x83]++;
         } else {
@@ -1433,7 +1433,7 @@ void uart8_irq_handler(void)
         }
     }
 
-    volatile uint32_t *d = UART8_HANDLE;
+    volatile uint32_t *d = UART7_HANDLE;
     usart_clear_error_flag(d, 0x1u);
     usart_clear_error_flag(d, 0x2u);
     usart_clear_error_flag(d, 0x4u);
@@ -1441,26 +1441,26 @@ void uart8_irq_handler(void)
 
     if ((sr & 0x80u) != 0 && (cr1 & 0x80u) != 0) {
         uint8_t b;
-        if (ringbuf_get_byte(UART8_TX_RING, &b) == 0) {
-            UART8_HANDLE[0xC / 4] &= ~0x80u;
+        if (ringbuf_get_byte(UART7_TX_RING, &b) == 0) {
+            UART7_HANDLE[0xC / 4] &= ~0x80u;
         } else {
-            UART8_HANDLE[1] = b;
+            UART7_HANDLE[1] = b;
         }
     }
 }
 
 /* ===========================================================================
- *  USART1 — the second ES3 debug-console port (twin of the UART8 block above)
+ *  USART1 — the second ES3 debug-console port (twin of the UART7 block above)
  *
  *  USART1 carries the same console: handle pp at 0x200098A4 (set by usart1_init),
  *   rings in the shared context 0x2000094C at TX `+0x04` / RX `+0x08`. It runs the
- *  same line discipline as UART8 and shares the command-mode flag (g_console_state
+ *  same line discipline as UART7 and shares the command-mode flag (g_console_state
  *  +0x82) and the log-echo flag, but tracks its OWN consecutive-ESC/-TAB counters
  *  at g_console_state +0x80 / +0x81. The active console is whichever one's I/O
  *  table is bound into g_log_func: `usart1_io_table_install` selects USART1
- *  (selector 0x20000114 = 1), `console_io_table_install` selects UART8 (= 7); the
+ *  (selector 0x20000114 = 1), `console_io_table_install` selects UART7 (= 7); the
  *  command-mode bridge / escape handlers swap between them. The bootloader hand-off
- *  magic differs by port: USART1 writes 0x55AA5501, UART8 writes 0x55AA5507.
+ *  magic differs by port: USART1 writes 0x55AA5501, UART7 writes 0x55AA5507.
  * ======================================================================== */
 
 #define USART1_HANDLE   (*(volatile uint32_t * volatile *)0x200098A4u)
@@ -1558,7 +1558,7 @@ int usart1_printf(const char *fmt, ...)
     return len;
 }
 
-/* USART1 RX/TX byte-pump ISR (OEM 0x08035F98) — twin of uart8_irq_handler. RX:
+/* USART1 RX/TX byte-pump ISR (OEM 0x08035F98) — twin of uart7_irq_handler. RX:
  * push DR into the RX ring, then run the command-key escape handler on the byte —
  * ten consecutive ESC (counter g_console_state+0x80) writes the USART1 boot magic
  * 0x55AA5501 to SRAM 0 and resets; ten consecutive TAB (+0x81) re-binds g_log_func

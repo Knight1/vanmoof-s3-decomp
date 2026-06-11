@@ -104,24 +104,24 @@ soft float for now.
 | `0x20009360` | 6 | `g_button_sm` | `states.c` | three button/announce state machines (`button_press_state_machines_step`); `announce_records_reset(mask)` resets them — phase bytes `[0..2]`, dispatch-state bytes `[3..5]` (machine A re-arms to state 5, B/C to 0). |
 | `0x20006E44` | ≥2 | `g_reset_sm` | `ble.c` / (reset-SM) | factory-reset / power-cycle SM control block (`factory_reset_sm_step`): `[0]` main_state (4 = kick), `[1]` sub_step (0..6). `post_request_with_arg` seeds `[1]` then sets `[0]=4`. |
 | `0x20000944` | 4 | `g_app_ctx_ptr` | `app.c` | pointer to the app context used by `channel_resolve_status`; the three sound-group volume-tier masks (low/medium/high) are at `*ptr + 0xF4/0xF8/0xFC` (see `g_ctx` row; defaults from `sound_groups_init_default`). |
-| `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` / `bus.c` | shared serial driver context holding two UARTs' ring handles. **UART4** (BLE): `+0xB3C` TX ring (`uart_send_byte`), `+0xB40` RX ring (`ssp_rx_byte` / `uart4_irq_handler`). **UART5** (BMS/battery bus): `+0x330` TX ring (`bus_tx_enqueue_byte`), `+0x334` RX ring (`bus_rx_byte_locked` / `uart5_irq_handler`). |
+| `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` / `bus.c` | shared serial driver context holding two UARTs' ring handles. **UART5** (BLE): `+0xB3C` TX ring (`uart_send_byte`), `+0xB40` RX ring (`ssp_rx_byte` / `uart5_irq_handler`). **UART4** (BMS/battery bus): `+0x330` TX ring (`bus_tx_enqueue_byte`), `+0x334` RX ring (`bus_rx_byte_locked` / `uart4_irq_handler`). |
 | `0x20007E14` | 16×24 + tail | `g_msg_tx_table` | `ssp.c` | inter-module-bus outbound message table (`maybe_enqueue_tx_message` fills, `sspm_tx_queue_pump` drains): 16 slots × 24 B (`[0]`=type, `[1]`=state/retry, `[3]`=handle, `[4..5]`=arg, `[6..7]`=len, `[8..23]`=payload); trailing `+0x181` committed counter, `+0x182` round-robin scan index, `+0x184` frame staging buffer (`0x20007F98`, sent via `sspm_bus_send_frame`). Distinct from the BLE/SSP queue at `0x20008A40`. |
 | `0x20008A40` | ≥0x60C | `g_ssp_ble_tx_queue` | `ssp.c` | BLE-side outbound SLIP queue (`ssp_ble_tx_queue_pump`): 128 slots × 0xC B (`[0]`=type, `[1]`=state/retry, `[3]`=u8, `[4..5]`=arg, `[6..7]`=len, `[8..0xB]`=malloc'd payload ptr); control `+0x601` stall counter, `+0x602` scan index, `+0x604..` SLIP frame staging buffer (`0x20009044`, sent via `slip_send_frame`). |
 | `0x200000F0` | 2 | `g_ssp_ble_tx_timers` | `ssp.c` | `ssp_ble_tx_queue_pump` pacing-timer slots: `[0]` "retry_tmr" (100t), `[1]` "packet_tmr" (1t). The rolling TX seq `g_ssp_tx_seq` is at `+0x10` (`0x20000100`). |
-| `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | **UART4** (BLE-coproc) device-handle pointer-to-pointer (set by `uart4_init`). `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TXEIE); `ssp_rx_byte` masks/sets bit 5 (RXNEIE — a second deref hop). `uart4_irq_handler` is the RX/TX byte pump. |
-| `0x20009964` | 4 | `g_uart5_dev_pp` | `bus.c` | **UART5** (BMS/battery Modbus bus, slave 0xAA) device-handle pointer-to-pointer (set by `uart5_init`). `bus_tx_enqueue_byte`/`bus_rx_byte_locked` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart5_irq_handler` is the RX/TX byte pump. Rings in `g_uart_ctx` `+0x330`/`+0x334`. |
+| `0x20009864` | 4 | `g_uart_dev_pp` | `uart.c` / `ssp.c` | **UART5** (BLE-coproc) device-handle pointer-to-pointer (set by `uart5_init`). `uart_send_byte` masks/sets bit 7 of `(*g_uart_dev_pp)+0xC` (TXEIE); `ssp_rx_byte` masks/sets bit 5 (RXNEIE — a second deref hop). `uart5_irq_handler` is the RX/TX byte pump. |
+| `0x20009964` | 4 | `g_uart4_dev_pp` | `bus.c` | **UART4** (BMS/battery Modbus bus, slave 0xAA) device-handle pointer-to-pointer (set by `uart4_init`). `bus_tx_enqueue_byte`/`bus_rx_byte_locked` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart4_irq_handler` is the RX/TX byte pump. Rings in `g_uart_ctx` `+0x330`/`+0x334`. |
 | `0x20009924` | 4 | `g_sspm_dev_pp` | `ssp.c` | **USART6** (inter-module SSPM bus) device-handle pointer-to-pointer (set by `usart6_init`). `sspm_bus_send_byte`/`sspm_bus_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart6_irq_handler` is the RX/TX byte pump (clears errors first, gates RX on RXNE+RXNEIE alone). |
 | `0x20002B3C` | ≥0xA56 | `g_sspm_ctx` | `ssp.c` | USART6 SSPM-bus ring context: `+0xA50` TX ring ptr, `+0xA54` RX ring ptr. |
 | `0x200099A4` | 4 | `g_gsm_dev_pp` | `modem.c` | **USART2** (GSM/SARA modem AT channel) device-handle pointer-to-pointer (set by `usart2_init`). `modem_uart_putc`/`modem_uart_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart2_irq_handler` is the RX/TX byte pump. Rings in `g_usart3_rings` (`0x2000094C`) `+0x410` TX / `+0x414` RX. |
-| `0x200098E4` | 4 | `g_uart7_dev_pp` | `uart.c` | **UART7** (BLE-coproc *debug* link, reached via the `bledebug` passthrough) device-handle pointer-to-pointer (set by `uart7_init`). `uart7_tx_byte`/`uart7_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart7_irq_handler` is the RX/TX byte pump. Rings in `g_console_uart_ctx` `+0x970` TX / `+0x974` RX. |
-| `0x200097E4` | 4 | `g_uart8_dev_pp` | `console.c` | **UART8** (the ES3 debug-console prompt) device-handle pointer-to-pointer (set by `uart8_init`). `uart8_tx_byte`/`uart_rx_ringbuf_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart8_irq_handler` is the RX/TX byte pump + command-key escape handler. Rings in `g_console_uart_ctx` `+0x164` TX / `+0x168` RX. |
-| `0x200098A4` | 4 | `g_usart1_dev_pp` | `console.c` | **USART1** (the *second* ES3 console port, twin of UART8) device-handle pointer-to-pointer (set by `usart1_init`). `usart1_tx_byte`/`usart1_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart1_irq_handler` is the RX/TX byte pump + command-key escape handler (boot-magic `0x55AA5501`). Rings in `g_usart3_rings` (`0x2000094C`) `+0x04` TX / `+0x08` RX. |
-| `0x20000114` | 1 | `g_console_port_sel` | `console.c` | active-console selector (`g_console_table_ctrl+6`): `usart1_io_table_install` sets **1** (USART1 active), `console_io_table_install` sets **7** (UART8 active) when binding the port's I/O functions into `g_log_func`. |
-| `0x20003C34` | ≥0x978 | `g_console_uart_ctx` | `console.c` / `uart.c` | shared serial context for **UART7** (`+0x970` TX ring, `+0x974` RX ring) and **UART8** (`+0x164` TX ring, `+0x168` RX ring). |
+| `0x200098E4` | 4 | `g_uart8_dev_pp` | `uart.c` | **UART8** (BLE-coproc *debug* link, reached via the `bledebug` passthrough) device-handle pointer-to-pointer (set by `uart8_init`). `uart8_tx_byte`/`uart8_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart8_irq_handler` is the RX/TX byte pump. Rings in `g_console_uart_ctx` `+0x970` TX / `+0x974` RX. |
+| `0x200097E4` | 4 | `g_uart7_dev_pp` | `console.c` | **UART7** (the ES3 debug-console prompt) device-handle pointer-to-pointer (set by `uart7_init`). `uart7_tx_byte`/`uart_rx_ringbuf_get_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `uart7_irq_handler` is the RX/TX byte pump + command-key escape handler. Rings in `g_console_uart_ctx` `+0x164` TX / `+0x168` RX. |
+| `0x200098A4` | 4 | `g_usart1_dev_pp` | `console.c` | **USART1** (the *second* ES3 console port, twin of UART7) device-handle pointer-to-pointer (set by `usart1_init`). `usart1_tx_byte`/`usart1_rx_byte` mask CR1 TXEIE/RXNEIE at `+0xC`; `usart1_irq_handler` is the RX/TX byte pump + command-key escape handler (boot-magic `0x55AA5501`). Rings in `g_usart3_rings` (`0x2000094C`) `+0x04` TX / `+0x08` RX. |
+| `0x20000114` | 1 | `g_console_port_sel` | `console.c` | active-console selector (`g_console_table_ctrl+6`): `usart1_io_table_install` sets **1** (USART1 active), `console_io_table_install` sets **7** (UART7 active) when binding the port's I/O functions into `g_log_func`. |
+| `0x20003C34` | ≥0x978 | `g_console_uart_ctx` | `console.c` / `uart.c` | shared serial context for **UART8** (`+0x970` TX ring, `+0x974` RX ring) and **UART7** (`+0x164` TX ring, `+0x168` RX ring). |
 | `0x20004D2C` | ≥0x85 | `g_console_state` | `console.c` | console line-discipline block: `+0x82` command-mode flag (set by 10× TAB), `+0x83` consecutive-ESC counter, `+0x84` consecutive-TAB counter (both reset on any other byte; both fire their action at 10). |
 | `0x20000083` | 1 | `g_console_log_echo` | `console.c` | when non-zero, `console_printf` also mirrors each line (with an `"%ld "` epoch prefix) into the SRAM log via `log_emit_string`. |
-| `0x20009D98` | 0x14 | `g_log_func` | `log.c` / `console.c` | 5-slot console-I/O dispatch table for the **active** console port: `[0]` `…_printf` (the firmware-wide printf), `[1]` tx_byte, `[2]` puts, `[3]` write, `[4]` rx_byte. `console_io_table_install` (`0x080430D8`) binds UART8's five (`console_printf`/`uart8_tx_byte`/`uart8_puts`/`uart8_write`/`uart_rx_ringbuf_get_byte`); `usart1_io_table_install` (`0x0804309C`) binds USART1's five (`usart1_printf`/`usart1_tx_byte`/…). The ubiquitous `g_log_func("…")` calls invoke slot `[0]`. |
-| `0x20000000` | 4 | `g_boot_flag` | `console.c` (& boot) | bootloader hand-off word; `uart8_irq_handler` writes the magic `0x55AA5507` here before the 10×-ESC `system_reset`, requesting the loader stay in download mode. |
+| `0x20009D98` | 0x14 | `g_log_func` | `log.c` / `console.c` | 5-slot console-I/O dispatch table for the **active** console port: `[0]` `…_printf` (the firmware-wide printf), `[1]` tx_byte, `[2]` puts, `[3]` write, `[4]` rx_byte. `console_io_table_install` (`0x080430D8`) binds UART7's five (`console_printf`/`uart7_tx_byte`/`uart7_puts`/`uart7_write`/`uart_rx_ringbuf_get_byte`); `usart1_io_table_install` (`0x0804309C`) binds USART1's five (`usart1_printf`/`usart1_tx_byte`/…). The ubiquitous `g_log_func("…")` calls invoke slot `[0]`. |
+| `0x20000000` | 4 | `g_boot_flag` | `console.c` (& boot) | bootloader hand-off word; `uart7_irq_handler` writes the magic `0x55AA5507` here before the 10×-ESC `system_reset`, requesting the loader stay in download mode. |
 | `0x2000001C` | ≥0x3A | `g_shifter_sm` | `shifter.c` | shifter control-SM slot-record: `+1` step, `+3/4/5/7/9/0xA` scheduler slots, `+6` substate, `+8` current gear, `+0x34/0x35` retries. |
 | `0x2000008C` | 4 | `g_modbus_crc` | `shifter.c` | shifter Modbus CRC-16 accumulator (u16, init `0xFFFF`, poly `0xA001`); `+2` (`0x2000008E`) = the queue / RX-flush scheduler slot (`0xFA`=none). |
 | `0x2000019C` | ≥0x4C | `g_shifter_ctx` | `shifter.c` | shifter subsystem state: `+0` update step, `+1` commit, `+2` result, `+4` active flag, `+8` staged pack header, `+0x14` image len, `+0x30` prog offset, `+0x37` seq-poll step, `+0x38` link-fail, `+0x39` comm-fail. |
@@ -258,14 +258,14 @@ re-pointed to `0x08020200` as the first instruction of `main`.
 | USART1 | `0x40011000` | 115200 8N1 | `usart1_init` |
 | USART2 | `0x40004400` | 115200 | `usart2_init` |
 | USART3 | `0x40004800` | 9600 | `usart3_init` |
-| UART4 | `0x40005000` | 115200 | `uart4_init` |
-| UART5 | `0x40004C00` | 9600 | `uart5_init` |
+| UART5 | `0x40005000` | 115200 | `uart5_init` |
+| UART4 | `0x40004C00` | 9600 | `uart4_init` |
 | USART6 | `0x40011400` | 38400 | `usart6_init` |
-| UART7 | `0x40007C00` | 115200 | `uart7_init` |
-| UART8 | `0x40007800` | 115200 | `uart8_init` |
+| UART8 | `0x40007C00` | 115200 | `uart8_init` |
+| UART7 | `0x40007800` | 115200 | `uart7_init` |
 | I2C2 | `0x40005400` | 400 kHz | `i2c2_init` |
 | I2C3 | `0x40005C00` | 100 kHz | `i2c3_handle_init` |
-| TIM1 | `0x40010000` | PWM, period 2400, 3 OC ch | `tim1_pwm_init` |
+| TIM1 | `0x40010000` | presc 2400 / period 99, 3 PWM ch → PE9/PE11/PE13 AF1 | `tim1_pwm_init` |
 | TIM6 | `0x40001000` | presc 66 / period 50 | `tim6_init` |
 | TIM7 | `0x40001400` | presc 1199 / period 10000 | `tim7_init` |
 | TIM10 | `0x40014400` | presc 95 / period 5000 | `tim10_init` |
@@ -281,20 +281,33 @@ moves bytes between the USART register block and the rings, and also clears any
 latched SR error flag (PE/FE/NE/ORE) by reading SR then DR (RM0430):
 `usart1_irq_handler` (USART1, 2nd ES3 console — `console.c`), `usart2_irq_handler`
 (USART2, GSM/SARA modem — `modem.c`), `usart3_irq_handler` (USART3, eShifter —
-`shifter.c`), `uart4_irq_handler` (UART4, BLE coproc data link — `uart.c`),
-`uart5_irq_handler` (UART5, BMS/battery Modbus bus — `bus.c`), `usart6_irq_handler`
-(USART6, inter-module SSPM bus — `ssp.c`), `uart7_irq_handler` (UART7, BLE coproc
-*debug* link — `uart.c`), `uart8_irq_handler` (UART8, ES3 debug console —
-`console.c`). The two console ISRs (`usart1`/`uart8`) additionally run the console
+`shifter.c`), `uart5_irq_handler` (UART5, BLE coproc data link — `uart.c`),
+`uart4_irq_handler` (UART4, BMS/battery Modbus bus — `bus.c`), `usart6_irq_handler`
+(USART6, inter-module SSPM bus — `ssp.c`), `uart8_irq_handler` (UART8, BLE coproc
+*debug* link — `uart.c`), `uart7_irq_handler` (UART7, ES3 debug console —
+`console.c`). The two console ISRs (`usart1`/`uart7`) additionally run the console
 command-key escape handler (10× ESC → boot-magic + `system_reset`; 10× TAB →
 command mode). The serial byte-pump layer is now complete.
 
-The ES3 console is dual-ported: **UART8** and **USART1** are two physical ports for
+Each byte-pump ISR is reached through a thin NVIC vector trampoline in the
+external-IRQ region of the table at `0x08020200`; these 25 trampolines (`0x0803CA20`–
+`0x0803CB64`) are reconstructed in `src/vectors.c`. **The vector slot index equals the
+IRQ number** (verified by direct slot reads — USART1=37, UART4=52, USART6=71, UART7=82,
+UART8=83), which makes the table the authoritative oracle for each serial peripheral's
+identity. That oracle is what pins down the UART assignment here: **UART7** (`0x40007800`,
+IRQ82) is the ES3 console, **UART8** (`0x40007C00`, IRQ83) the BLE-debug link, **UART4**
+(`0x40004C00`, IRQ52) the 9600-baud BMS bus, **UART5** (`0x40005000`, IRQ53) the
+115200-baud BLE data link. The trampolines also forward the non-serial lines to the
+CubeF4 HAL servicers (`HAL_TIM_IRQHandler` `0x0802756C`, `HAL_DMA_IRQHandler`
+`0x08022BDC`, `HAL_I2C_EV`/`ER_IRQHandler` `0x08025E04`/`0x08025F9E`) and the
+`HAL_GPIO_EXTI_IRQHandler` line demux, some after an application pre-hook.
+
+The ES3 console is dual-ported: **UART7** and **USART1** are two physical ports for
 the same console (shared command-mode + log-echo flags; separate ESC/TAB counters).
 Whichever port's I/O functions are bound into the `g_log_func` table (`0x20009D98`)
 is the active console — so `g_log_func[0]` is that port's `…_printf` (the variadic
 printf every module calls), `[1..4]` its tx_byte/puts/write/rx_byte.
-`console_io_table_install` binds UART8 (selector `g_console_port_sel`=7),
+`console_io_table_install` binds UART7 (selector `g_console_port_sel`=7),
 `usart1_io_table_install` binds USART1 (=1). Both printfs write synchronously,
 busy-waiting (kicking the watchdog) for the TX ring to drain whenever it fills.
 
@@ -316,7 +329,9 @@ half A `+0x01`, half B `+0x99`, each 0x96 B); the 3-bit brightness LUT + 5×7
 glyph/digit ROM live in flash rodata at **`0x0804F358`**. `led_matrix_transmit_step`
 DMAs the two halves to the drivers and recovers a hung I2C2 by bit-banging SCL
 (**PA8**, mask 0x100) until SDA (**PC9**, mask 0x200) releases (logs `" ERR dsp freeze"`).
-The three lamp PWM channels are TIM1 CCR1/2/3 (see `g_led_pwm_obj` `0x20009A84`).
+The three lamp PWM channels are TIM1 CCR1/2/3 on **PE9/PE11/PE13 (AF1)** (see
+`g_led_pwm_obj` `0x20009A84`); the TIM bring-up + HAL MSP callbacks are sourced in
+`tim.c` (TIM1 PWM, TIM6/7/10 base timers).
 
 Other boot pins: **PD7** powered high after init; **PD15/PA12/PA15, PB3/9/10/15,
 PD10/11/12/13, PE2/3/5** driven as power/LED rails; **PE2** = amp enable, **PD5**

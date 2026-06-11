@@ -94,10 +94,10 @@ extern void usart1_init(void);                        /* 0x080332F0 */
 extern void usart2_init(void);                        /* 0x08033324 */
 extern void usart3_init(void);                        /* 0x08033358 */
 extern void usart6_init(void);                        /* 0x0803338C */
-extern void uart4_init(void);                         /* 0x08033254 */
-extern void uart5_init(void);                         /* 0x08033220 */
-extern void uart7_init(void);                         /* 0x080332BC */
-extern void uart8_init(void);                         /* 0x08033288 */
+extern void uart5_init(void);                         /* 0x08033254 */
+extern void uart4_init(void);                         /* 0x08033220 */
+extern void uart8_init(void);                         /* 0x080332BC */
+extern void uart7_init(void);                         /* 0x08033288 */
 extern void i2c2_init(void);                          /* 0x0803C624 */
 extern void tim1_pwm_init(void);                      /* 0x0803C4F4 */
 extern void crc_init(void);                           /* 0x08040268 */
@@ -528,13 +528,13 @@ __attribute__((weak)) int main(void)
     usart2_init();
     usart3_init();
     usart6_init();
-    uart5_init();
     uart4_init();
-    uart8_init();
+    uart5_init();
+    uart7_init();
     i2c2_init();
     i2c3_handle_init();
     tim1_pwm_init();
-    uart7_init();
+    uart8_init();
     crc_init();
     adc1_init();
     tim6_init();
