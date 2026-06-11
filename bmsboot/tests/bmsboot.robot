@@ -112,3 +112,52 @@ Normal Boot Leaves The Comms Port Disabled
     Wait For Log Entry    REACHED_MAIN
     ${en}=    Execute Command    sysbus ReadByte ${enabled}
     Should Be Equal As Integers    ${en}    0
+
+# --- EEPROM-backed boot-flag state machine -----------------------------------
+# The persisted boot flag at EEPROM 0x08080000 selects the boot behaviour. Seed it
+# before reset and confirm main() acts on it. (Requires the EEPROM region in the
+# .repl and the write-through hal_flash_program in stubs.c, so flash_program's
+# read-back-verify loop terminates and the rewritten flag is observable.)
+
+Boot Flag ACK Is Rewritten To Normal
+    [Documentation]    Boot flag 0x33 (ACK, "just wrote the flag") makes the loader
+    ...                rewrite it to 0x55 (NORMAL) and fall through to the resident
+    ...                loop. Seed 0x33, run to the super-loop, confirm the flag is 0x55.
+    Create Loader Machine
+    Create Log Tester         10
+    ${drain}=    Resolve Symbol    uart_rx_drain
+    Execute Command    cpu AddHook ${drain} "self.Log(LogLevel.Error, 'IN_LOOP')"
+    Execute Command    sysbus WriteByte 0x08080000 0x33
+    Start Emulation
+    Wait For Log Entry    IN_LOOP
+    ${flag}=    Execute Command    sysbus ReadByte 0x08080000
+    Should Be Equal As Integers    ${flag}    0x55
+
+Boot Flag Wipe Is Rewritten To Normal
+    [Documentation]    Boot flag 0x5A (WIPE, force serial download) makes the loader
+    ...                rewrite it to 0x55 and erase the AP + Shadow banks. Seed 0x5A,
+    ...                run to the super-loop, confirm the flag is 0x55.
+    Create Loader Machine
+    Create Log Tester         10
+    ${drain}=    Resolve Symbol    uart_rx_drain
+    Execute Command    cpu AddHook ${drain} "self.Log(LogLevel.Error, 'IN_LOOP')"
+    Execute Command    sysbus WriteByte 0x08080000 0x5A
+    Start Emulation
+    Wait For Log Entry    IN_LOOP
+    ${flag}=    Execute Command    sysbus ReadByte 0x08080000
+    Should Be Equal As Integers    ${flag}    0x55
+
+Reset Cause Is Persisted To EEPROM
+    [Documentation]    boot_hw_init saves RCC_CSR (the reset-cause flags) to EEPROM
+    ...                0x08080002. Tag RCC_CSR with a known value and confirm the
+    ...                loader persists its low byte there (flash_program is byte-wise).
+    Create Loader Machine
+    Execute Command    sysbus Tag <0x40021050 4> "RCC_CSR" 0x0A000000
+    Create Log Tester         10
+    ${drain}=    Resolve Symbol    uart_rx_drain
+    Execute Command    cpu AddHook ${drain} "self.Log(LogLevel.Error, 'IN_LOOP')"
+    Start Emulation
+    Wait For Log Entry    IN_LOOP
+    # RCC_CSR low byte (0x00) lands at +2; byte 3 (0x0A) lands at +5.
+    ${cause3}=    Execute Command    sysbus ReadByte 0x08080005
+    Should Be Equal As Integers    ${cause3}    0x0A

@@ -27,6 +27,13 @@ flash: Memory.MappedMemory @ sysbus 0x08000000
 sram: Memory.MappedMemory @ sysbus 0x20000000
     size: 0x5000
 
+// 6 KB data EEPROM (STM32L0 @ 0x08080000) — config blocks, ESN/manufacture date
+// (0x0808000F+), and the charge/discharge current-cal gains. Modelled as memory so
+// the telemetry cascade's EEPROM reads resolve (and can be seeded) instead of
+// hitting an unmapped region that always reads back 0.
+eeprom: Memory.MappedMemory @ sysbus 0x08080000
+    size: 0x1800
+
 // USART1 — the inter-module Modbus RTU link (the BMS answers as slave 0xAA),
 // IRQ 27 (vector slot 43). This is the port the Modbus test talks to.
 usart1: UART.STM32_UART @ sysbus <0x40013800, +0x100>

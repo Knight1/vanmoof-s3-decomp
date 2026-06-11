@@ -631,6 +631,19 @@ Modbus Read Reflects Seeded Telemetry Values
     Response Word At Offset Should Be    85    0xCC33
     Response Word At Offset Should Be    87    0xDD44
 
+Modbus Read Streams The ESN From EEPROM
+    [Documentation]    Register 0x0C of the telemetry read is the first ESN word, read
+    ...                from data EEPROM 0x0808000F/0x08080010 (modelled in the .repl).
+    ...                Seed those bytes and confirm they surface in the response at the
+    ...                cascade offset (27, big-endian hi=+0x10, lo=+0x0F) — proving the
+    ...                EEPROM-backed identity fields flow through, not just SRAM ones.
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte 0x0808000F 0x53    # 'S' -> response[28] (lo)
+    Execute Command    sysbus WriteByte 0x08080010 0x4E    # 'N' -> response[27] (hi)
+    Inject Modbus Frame    0xAA  0x03  0x00  0x00  0x00  0x04  0x5D  0xD2
+    Process Rx Ring
+    Response Word At Offset Should Be    27    0x4E53
+
 Charge MOSFET Command Sets The Control Bits
     [Documentation]    Write Single Register to command word 0x1A (arg 1) is the
     ...                "charge MOSFET on" command. arm_state_bit only acts when the live
