@@ -1363,7 +1363,10 @@ int console_printf(const char *fmt, ...)
 
     for (i = 0; i < len && i <= 255 && msg[i] != '\0'; i++) {
         while (ringbuf_push_byte(UART7_TX_RING, (uint8_t)msg[i]) == 0) {
-            /* ring full: let the ISR drain it completely, then retry the push */
+            /* ring full: let the ISR drain it completely, then retry the push.
+             * (The OEM throttles the kick via a persistent down-counter, skipping
+             * ~1 kick in 256; reproduced here as an unconditional kick — the IWDG
+             * never times out either way, so it is behaviour-equivalent.) */
             UART7_HANDLE[0xC / 4] |= 0x80u;
             do {
                 watchdog_kick();
@@ -1373,6 +1376,8 @@ int console_printf(const char *fmt, ...)
     }
 
     UART7_HANDLE[0xC / 4] |= 0x80u;                /* re-enable so the ISR sends the tail */
+    /* OEM leaves an incidental r0 here (printf-style return is ignored by all
+     * callers of g_log_func[0]); we return the formatted length. */
     return len;
 }
 

@@ -558,7 +558,7 @@ unsigned int bat_modbus_master_step(uint8_t *frame)
                     return state;
                 }
                 if (frame[1] == (rx & 0x7f)) {
-                    bus_crc16_update();
+                    bus_crc16_update(rx);   /* fold the function-code byte into the CRC */
                     func = frame[1];
                     if (func == 3) {
                         g_bat_modbus_ctx[0] = 5;          /* read: uint8_t-count next */
