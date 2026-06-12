@@ -1613,3 +1613,71 @@ void usart1_irq_handler(void)
         }
     }
 }
+
+/* Magic-key-sequence detector (OEM 0x08037188, a light_tick_update helper):
+ * keeps a 5-entry rolling ring of recently received console bytes at SRAM
+ * 0x20005E20 (count at [0], the bytes at [4..8]), reset whenever ESC arrives,
+ * and reports a match once they spell the escape sequence "\x1b[14~" (the F4
+ * key). The OEM materialises the pattern on the stack and memcmp's it against
+ * the ring; reproduced faithfully. */
+int console_magic_sequence_match(int key)
+{
+    static const uint8_t pattern[8] = { 0x1b, 0x5b, 0x31, 0x34, 0x7e, 0, 0, 0 };
+    uint8_t *ring = (uint8_t *)0x20005e20u;
+    uint8_t  local[8];
+    uint8_t  count;
+
+    memcpy(local, pattern, 8);
+    if (key == 0x1b) {
+        ring[0] = 0;
+    }
+    count = ring[0];
+    ring[4 + count] = (uint8_t)key;
+    count = (uint8_t)(count + 1);
+    ring[0] = count;
+    if (count == 5) {
+        ring[0] = 0;
+    }
+    return memcmp(local, ring + 4, 5) == 0;
+}
+
+/* No-op console I/O vectors (OEM 0x08036B78 vararg-discard / 0x08036B74 / 0x08036B76,
+ * each a `bx lr`-class stub): while a raw-UART passthrough owns the line, the
+ * printf/puts/write slots are silenced so firmware log output cannot corrupt the
+ * forwarded byte stream. */
+static int  cmdmode_noop_printf(const char *fmt, ...) { (void)fmt; return 0; }
+static void cmdmode_noop_puts(const char *s) { (void)s; }
+static void cmdmode_noop_write(const uint8_t *buf, uint16_t len) { (void)buf; (void)len; }
+
+/* Install the "silent" console I/O table for the command-mode passthrough: the
+ * printf/puts/write slots become no-ops while tx_byte/rx_byte stay bound to the
+ * active console port — UART7, or USART1 when `g_console_port_sel` (0x20000114) == 1.
+ * `light_tick_update` calls this on entry to the `gsmdebug`/`bledebug` raw passthrough;
+ * `console_io_table_install` restores the normal table on the F4-sequence exit.
+ * OEM 0x08043148. */
+typedef struct {
+    int  (*printf)(const char *fmt, ...);   /* [0] */
+    int  (*tx_byte)(uint8_t b);             /* [1] */
+    void (*puts)(const char *s);            /* [2] */
+    void (*write)(const uint8_t *buf, uint16_t len); /* [3] */
+    int  (*rx_byte)(uint8_t *out);          /* [4] */
+} cmdmode_io_t;
+
+void console_passthrough_io_install(void)
+{
+    cmdmode_io_t *io = (cmdmode_io_t *)0x20009d98u;        /* g_log_func */
+
+    if (*(volatile uint8_t *)0x20000114u != 1) {          /* UART7 console active */
+        io->printf  = cmdmode_noop_printf;
+        io->tx_byte = uart7_tx_byte;
+        io->puts    = cmdmode_noop_puts;
+        io->write   = cmdmode_noop_write;
+        io->rx_byte = uart_rx_ringbuf_get_byte;
+        return;
+    }
+    io->printf  = cmdmode_noop_printf;                     /* USART1 (2nd port) active */
+    io->tx_byte = usart1_tx_byte;
+    io->puts    = cmdmode_noop_puts;
+    io->write   = cmdmode_noop_write;
+    io->rx_byte = usart1_rx_byte;
+}

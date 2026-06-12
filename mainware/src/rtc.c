@@ -202,3 +202,34 @@ void rtc_set_from_unix_time(uint32_t epoch)
         g_log_func(" ERR set time\r\n");
     }
 }
+
+/* ── RTC MSP / wake-up glue ─────────────────────────────────────────────────── */
+
+extern void nvic_set_priority(int32_t irq_n, uint32_t preempt, uint32_t sub); /* 0x08027078 */
+extern void nvic_enable_irq(int32_t irq_n);                                   /* 0x080270E0 */
+
+/* RTC base + the peripheral bit-band alias of RCC_BDCR bit 15 (RTCEN). The
+ * RTC_WKUP line is NVIC IRQ 3 on the STM32F4. */
+#define RTC_INSTANCE       0x40002800u
+#define RCC_BDCR_RTCEN_BB  (*(volatile uint32_t *)0x42470E3Cu)
+#define RTC_WKUP_IRQn      3
+
+/* HAL_RTC_MspInit (OEM 0x0803805C), called from HAL_RTC_Init for the RTC handle.
+ * Enables the RTC peripheral clock and the RTC wake-up interrupt line. */
+void rtc_msp_init(void *hrtc)
+{
+    if (*(volatile uint32_t *)hrtc != RTC_INSTANCE) {   /* hrtc->Instance == RTC */
+        return;
+    }
+    RCC_BDCR_RTCEN_BB = 1u;
+    nvic_set_priority(RTC_WKUP_IRQn, 0, 0);
+    nvic_enable_irq(RTC_WKUP_IRQn);
+}
+
+/* RTC wake-up event callback (OEM 0x08038A04), invoked from rtc_wakeup_irq_handler.
+ * Sets the "wake-up fired" flag the super-loop polls. The flag's address is held
+ * in field +0x24 of the RTC app context at 0x20000094. */
+void rtc_wakeup_event_cb(void)
+{
+    *(*(volatile uint32_t **)(0x20000094u + 0x24u)) = 1u;
+}

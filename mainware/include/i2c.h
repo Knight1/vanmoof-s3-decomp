@@ -89,4 +89,10 @@ int HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t dev_addr, uint16_t mem_ad
                      uint16_t mem_addr_size, uint8_t *data, uint16_t size,
                      uint32_t timeout);
 
+/* I2C transfer-complete / error callbacks (the HAL fires these) + diagnostic
+ * bus scan. `hi2c` is the I2C_HandleTypeDef. */
+void i2c_tx_complete_callback(void *hi2c);   /* 0x0803D200 */
+void i2c_error_callback(void *hi2c);         /* 0x0803D238 */
+void i2c_bus_scan(void);                     /* 0x08043A3C (diagnostics_run_step) */
+
 #endif

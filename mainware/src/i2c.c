@@ -885,3 +885,53 @@ void i2c3_handle_init(void)
         Error_Handler();   /* never returns */
     }
 }
+
+/* ── I2C transfer/error callbacks + diagnostic bus scan (cluster) ─────────── */
+
+#include "log.h"   /* g_log_func */
+
+extern void display_request_recovery(void);
+extern int  HAL_I2C_IsDeviceReady(void *h, uint16_t addr, uint32_t trials, uint32_t tmo); /* 0x08025174 */
+
+/* I2C master/mem transfer-complete callback (OEM 0x0803D200): log which
+ * controller finished (I2C3 is intentionally silent). */
+void i2c_tx_complete_callback(void *hi2c)
+{
+    if (*(volatile uint32_t *)hi2c == 0x40005400u) {            /* I2C1 */
+        g_log_func("I2C1 Data\r\n");
+    } else if (*(volatile uint32_t *)hi2c != 0x40005c00u) {     /* not I2C3 */
+        g_log_func("I2C? Data\r\n");
+    }
+}
+
+/* I2C error callback (OEM 0x0803D238): log the controller; an I2C1 error also
+ * kicks the display recovery path. */
+void i2c_error_callback(void *hi2c)
+{
+    if (*(volatile uint32_t *)hi2c == 0x40005400u) {            /* I2C1 */
+        g_log_func("I2C1 Error\r\n");
+        display_request_recovery();
+    } else if (*(volatile uint32_t *)hi2c == 0x40005c00u) {     /* I2C3 */
+        g_log_func("I2C3 Error\r\n");
+    } else {
+        g_log_func("I2C? Error\r\n");
+    }
+}
+
+/* Diagnostic I2C bus scan (OEM 0x08043A3C, run by diagnostics_run_step): probe
+ * every even 8-bit address on the two buses and log the ones that ACK. */
+void i2c_bus_scan(void)
+{
+    uint32_t a;
+
+    for (a = 0; (int)a < 0xff; a += 2) {
+        if (HAL_I2C_IsDeviceReady((void *)0x20009bb8u, (uint16_t)a, 1, 100) == 0) {
+            g_log_func("I2C1 0x%02X %d\r\n", a, a);
+        }
+    }
+    for (a = 0; (int)a < 0xff; a += 2) {
+        if (HAL_I2C_IsDeviceReady((void *)0x20009b04u, (uint16_t)a, 1, 100) == 0) {
+            g_log_func("I2C3 0x%02X %d\r\n", a, a);
+        }
+    }
+}

@@ -24,4 +24,15 @@ int hw_version_lookup(uint8_t *out);
 /* STC3115 LiPo fuel-gauge: enter run mode (set MODE register bit 0). OEM 0x080398B8. */
 void stc_gas_gauge_set_run(void);
 
+/* HDC1080 temperature/humidity (I2C device 0x80). */
+void hdc1080_set_pointer(void *hi2c);                              /* 0x08033164 */
+int  hdc1080_read(void *hi2c, int16_t *temp_dC, uint16_t *rh_pct); /* 0x08033188 */
+
+/* 6-sample min/max-reject mean filter (ring at 0x20006E48). OEM 0x08038ED4. */
+uint32_t sensor_filter6_push(uint16_t sample);
+
+/* Latch the live ADC sampling config (+0x18/+0x1c/+0x20) into its shadow
+ * (+0x24/+0x28/+0x2c) while the ADC status byte +0x22 is clear. OEM 0x08032CBC. */
+void adc_config_shadow_copy(void);
+
 #endif

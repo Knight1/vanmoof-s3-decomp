@@ -33,11 +33,13 @@ extern int   snprintf(char *s, unsigned int n, const char *fmt, ...);
 extern void *memset(void *s, int c, unsigned int n);
 
 /* The modem UART (the SARA AT channel) ring transport == USART2. The locked
- * RX getter and the string-flush (puts) are sourced at the bottom of this file;
- * modem_uart_tx_byte is a *different* function — a software line-buffer append,
- * not a USART driver — so it stays a true extern. */
+ * RX getter and the string-flush (puts) are sourced at the bottom of this file.
+ * modem_uart_tx_byte is a *different* function — despite the name it is a
+ * software response-line accumulator (appends one received byte to the reply
+ * buffer, tracking the expected line count), not a USART driver — also sourced
+ * at the bottom. */
 extern int   modem_uart_rx_byte(char *out);          /* 0x08036144: 1 = got a byte */
-extern int   modem_uart_tx_byte(void *h, char b);    /* 0x08035C94: 0/2 status      */
+int          modem_uart_tx_byte(void *h, char b);    /* 0x08035C94: 0/1/2 status    */
 extern void  modem_uart_flush(void *buf);            /* 0x08036130 (USART2 puts)    */
 extern void  modem_at_response_copy(void *dst, int src); /* 0x0802F404              */
 
@@ -1331,6 +1333,42 @@ int modem_uart_rx_byte(char *out)
     return (int)rc;
 }
 
+/* Response-line accumulator (OEM 0x08035C94). `h` points to a 4-word state
+ * record {char *buf; int cap; int count; int lines_remaining}; appends one
+ * received byte `b`. Printable bytes (0x20..0x7E) are stored; a CR is stored and
+ * decrements lines_remaining; any other byte is ignored. Returns 2 if the buffer
+ * was already full (resets count), 0 once the last expected line's CR arrives
+ * (NUL-terminates), else 1. modem_at_exec feeds every RX byte through this. */
+int modem_uart_tx_byte(void *h, char b)
+{
+    int *st = (int *)h;
+    uint32_t count = (uint32_t)st[2];
+
+    if ((uint32_t)st[1] <= count) {
+        st[2] = 0;
+        return 2;
+    }
+    if ((uint32_t)(((uint8_t)b - 0x20) & 0xff) < 0x5f) {
+        st[2] = (int)(count + 1);
+        ((char *)(uintptr_t)st[0])[count] = b;
+        return 1;
+    }
+    if (b != '\r') {
+        return 1;
+    }
+    st[2] = (int)(count + 1);
+    ((char *)(uintptr_t)st[0])[count] = '\r';
+    {
+        int rem = st[3];
+        st[3] = rem - 1;
+        if (rem - 1 == 0) {
+            ((char *)(uintptr_t)st[0])[st[2]] = '\0';
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* USART2 RX/TX byte-pump ISR (OEM 0x0803617C), invoked via a thin vector
  * trampoline. On RXNE with no parity/framing/noise/overrun error (SR bits 0-3
  * clear) and RXNEIE set, push DR into the RX ring; then clear any latched
@@ -1361,4 +1399,23 @@ void usart2_irq_handler(void)
             GSM_HANDLE[1] = b;
         }
     }
+}
+
+/* SMS info-tracking init latch (OEM 0x0803D648 / 0x0803D65C). A one-shot flag at
+ * SRAM 0x2000839C guards the SMS info-tracking state machine: latch_once returns
+ * 0 the first time (arming the flag) and 1 thereafter; _get reads it back. */
+#define SMS_TRACK_FLAG  (*(volatile uint8_t *)0x2000839Cu)
+
+int sms_tracking_latch_once(void)
+{
+    if (SMS_TRACK_FLAG == 0) {
+        SMS_TRACK_FLAG = 1;
+        return 0;
+    }
+    return 1;
+}
+
+uint8_t sms_tracking_get(void)
+{
+    return SMS_TRACK_FLAG;
 }

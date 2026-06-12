@@ -1696,3 +1696,136 @@ void status_clear_pulse_flag(void)
     G_STATUS_CLK[0x7c] = 0;
 }
 
+
+/* ── Inter-module "Manchester" announce decoder + TIM10 staging (cluster) ─── */
+
+extern void announce_mark(int channel);          /* app.c */
+extern void charge_time_estimate_reset(void);    /* states.c 0x0802E40C */
+
+/* Battery warranty/state-of-transition (WST) code -> label. OEM 0x080330E4. */
+const char *wst_status_to_string(uint32_t wst)
+{
+    switch (wst) {
+    case 0:  return "WST_NONE";
+    case 1:  return "WST_DISCHARGE_MODE";
+    case 2:  return "WST_CHARGE_MODE";
+    case 3:  return "WST_BYPASS_MODE";
+    default: return "UNKNOWN";
+    }
+}
+
+/* Decode one staged inter-module battery "announce" frame into the telemetry
+ * cache and log it. Frame type byte msg[0]: 0 serial, 1 fw version, 2 SoC,
+ * 3 SoH/NoC/WST (a 7-byte frame also carries the WST byte); anything else is
+ * hex-dumped. OEM 0x08043B28. */
+void manchester_announce_decode(const uint8_t *msg, int len, uint8_t *cache)
+{
+    switch (msg[0]) {
+    case 0:                                          /* serial number */
+        if (cache[0xd] == 0) {
+            announce_mark(0);
+        }
+        cache[0xd] = 1;
+        charge_time_estimate_reset();
+        *(uint32_t *)(cache + 1) = *(const uint32_t *)(msg + 1);
+        cache[5] = msg[5];
+        log_print_timestamp_prefix();
+        g_log_func("serial %02X.%02X.%02X.%02X.%02X\r\n",
+                   cache[1], cache[2], cache[3], cache[4], cache[5]);
+        break;
+    case 1:                                          /* firmware version */
+        if (cache[0xd] == 0) {
+            announce_mark(0);
+        }
+        cache[0xd] = 1;
+        charge_time_estimate_reset();
+        cache[8] = msg[3];
+        *(uint16_t *)(cache + 6) = *(const uint16_t *)(msg + 1);
+        log_print_timestamp_prefix();
+        g_log_func("version %02X.%02X.%02X\r\n", cache[6], cache[7], cache[8]);
+        break;
+    case 2:                                          /* state of charge */
+        if (cache[0xd] == 0) {
+            announce_mark(0);
+        }
+        cache[0xd] = 1;
+        cache[0] = msg[1];
+        charge_time_estimate_reset();
+        log_print_timestamp_prefix();
+        g_log_func("soc %d\r\n", (int8_t)cache[0]);   /* OEM ldrsb: SoC logged signed */
+        break;
+    case 3:                                          /* SoH / NoC / WST */
+        if (cache[0xd] == 0) {
+            announce_mark(0);
+        }
+        cache[0xd] = 1;
+        cache[9] = msg[1];
+        *(uint16_t *)(cache + 10) = *(const uint16_t *)(msg + 2);
+        cache[0xc] = (len == 7) ? msg[4] : 0;
+        charge_time_estimate_reset();
+        log_print_timestamp_prefix();
+        g_log_func("soh %d noc %d wst %s(%d)\r\n",
+                   cache[9], *(uint16_t *)(cache + 10),
+                   wst_status_to_string(cache[0xc]), cache[0xc]);
+        break;
+    default:
+        g_log_func("Unsupported Manchester message\r\n");
+        for (int i = 0; i < len; i++) {
+            g_log_func("0x%02X ", msg[i]);
+        }
+        g_log_func("\r\n");
+        break;
+    }
+}
+
+/* Modbus CRC-16 (poly 0xA001, seed 0xFFFF) over the staged frame; the result is
+ * returned in r0 and consumed by the caller. OEM 0x08043AF0. */
+uint16_t staged_msg_crc16(const uint8_t *buf, int len)
+{
+    uint16_t crc = 0xFFFF;
+    int i;
+
+    for (i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (short bit = 8; bit != 0; bit--) {
+            if ((crc & 1) == 0) {
+                crc >>= 1;
+            } else {
+                crc = (uint16_t)((crc >> 1) ^ 0xA001);
+            }
+        }
+    }
+    return crc;
+}
+
+/* TIM10 period-elapsed callback (OEM 0x08043DE0): reload the counter and commit
+ * the double-buffered staged announce record (pending -> active) one tick after
+ * it was armed. Reached from HAL_TIM_IRQHandler for htim10 (handle 0x20009A04). */
+void tim10_announce_period_cb(void *htim)
+{
+    volatile uint32_t *htim10 = (volatile uint32_t *)0x20009A04u;   /* HTIM10 */
+    volatile uint8_t  *rec    = (volatile uint8_t *)0x200096D4u;    /* staged record */
+
+    if (*(volatile uint32_t *)htim != 0x40014400u) {                /* not TIM10 */
+        return;
+    }
+    /* TIM10->CNT = htim10.Init.Period - 0x682 */
+    ((volatile uint32_t *)htim10[0])[0x24 / 4] = htim10[0xc / 4] - 0x682u;
+
+    if (rec[0x24] != 0) {                            /* freshly armed -> mark pending */
+        rec[0x25] = 1;
+        rec[0x24] = 0;
+        return;
+    }
+    if (rec[0x25] != 0) {                            /* pending -> commit to active */
+        *(volatile uint32_t *)(rec + 4)    = *(volatile uint32_t *)(rec + 0x14);
+        *(volatile uint32_t *)(rec + 8)    = *(volatile uint32_t *)(rec + 0x18);
+        *(volatile uint32_t *)(rec + 0xc)  = *(volatile uint32_t *)(rec + 0x1c);
+        *(volatile uint32_t *)(rec + 0x10) = *(volatile uint32_t *)(rec + 0x20);
+        rec[1] = rec[0x26];
+        rec[0] = 1;
+        rec[0x25] = 0;
+        return;
+    }
+    rec[0x25] = 0;
+}

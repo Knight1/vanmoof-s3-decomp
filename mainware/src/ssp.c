@@ -794,3 +794,129 @@ void usart6_irq_handler(void)
         }
     }
 }
+
+/* ── SSPM-bus RX de-framer + endpoint-table helpers (cluster) ─────────────── */
+
+/* SLIP receive state, kept in the SSPM context (0x20007E14 + 0x180). */
+#define SSPM_RX_STATE  (*(volatile uint8_t *)0x20007f94u)
+
+/* The de-frame scratch the caller passes: a byte buffer, its capacity and the
+ * running fill count (matches the OEM int[3] frame record). */
+typedef struct {
+    uint8_t *buf;
+    int32_t  cap;
+    int32_t  count;
+} ssp_deframe_t;
+
+/* Pull one byte from the SSPM bus and run it through the SLIP de-framer (OEM
+ * sspm_bus_recv_frame, 0x0803A0C0 — the RX counterpart of sspm_bus_send_frame).
+ * 0xC0 delimits frames; 0xDB is the escape (0xDC->0xC0, 0xDD->0xDB). On the
+ * closing 0xC0 of a non-empty frame the CRC-16 (poly 0xA001, seed 0xFFFF) is
+ * checked over the payload. Returns 1 while a frame is still being assembled (or
+ * no byte was ready), 0 when a CRC-valid frame is complete, 2 on a CRC error
+ * (logs "PE"). The persistent SLIP state and the returned status deliberately
+ * diverge in several branches, exactly as the OEM. */
+char sspm_bus_recv_frame(ssp_deframe_t *df)
+{
+    uint8_t b;
+    char rc;
+
+    if (sspm_bus_get_byte(&b) == 0) {
+        return 1;
+    }
+    rc = (char)SSPM_RX_STATE;
+    if (rc == 1) {                                 /* in-frame */
+        if (b == 0xc0) {                           /* end of frame */
+            if (df->count != 0) {
+                if (crc16(df->buf, df->count, 0xFFFFu) == 0) {
+                    rc = 0;
+                } else {
+                    g_log_func("PE\r\n");
+                    rc = 2;
+                }
+                SSPM_RX_STATE = 0;
+            }
+        } else if (b == 0xdb) {                     /* escape */
+            SSPM_RX_STATE = 2;
+        } else {                                    /* data byte */
+            uint32_t n = (uint32_t)df->count;
+            if (n < (uint32_t)df->cap) {
+                df->count = (int32_t)(n + 1);
+                df->buf[n] = b;
+            }
+        }
+    } else if (rc == 2) {                            /* after escape */
+        if (b == 0xdc) {
+            uint32_t n = (uint32_t)df->count;
+            if (n < (uint32_t)df->cap) {
+                df->count = (int32_t)(n + 1);
+                df->buf[n] = 0xc0;
+            }
+            rc = 1;
+            SSPM_RX_STATE = 1;
+        } else if (b == 0xdd) {
+            uint32_t n = (uint32_t)df->count;
+            if (n < (uint32_t)df->cap) {
+                df->count = (int32_t)(n + 1);
+                df->buf[n] = 0xdb;
+            }
+            rc = 1;
+            SSPM_RX_STATE = 1;
+        } else {
+            SSPM_RX_STATE = 0;
+        }
+    } else if (rc == 0) {                            /* idle */
+        if (b == 0xc0) {
+            df->count = 0;
+            rc = 1;
+            SSPM_RX_STATE = 1;
+        } else {
+            rc = 1;
+        }
+    } else {
+        rc = 1;
+    }
+    return rc;
+}
+
+/* Free the in-use table slot whose rolling handle == h (state -> 0); 1 if found.
+ * OEM 0x08039F90. */
+int tx_table_release_by_handle(uint8_t h)
+{
+    unsigned int i = 0;
+
+    while (TX_MSG_TABLE[i].handle != h || TX_MSG_TABLE[i].state == 0) {
+        i = (i + 1) & 0xff;
+        if (i > 0xf) {
+            return 0;
+        }
+    }
+    TX_MSG_TABLE[i].state = 0;
+    return 1;
+}
+
+/* Count the free (state == 0) slots in the 16-entry table. OEM 0x0803A510. */
+char tx_table_free_count(void)
+{
+    char n = 0;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        if (TX_MSG_TABLE[i].state == 0) {
+            n = (char)(n + 1);
+        }
+    }
+    return n;
+}
+
+/* Inter-module -> BLE bridges: an SSPM message carrying a phone command / read
+ * request is forwarded to the BLE dispatchers. OEM 0x0803A1B4 / 0x0803A1BC. */
+void sspm_ble_cmd_bridge(uint32_t cmd, uint32_t p2, uint8_t *payload)
+{
+    ble_cmd_dispatch(cmd, p2, payload);
+}
+
+void sspm_ble_read_bridge(uint16_t char_id)
+{
+    ble_read_request_dispatch(char_id);
+}

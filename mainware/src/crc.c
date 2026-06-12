@@ -44,3 +44,51 @@ uint32_t crc32_hw_feed(crc_dev_t *dev, const uint32_t *src, uint32_t word_count)
     dev->state = 1;
     return result;
 }
+
+/* ── CRC peripheral clock + a device-ID hash ───────────────────────────────── */
+
+#define CRC_INSTANCE   ((volatile uint32_t *)0x40023000u)   /* CRC base (== &CRC->DR) */
+#define RCC_AHB1ENR    (*(volatile uint32_t *)0x40023830u)  /* RCC base 0x40023800 + 0x30 */
+#define RCC_AHB1ENR_CRCEN  (1u << 12)
+
+/* HAL_CRC_MspInit (OEM 0x08040288). Enable the CRC peripheral clock; the OEM
+ * keeps the CubeF4 read-back-delay idiom (read the bit straight back into a
+ * scratch slot after the set). */
+void HAL_CRC_MspInit(crc_dev_t *hcrc)
+{
+    volatile uint32_t tmp;
+
+    if (hcrc->dr != CRC_INSTANCE) {
+        return;
+    }
+    RCC_AHB1ENR |= RCC_AHB1ENR_CRCEN;
+    tmp = RCC_AHB1ENR & RCC_AHB1ENR_CRCEN;
+    (void)tmp;
+}
+
+/* HAL_CRC_MspDeInit (OEM 0x080402B8). Disable the CRC peripheral clock. */
+void HAL_CRC_MspDeInit(crc_dev_t *hcrc)
+{
+    if (hcrc->dr != CRC_INSTANCE) {
+        return;
+    }
+    RCC_AHB1ENR &= ~RCC_AHB1ENR_CRCEN;
+}
+
+/* crc_accumulate_device_uid (OEM 0x080402E8). Copy the 96-bit device unique ID
+ * to a stack buffer and run it through HAL_CRC_Accumulate; returns the CRC (the
+ * OEM tail-passes HAL_CRC_Accumulate's r0 result through). */
+extern uint32_t HAL_CRC_Accumulate(crc_dev_t *hcrc, uint32_t *buf, uint32_t len); /* 0x08023234 */
+
+#define DEVICE_UID   ((volatile uint32_t *)0x1FFF7A10u)
+#define CRC_HANDLE   ((crc_dev_t *)0x20009D90u)
+
+uint32_t crc_accumulate_device_uid(void)
+{
+    uint32_t uid[3];
+
+    uid[0] = DEVICE_UID[0];
+    uid[1] = DEVICE_UID[1];
+    uid[2] = DEVICE_UID[2];
+    return HAL_CRC_Accumulate(CRC_HANDLE, uid, 3);
+}

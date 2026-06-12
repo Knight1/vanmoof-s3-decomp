@@ -115,4 +115,12 @@ void usart1_write(const uint8_t *buf, uint16_t len); /* OEM 0x08035E6E */
 int  usart1_rx_byte(uint8_t *out);                   /* OEM 0x08035E88 (1 = got a byte) */
 void usart1_irq_handler(void);                       /* OEM 0x08035F98 */
 
+/* Rolling 5-byte console-input match against the "\x1b[14~" (F4) sequence —
+ * exits the gsmdebug/bledebug passthrough. OEM 0x08037188. */
+int  console_magic_sequence_match(int key);
+
+/* Install the silent command-mode passthrough I/O table into g_log_func
+ * (printf/puts/write -> no-ops, tx/rx -> active console port). OEM 0x08043148. */
+void console_passthrough_io_install(void);
+
 #endif

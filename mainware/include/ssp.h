@@ -74,4 +74,10 @@ uint32_t sspm_bus_send_frame(const uint8_t *buf, uint16_t len);
  * invoked via a thin vector trampoline (OEM 0x0803669C). */
 void usart6_irq_handler(void);
 
+/* SSPM-bus SLIP RX de-framer + endpoint-table helpers. */
+int  tx_table_release_by_handle(uint8_t h);   /* 0x08039F90 */
+char tx_table_free_count(void);               /* 0x0803A510 */
+void sspm_ble_cmd_bridge(uint32_t cmd, uint32_t p2, uint8_t *payload); /* 0x0803A1B4 */
+void sspm_ble_read_bridge(uint16_t char_id);  /* 0x0803A1BC */
+
 #endif
