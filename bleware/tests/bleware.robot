@@ -188,3 +188,85 @@ LCG Random Produces The Expected Sequence Value
     ${st}=    Execute Command    sysbus ReadDoubleWord ${LCG_STATE}
     ${st}=    Strip String       ${st}
     Should Be Equal As Integers    ${st}    0x41C67EA6
+
+# --- Misc string + GATT-dispatch leaves --------------------------------------
+
+Monitor Strlen Counts The String Length
+    [Documentation]    monitor_strlen is the console's NUL-terminated string length —
+    ...                a plain `while (*s++) n++`. Confirm it against a known string and
+    ...                the empty-string boundary.
+    Create Leaf Machine
+    Load Scratch Bytes    0x48  0x65  0x6C  0x6C  0x6F  0x00     # "Hello\0"
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    ${n}=    Call Leaf Function    monitor_strlen
+    Should Be Equal As Integers    ${n}    5
+    Create Leaf Machine
+    Load Scratch Bytes    0x00                                   # ""
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    ${z}=    Call Leaf Function    monitor_strlen
+    Should Be Equal As Integers    ${z}    0
+
+GATT Characteristic UUID Matcher Resolves The Index
+    [Documentation]    svc_5560_char_uuid_to_index maps a GATT attribute to its index in
+    ...                the service's 9-entry 128-bit-UUID table: it checks the attribute
+    ...                type is 0x10 (128-bit UUID) and linearly matches the 16-byte UUID at
+    ...                attr+4 against the table, returning the entry index or 0xFF. Seed a
+    ...                distinctive UUID into table entry 2 and the matching attribute, and
+    ...                confirm the three branches: correct index, no-match, wrong-type.
+    # (A) attribute UUID matches table entry 2 -> index 2
+    Create Leaf Machine
+    ${tbl}=    Resolve Symbol    g_svc_5560_uuid_table
+    ${e2}=     Evaluate    ${tbl} + 0x20                         # entry 2, byte 0
+    Execute Command    sysbus WriteByte ${e2} 0xAB
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x10          # ATTR_TYPE_128BIT_UUID
+    ${u}=    Evaluate    ${SCRATCH} + 4                          # UUID byte 0
+    Execute Command    sysbus WriteByte ${u} 0xAB
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    ${a}=    Call Leaf Function    svc_5560_char_uuid_to_index
+    Should Be Equal As Integers    ${a}    2
+    # (B) a 128-bit UUID that matches no table entry -> 0xFF
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x10
+    ${u2}=    Evaluate    ${SCRATCH} + 4
+    Execute Command    sysbus WriteByte ${u2} 0xCD
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    ${b}=    Call Leaf Function    svc_5560_char_uuid_to_index
+    Should Be Equal As Integers    ${b}    0xFF
+    # (C) a non-128-bit-UUID attribute type -> 0xFF (no match attempted)
+    Create Leaf Machine
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x01
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    ${c}=    Call Leaf Function    svc_5560_char_uuid_to_index
+    Should Be Equal As Integers    ${c}    0xFF
+
+GATT UUID Matcher Unwinds Past A CCCD Descriptor
+    [Documentation]    When the dispatched attribute is a Client Characteristic Config
+    ...                Descriptor (type 0x02, descriptor UUID 0x2902 at +4), the matcher
+    ...                walks 0x10 bytes backward to the owning characteristic's 128-bit-UUID
+    ...                attribute before matching. Lay out the UUID attribute then a CCCD one
+    ...                slot above it, dispatch on the CCCD, and confirm it resolves to the
+    ...                characteristic's table index (2).
+    Create Leaf Machine
+    ${tbl}=    Resolve Symbol    g_svc_5560_uuid_table
+    ${e2}=     Evaluate    ${tbl} + 0x20
+    Execute Command    sysbus WriteByte ${e2} 0xAB
+    # UUID attribute at SCRATCH (type 0x10, UUID byte0 = 0xAB -> entry 2).
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x10
+    ${u}=    Evaluate    ${SCRATCH} + 4
+    Execute Command    sysbus WriteByte ${u} 0xAB
+    # CCCD descriptor one 0x10 slot above (type 0x02, UUID 0x2902 LE at +4).
+    ${cccd}=    Evaluate    ${SCRATCH} + 0x10
+    Execute Command    sysbus WriteByte ${cccd} 0x02
+    ${cu0}=    Evaluate    ${cccd} + 4
+    ${cu1}=    Evaluate    ${cccd} + 5
+    Execute Command    sysbus WriteByte ${cu0} 0x02
+    Execute Command    sysbus WriteByte ${cu1} 0x29
+    # The 0x10 attr stride means the CCCD record's type byte lands at UUID-offset 0x0C
+    # of the characteristic's 16-byte window the matcher compares, so mirror it in the
+    # table entry — otherwise the post-unwind 16-byte compare would miss on that byte.
+    ${e2c}=    Evaluate    ${tbl} + 0x20 + 0x0C
+    Execute Command    sysbus WriteByte ${e2c} 0x02
+    # Dispatch on the CCCD; the matcher unwinds to the UUID attribute -> index 2.
+    Execute Command    cpu SetRegister 0 ${cccd}
+    ${r}=    Call Leaf Function    svc_5560_char_uuid_to_index
+    Should Be Equal As Integers    ${r}    2

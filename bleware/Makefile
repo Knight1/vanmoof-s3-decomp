@@ -135,7 +135,7 @@ TEST_KEEP  := -Wl,--undefined=crc32_le -Wl,--undefined=crc16_modbus \
               -Wl,--undefined=lcg_random_u15 -Wl,--undefined=monitor_strlen \
               -Wl,--undefined=svc_5560_char_uuid_to_index
 
-$(TEST_ELF): $(OBJS) $(LD_SCRIPT)
+$(TEST_ELF): $(OBJS) $(LD_SCRIPT) Makefile
 	$(LD) $(LDFLAGS) $(TEST_KEEP) $(OBJS) -o $@
 
 test: $(TEST_ELF)
