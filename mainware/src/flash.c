@@ -26,6 +26,12 @@ extern uint32_t HAL_FLASH_Unlock(void);
 extern int      FLASH_WaitForLastOperation(int timeout_ticks);
 extern void     watchdog_kick(void);
 
+/* STM32 hardware CRC-32 accumulate over `len` words (OEM 0x08023234); the config
+ * record reserves its last word for this checksum. The shared CRC handle is the
+ * same crc_dev_t the rest of the firmware uses. */
+extern uint32_t HAL_CRC_Accumulate(crc_dev_t *hcrc, uint32_t *buf, uint32_t len);
+#define CRC_HANDLE  ((crc_dev_t *)0x20009D90u)
+
 /* Map an absolute STM32F4(F413) flash address to its erase-sector index 0..15
  * (OEM flash_addr_to_sector, 0x0803CE14). Each test is an unsigned-underflow
  * range check (addr - sector_base) < sector_size. Sectors 0-3 = 16 KB,
@@ -102,7 +108,7 @@ int flash_erase(int addr, int len)
 
         rc = HAL_FLASHEx_Erase(&ei, &sector_error);
         if (rc != 0) {
-            g_log_func("Flash erase error %d\r\n", sector_error);  /* OEM str 0x0803CF90 */
+            g_log_func("Sector error %d\r\n", sector_error);  /* OEM str @0x08052F18 */
             return rc;
         }
     }
@@ -196,4 +202,39 @@ uint8_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
     uint8_t b2 = flash_config_bank_write(a, b, c, d, payload,
                                          CONFIG_BANK_B_ADDR, CONFIG_BANK_SIZE);
     return (uint8_t)(b1 | b2);
+}
+
+/* Commit one 0xD0-byte config record to a single flash bank (OEM 0x080316D0).
+ * The record is [a][b][c][d] (the 4 register args = first 16 bytes) followed by
+ * the 0xC0-byte payload (the by-value tail); its last word (offset 0xCC) is
+ * reserved for the CRC. Sequence: erase -> CRC the first 0x33 words into the last
+ * word -> program all 0xD0 bytes -> verify by re-CRC'ing 0x34 words straight from
+ * flash (a self-checking CRC reads 0 when the stored checksum matches). Returns
+ * 1 = erase fail, 2 = write fail, 3 = verify mismatch, 0 = ok. */
+uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                struct boot_cfg_block payload,
+                                uint32_t bank_dest, uint32_t size)
+{
+    union {
+        uint32_t w[0x34];                                  /* 0xD0 bytes = 52 words */
+        struct { uint32_t hdr[4]; struct boot_cfg_block body; } rec;
+    } u;
+
+    u.rec.hdr[0] = a;
+    u.rec.hdr[1] = b;
+    u.rec.hdr[2] = c;
+    u.rec.hdr[3] = d;
+    u.rec.body   = payload;
+
+    if (flash_erase((int)bank_dest, (int)size) != 0) {
+        return 1;
+    }
+    u.w[0x33] = HAL_CRC_Accumulate(CRC_HANDLE, u.w, 0x33);  /* checksum words 0..0x32 -> word 0x33 */
+    if (flash_write(bank_dest, u.w, 0xD0) != 0) {
+        return 2;
+    }
+    if (HAL_CRC_Accumulate(CRC_HANDLE, (uint32_t *)bank_dest, 0x34) != 0) {
+        return 3;
+    }
+    return 0;
 }

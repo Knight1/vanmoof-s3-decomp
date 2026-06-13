@@ -20,7 +20,7 @@ int console_next_token(char **pp);
  * line against the user-configurable service password
  * (`g_app_state.ctx_sub->user_password`) and, failing that, against a
  * hard-coded fallback embedded in the image. On success it sets
- * `g_app_state.ctx_sub->logged_in = 1`; on failure it counts attempts
+ * `g_app_state.logged_in = 1`; on failure it counts attempts
  * and arms a 5-second lockout via the scheduler. */
 void login_handler(char *input);
 
@@ -114,5 +114,13 @@ void usart1_puts(const char *s);                     /* OEM 0x08035E5C */
 void usart1_write(const uint8_t *buf, uint16_t len); /* OEM 0x08035E6E */
 int  usart1_rx_byte(uint8_t *out);                   /* OEM 0x08035E88 (1 = got a byte) */
 void usart1_irq_handler(void);                       /* OEM 0x08035F98 */
+
+/* Rolling 5-byte console-input match against the "\x1b[14~" (F4) sequence —
+ * exits the gsmdebug/bledebug passthrough. OEM 0x08037188. */
+int  console_magic_sequence_match(int key);
+
+/* Install the silent command-mode passthrough I/O table into g_log_func
+ * (printf/puts/write -> no-ops, tx/rx -> active console port). OEM 0x08043148. */
+void console_passthrough_io_install(void);
 
 #endif

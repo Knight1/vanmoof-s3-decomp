@@ -29,6 +29,7 @@
 
 #include "main.h"
 #include "app.h"        /* clock_pulse_gpioa8_until_pc9 */
+#include "comm.h"       /* comm_buffers_register_all */
 #include "flash.h"      /* struct boot_cfg_block, config_persist_dual_bank */
 #include "gpio.h"       /* gpio_init */
 #include "i2c.h"        /* i2c3_handle_init */
@@ -106,7 +107,6 @@ extern void tim6_init(void);                          /* 0x0803C2E0 */
 extern void tim7_init(void);                          /* 0x0803C32C */
 extern void tim10_init(void);                         /* 0x0803C37C */
 extern void rtc_init(void);                           /* 0x0803802C */
-extern void comm_buffers_register_all(void);          /* 0x08035D0C */
 extern void button_press_state_machines_step(void);   /* 0x08040380 */
 extern void log_console_subsystem_init(uint32_t magic, void *app_ctx); /* 0x08043114 */
 extern void log_wake_reason(void);                    /* 0x0803DA3C */

@@ -25,4 +25,16 @@ typedef struct {
  * `dev` and return the accumulated CRC (OEM crc32_hw_feed, 0x0802320E). */
 uint32_t crc32_hw_feed(crc_dev_t *dev, const uint32_t *src, uint32_t word_count);
 
+/* CubeF4 CRC HAL MSP hooks (OEM 0x08040288 / 0x080402B8): gate the CRC
+ * peripheral clock (RCC_AHB1ENR bit 12, CRCEN) on/off. Both guard on the
+ * handle's Instance (the +0 word, which is the CRC base 0x40023000 — also the
+ * DR pointer, since CRC->DR sits at offset 0). */
+void HAL_CRC_MspInit(crc_dev_t *hcrc);
+void HAL_CRC_MspDeInit(crc_dev_t *hcrc);
+
+/* Accumulate a CRC-32 over the 96-bit STM32 device unique ID (0x1FFF7A10) using
+ * the shared CRC handle (SRAM 0x20009D90); returns the running CRC. Used by the
+ * console `show` command. OEM 0x080402E8. */
+uint32_t crc_accumulate_device_uid(void);
+
 #endif

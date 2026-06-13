@@ -1741,7 +1741,7 @@ LAB_0802c26e:
       if (0x14 < *(uint8_t *)(G_STATE + 0x27)) {
         systick_delay(4);
         *(signed char *)(G_STATE + 0x27) = *(signed char *)(G_STATE + 0x27) + -1;
-        led_driver_set_shipping_mode();
+        led_driver_set_shipping_mode(*(uint8_t *)(G_STATE + 0x27));  /* OEM passes the post-decrement value */
       }
       bVar11 = *(uint8_t *)(G_CLK + 0xa1);
       uVar19 = HAL_GPIO_ReadPin(GPIOC_BASE,0x20);

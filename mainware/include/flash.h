@@ -45,10 +45,10 @@ uint8_t config_persist_dual_bank(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
 
 /* Commit one config record to a single bank: erase -> CRC -> program -> verify.
  * Stack-aliasing ABI (the 0xD0-byte record is split across the 4 reg args + the
- * by-value payload; bank_dest/size follow). Name+document only (not sourced to C).
- * OEM flash_config_bank_write at 0x080316D0. */
-extern uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
-                                       struct boot_cfg_block payload,
-                                       uint32_t bank_dest, uint32_t size);
+ * by-value payload; bank_dest/size follow). Returns 1 erase / 2 write / 3 verify
+ * / 0 ok. OEM flash_config_bank_write at 0x080316D0 (sourced in flash.c). */
+uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                struct boot_cfg_block payload,
+                                uint32_t bank_dest, uint32_t size);
 
 #endif

@@ -871,3 +871,28 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
 
     g_log_func("Unhandeled SSP message %04X size %d\r\n", cmd, p2);
 }
+
+/* BLE telemetry change-interval debounce (OEM 0x0803A538), used by
+ * ble_telemetry_change_broadcast. While any watched change bit is set
+ * ((mask_a & test_a) | (mask_b & test_b) != 0) it keeps an 8000-tick one-shot
+ * armed in *slot and reports whether it has elapsed (scheduler_slot_is_idle);
+ * once the bits clear it releases the slot and reports ready. `slot` holds the
+ * scheduler slot id (0xFA = the unallocated sentinel). The unused second
+ * parameter preserves the OEM 6-argument stack ABI. */
+int ble_interval_debounce(uint8_t *slot, uint32_t unused,
+                          uint32_t mask_a, uint32_t mask_b,
+                          uint32_t test_a, uint32_t test_b)
+{
+    (void)unused;
+
+    if (((mask_a & test_a) | (mask_b & test_b)) == 0) {
+        scheduler_release(slot);
+        return 1;
+    }
+    if (*slot == 0xFA) {
+        *slot = scheduler_alloc();
+        scheduler_start(*slot, 8000, 0);
+        scheduler_set_timer_name(*slot, 8000, "*tmr");
+    }
+    return scheduler_slot_is_idle(*slot);
+}

@@ -45,12 +45,12 @@ per-subsystem updater flows, and the bike-state model.
 
 | Count | Status |
 | --- | --- |
-| 201 | pending (auto-named `FUN_xxxxxxxx`) |
+| 130 | pending (auto-named `FUN_xxxxxxxx`) — live Ghidra count; **the bespoke application layer is now 100% sourced.** The remainder is **116 vendor/stock-HAL (newlib/libgcc + CubeF4) + 14 phantom-already-sourced** (Ghidra-split tails / externs whose OEM addr is cited in src). Verified by a 14-agent fan-out: **11/11 newly-decoded functions PASS** against the raw disassembly and a 3-range census critic **examined 137 `FUN_` and found 0 missed bespoke** ("could not falsify" the completeness claim). See "Remaining `FUN_` triage". |
 | 24  | vendor-stock — `strcmp`, `strtol`, `strlen`, `snprintf`, `memcpy`, `memset`, `__libc_init_array`, `_init`, `__getreent`, `malloc`, `free` (newlib), `__floatsidf` (libgcc); CubeF4 HAL: `HAL_GPIO_WritePin`, `HAL_GPIO_Init`, `HAL_GPIO_ReadPin`, `HAL_FLASH_Program`, `HAL_FLASH_Unlock`, `HAL_FLASHEx_Erase`, `FLASH_WaitForLastOperation`, `HAL_CRC_Accumulate`; CMSIS `NVIC_DisableIRQ` (`0x080270FC`, writes `NVIC->ICER`); `memcmp`, `strstr`, `strchr`, `strncmp` (newlib — the last named `bounded_strncmp`, returns 0 == equal). (The CubeF4 **I²C** HAL — `HAL_I2C_Init`/`DeInit`/`Mem_Write`/`Mem_Read`/`Master_Transmit`/`Master_Receive` — is no longer vendor-stock: reconstructed as faithful C in `i2c.c`, see the per-module log.) |
 | 0   | in-progress |
-| 456 | decomp-c — `vectors.c` (25), `tim.c` (9), `systick.c` (3), `console.c` (63), `scheduler.c` (8), `exceptions.c` (10), `panic.c` (2), `app.c` (24), `util.c` (6), `system_stm32f413.c` (1), `ssp.c` (17), `motor.c` (9), `flash.c` (7), `crc.c` (3), `audio.c` (1), `log.c` (10), `sensor.c` (5), `uart.c` (8), `bus.c` (3), `net.c` (2), `gpio.c` (5), `eeprom.c` (1), `i2c.c` (18), `watchdog.c` (6), `states.c` (7), `modem.c` (52), `ble.c` (4), `ble_read.c` (3), `rtc.c` (7), `update.c` (1), `main.c` (4), `battery.c` (25), `display.c` (33), `lighting.c` (9), `display_requests.c` (data: 38 descriptors), `shifter.c` (39), `lis3dh.c` (26) — see per-module log below |
-| 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`) |
-| 133 | named (rename in Ghidra, no source yet) — the **CubeF4 HAL TIM core** named+prototyped this pass (extern in `tim.c`, bodies deferred): `HAL_TIM_Base_Init` (`0x080277B0`), `HAL_TIM_PWM_Init` (`0x080277E4`), `TIM_Base_SetConfig` (`0x080276E8`), `HAL_TIM_ConfigClockSource` (`0x08026DC0`), `HAL_TIM_PWM_ConfigChannel` (`0x08027888`), `TIM_OC1/2/3/4_SetConfig` (`0x080273B4`/`0x08027818`/`0x0802741C`/`0x0802748C`), `HAL_TIMEx_ConfigBreakDeadTime` (`0x08026E48`), `TIM_CCxChannelCmd` (`0x08027964`), `HAL_TIM_PWM_DeInit` (`0x0802752A`); plus the global `HAL_MspInit` (`0x0803C270`, PWR+SYSCFG clock enable) and `i2c2_wait_bus_idle` (`0x0803C8A8`, I2C2 SR2.BUSY 50 ms wait used by the display/light I2C path) — the **9 shared IRQ leaves** the vector trampolines forward to, named this pass (extern in `vectors.c`, bodies decode-pending): `rtc_wakeup_irq_handler` (`0x08027020`), the CubeF4 HAL servicers `HAL_DMA_IRQHandler` (`0x08022BDC`), `HAL_TIM_IRQHandler` (`0x0802756C`), `HAL_I2C_EV_IRQHandler` (`0x08025E04`), `HAL_I2C_ER_IRQHandler` (`0x08025F9E`), and the four EXTI/TIM application pre-hooks `exti4_app_hook` (`0x08043CEC`), `exti9_5_app_hook` (`0x08038FF4`), `tim6_app_hook` (`0x08037AA8`), `tim7_app_hook` (`0x08039138`) — `system_reset` (`0x08035CE8`, AIRCR SYSRESETREQ) + `console_io_table_install` (`0x080430D8`, binds `g_log_func` to the UART7 console table) + `usart1_io_table_install` (`0x0804309C`, binds `g_log_func` to the USART1 console table) named as referenced leaves of the UART byte-pump cluster (bodies extern, not sourced; `uart_rx_ringbuf_get_byte` was *sourced*) — `HAL_GPIO_EXTI_Callback` (`0x08038964`, the application's EXTI dispatch override, named this pass; its ~150-byte body is fired by the now-sourced `HAL_GPIO_EXTI_IRQHandler` — left for a future pass) + the UART-init HAL externs `HAL_RCC_GetPCLK2Freq` (`0x08027394`), `HAL_RCC_GetHCLKFreq` (`0x08027368`), `HAL_UART_MspInit` (`0x080333C0`) named this pass (called from `uart.c`'s reconstructed init path; `HAL_UART_MspDeInit`/`HAL_RCC_GetPCLK1Freq` were already named) + `modem_sms_dispatch_command` (`0x0803D668`, the inbound-SMS remote-command interpreter, named this pass) + **24 named leaves were SOURCED into their home modules this pass** (see the "Named-leaf sourcing pass" log entry): the ble_read telemetry getters (`ble_get_charge_plug_state`/`ble_build_testmode_versions_blob`/`charge_level_adc_get`/`ble_get_led_channel_state`/`telemetry_map_clamp`/`gpio_pc0_is_low`/`gpio_pc1_is_low`/`hw_version_lookup`/`maybe_enqueue_tx_message`), the bike-state getters (`bike_status_coarse_get`/`bike_state_is_standby`/`ble_lock_state_get`/`ble_unlock_state_get`), the RTC helpers (`rtc_now_epoch_seconds`/`rtc_set_from_unix_time` → new `rtc.c`), app/state helpers (`app_ctx_clear_field_328`/`clear_flag_00e5`/`count_active_2bit_groups`/`announce_records_reset`/`display_announce_enter`/`display_timeout_timer_set`/`lock_poll_timer_arm`) and the BLE helpers (`sspm5_tx_timeout_cb`/`post_request_with_arg`). `config_persist_dual_bank` stays named (its OEM body memcpy's 0xC0 bytes from `&stack0x00000000` — a variadic stack passthrough that doesn't model cleanly in portable C). The rest still pending. — (the **LED-matrix display engine** is now **SOURCED → `display.c`** (`display_module_init`/`display_send_init_cmd`/`display_write_reg20_init`/`display_panel_reset`/`led_driver_panel_config`/`led_driver_brightness_write`/`led_driver_standby_write`/`led_driver_set·enter_shipping_mode`/`led_matrix_render·overlay_frame_region`/`led_matrix_transmit_step`/`matrix_draw_speed·number·icon·level_bar·level_bar_blink`/`matrix_set_corner_led·turn_indicator`/`matrix_glyph_src_addr·frame_delay`/`display_mode_sm_step`/`display_request_*`/`is_display_bus_ready`/etc.) and the **lamp engine + ambient sensor** → **`lighting.c`** (`light_pattern_step`/`light_pattern_action_apply`/`light_sensor_read_step·i2c_read·fault_count_get`/`obj_set_field34·38`/`led_channel3_set_brightness`), with **~25 FUN_ helpers named this pass**, fan-out transcribed + adversarially verified (`docs/display.md`, `docs/lighting.md`). Two name corrections: `dsp_recovery_telemetry_pump`→**`led_matrix_transmit_step`** ("dsp" in `" ERR dsp freeze"` = display, not the C28x DSP); and `light_tick_update` (`0x080371E8`) identified as the **command-mode console↔modem/BLE-debug UART bridge** (it shuttles bytes between the UART7 console and either USART2/GSM via `gsmdebug` or UART8/BLE-debug via `bledebug`), NOT lamps (still named, out of scope). — The battery/BMS Modbus driver — `modbus_bat_submit`/`bms_modbus_read`/`bms_modbus_write`/`bat_modbus_master_step`/`bms_telemetry_unpack`/`battery_telemetry_step`/`battery_state_process`/`battery_charge_display_step`/`modbus_bat_service_step`/etc. — is now **SOURCED → `battery.c`**; the shared bus CRC/TX helpers `bus_crc16_get`/`update`/`reset`/`verify` + `bus_tx_enqueue_byte`/`_n` were named this pass, extern pending a future `bus.c`. The spine `main`/`boot_init_cold`/`boot_init_warm`/`mainware_boot_init_sequence` **and `status_process`** are now **SOURCED** — `status_process` → `states.c` (the 62-case behaviour engine, adversarially verified), the rest → `main.c`; with their **~74 callees named this pass**, `docs/boot.md`: peripheral init `hal_mcu_init`/`dma_controller_init`/`usart1·2·3·6_init`/`uart5·5·7·8_init`/`i2c2_init`/`tim1_pwm_init`/`tim6·7·10_init`/`adc1_init`/`rtc_init`/`crc_init`/`comm_buffers_register_all`, clock `rcc_oscillator_config`/`rcc_clock_config`/`rcc_periph_clock_config`/`tim_channel_enable_output`, loop services `light_tick_update`/`light_pattern_step`/`modbus_shifter_link_monitor`/`lipo_charge_state_monitor`/`ssp_ble_tx_queue_pump`/`motor_fw_update_fsm_step`/`sspm_rx_reply_handler`/`sspm_tx_queue_pump`/`led_matrix_render·overlay_frame_region`/`dsp_recovery_telemetry_pump`/`charger_and_pc1_sense_debounce`/`supply_voltage_sample_step`/`output_value_filter_step`/`ble_telemetry_change_broadcast`/`update_sm_is_idle`/`log_upload_sm_step`/`display_mode_sm_step`/`factory_reset_sm_step`/`staged_msg_validate_and_dispatch`/`button_press_state_machines_step`/`app_ctx_ptr_set`, boot devices `display_module_init`/`hdc1080_write_config_reg`/`stc3115_wake`/`stc3115_fuel_gauge_init`/`lis3dh_accel_init`/`audio_amp_init`/`display_write_reg20_init`/`eeprom_read_id_block`/`eeprom_read_config_with_crc_fallback`/`flash_read_config_with_crc_restore`/`sound_groups_init_default`/`region_speed_preset_table_load`/`flash_program_rdp_level_once`/`reset_reason_log_and_clear`/`log_wake_reason`/`log_console_subsystem_init`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int` — **SOURCED → `lis3dh.c` this pass**; `accel_enable`→`stc_gas_gauge_set_run`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
+| 518 | decomp-c — `vectors.c` (25), `tim.c` (9), `stc3115.c` (16), `console_edit.c` (12), `systick.c` (3), `console.c` (65), `scheduler.c` (8), `exceptions.c` (10), `panic.c` (2), `app.c` (25), `util.c` (6), `system_stm32f413.c` (1), `ssp.c` (22), `motor.c` (9), `flash.c` (8), `crc.c` (6), `audio.c` (1), `log.c` (10), `sensor.c` (9), `uart.c` (8), `bus.c` (3), `net.c` (2), `gpio.c` (5), `eeprom.c` (3), `i2c.c` (21), `watchdog.c` (6), `states.c` (7), `modem.c` (56), `ble.c` (5), `ble_read.c` (3), `rtc.c` (9), `update.c` (1), `main.c` (4), `battery.c` (29), `display.c` (33), `lighting.c` (9), `display_requests.c` (data: 38 descriptors), `shifter.c` (39), `lis3dh.c` (26), `comm.c` (2) — see per-module log below |
+| 1   | decomp-asm — `startup_stm32f413.S`: `Reset_Handler` (+ vector table, envelope, `Default_Handler`, `reset_region_empty_stub`) |
+| 134 | named (rename in Ghidra, no source yet) — (`comm_buffers_register_all` moved named→sourced this pass) — the STC3115 **config/startup/algorithm layer** named+prototyped this pass (extern, bodies deferred): `stc3115_apply_config` (`0x080394DC`, writes CC_CNF/VM_CNF/alarm regs + MODE), `stc3115_startup_from_ocv` (`0x08039580`), `stc3115_startup_restore` (`0x080395A8`), `stc3115_init_device` (`0x080395D0`, top init: sets cfg params, checks RAM sig 0x53A9 + CRC, branches restore-vs-init); the SOC-tracking task `stc_read` (`0x080396E4`), `stc3115_fuel_gauge_init` (`0x08037130`) and `stc3115_wake` (`0x080398CE`) remain named — the **CubeF4 HAL TIM core** named+prototyped this pass (extern in `tim.c`, bodies deferred): `HAL_TIM_Base_Init` (`0x080277B0`), `HAL_TIM_PWM_Init` (`0x080277E4`), `TIM_Base_SetConfig` (`0x080276E8`), `HAL_TIM_ConfigClockSource` (`0x08026DC0`), `HAL_TIM_PWM_ConfigChannel` (`0x08027888`), `TIM_OC1/2/3/4_SetConfig` (`0x080273B4`/`0x08027818`/`0x0802741C`/`0x0802748C`), `HAL_TIMEx_ConfigBreakDeadTime` (`0x08026E48`), `TIM_CCxChannelCmd` (`0x08027964`), `HAL_TIM_PWM_DeInit` (`0x0802752A`); plus the global `HAL_MspInit` (`0x0803C270`, PWR+SYSCFG clock enable) and `i2c2_wait_bus_idle` (`0x0803C8A8`, I2C2 SR2.BUSY 50 ms wait used by the display/light I2C path) — the **9 shared IRQ leaves** the vector trampolines forward to, named this pass (extern in `vectors.c`, bodies decode-pending): `rtc_wakeup_irq_handler` (`0x08027020`), the CubeF4 HAL servicers `HAL_DMA_IRQHandler` (`0x08022BDC`), `HAL_TIM_IRQHandler` (`0x0802756C`), `HAL_I2C_EV_IRQHandler` (`0x08025E04`), `HAL_I2C_ER_IRQHandler` (`0x08025F9E`), and the four EXTI/TIM application pre-hooks `exti4_app_hook` (`0x08043CEC`), `exti9_5_app_hook` (`0x08038FF4`), `tim6_app_hook` (`0x08037AA8`), `tim7_app_hook` (`0x08039138`) — `system_reset` (`0x08035CE8`, AIRCR SYSRESETREQ) + `console_io_table_install` (`0x080430D8`, binds `g_log_func` to the UART7 console table) + `usart1_io_table_install` (`0x0804309C`, binds `g_log_func` to the USART1 console table) named as referenced leaves of the UART byte-pump cluster (bodies extern, not sourced; `uart_rx_ringbuf_get_byte` was *sourced*) — `HAL_GPIO_EXTI_Callback` (`0x08038964`, the application's EXTI dispatch override, named this pass; its ~150-byte body is fired by the now-sourced `HAL_GPIO_EXTI_IRQHandler` — left for a future pass) + the UART-init HAL externs `HAL_RCC_GetPCLK2Freq` (`0x08027394`), `HAL_RCC_GetHCLKFreq` (`0x08027368`), `HAL_UART_MspInit` (`0x080333C0`) named this pass (called from `uart.c`'s reconstructed init path; `HAL_UART_MspDeInit`/`HAL_RCC_GetPCLK1Freq` were already named) + `modem_sms_dispatch_command` (`0x0803D668`, the inbound-SMS remote-command interpreter, named this pass) + **24 named leaves were SOURCED into their home modules this pass** (see the "Named-leaf sourcing pass" log entry): the ble_read telemetry getters (`ble_get_charge_plug_state`/`ble_build_testmode_versions_blob`/`charge_level_adc_get`/`ble_get_led_channel_state`/`telemetry_map_clamp`/`gpio_pc0_is_low`/`gpio_pc1_is_low`/`hw_version_lookup`/`maybe_enqueue_tx_message`), the bike-state getters (`bike_status_coarse_get`/`bike_state_is_standby`/`ble_lock_state_get`/`ble_unlock_state_get`), the RTC helpers (`rtc_now_epoch_seconds`/`rtc_set_from_unix_time` → new `rtc.c`), app/state helpers (`app_ctx_clear_field_328`/`clear_flag_00e5`/`count_active_2bit_groups`/`announce_records_reset`/`display_announce_enter`/`display_timeout_timer_set`/`lock_poll_timer_arm`) and the BLE helpers (`sspm5_tx_timeout_cb`/`post_request_with_arg`). `config_persist_dual_bank` stays named (its OEM body memcpy's 0xC0 bytes from `&stack0x00000000` — a variadic stack passthrough that doesn't model cleanly in portable C). The rest still pending. — (the **LED-matrix display engine** is now **SOURCED → `display.c`** (`display_module_init`/`display_send_init_cmd`/`display_write_reg20_init`/`display_panel_reset`/`led_driver_panel_config`/`led_driver_brightness_write`/`led_driver_standby_write`/`led_driver_set·enter_shipping_mode`/`led_matrix_render·overlay_frame_region`/`led_matrix_transmit_step`/`matrix_draw_speed·number·icon·level_bar·level_bar_blink`/`matrix_set_corner_led·turn_indicator`/`matrix_glyph_src_addr·frame_delay`/`display_mode_sm_step`/`display_request_*`/`is_display_bus_ready`/etc.) and the **lamp engine + ambient sensor** → **`lighting.c`** (`light_pattern_step`/`light_pattern_action_apply`/`light_sensor_read_step·i2c_read·fault_count_get`/`obj_set_field34·38`/`led_channel3_set_brightness`), with **~25 FUN_ helpers named this pass**, fan-out transcribed + adversarially verified (`docs/display.md`, `docs/lighting.md`). Two name corrections: `dsp_recovery_telemetry_pump`→**`led_matrix_transmit_step`** ("dsp" in `" ERR dsp freeze"` = display, not the C28x DSP); and `light_tick_update` (`0x080371E8`) identified as the **command-mode console↔modem/BLE-debug UART bridge** (it shuttles bytes between the UART7 console and either USART2/GSM via `gsmdebug` or UART8/BLE-debug via `bledebug`), NOT lamps (still named, out of scope). — The battery/BMS Modbus driver — `modbus_bat_submit`/`bms_modbus_read`/`bms_modbus_write`/`bat_modbus_master_step`/`bms_telemetry_unpack`/`battery_telemetry_step`/`battery_state_process`/`battery_charge_display_step`/`modbus_bat_service_step`/etc. — is now **SOURCED → `battery.c`**; the shared bus CRC/TX helpers `bus_crc16_get`/`update`/`reset`/`verify` + `bus_tx_enqueue_byte`/`_n` were named this pass, extern pending a future `bus.c`. The spine `main`/`boot_init_cold`/`boot_init_warm`/`mainware_boot_init_sequence` **and `status_process`** are now **SOURCED** — `status_process` → `states.c` (the 62-case behaviour engine, adversarially verified), the rest → `main.c`; with their **~74 callees named this pass**, `docs/boot.md`: peripheral init `hal_mcu_init`/`dma_controller_init`/`usart1·2·3·6_init`/`uart5·5·7·8_init`/`i2c2_init`/`tim1_pwm_init`/`tim6·7·10_init`/`adc1_init`/`rtc_init`/`crc_init`/`comm_buffers_register_all`, clock `rcc_oscillator_config`/`rcc_clock_config`/`rcc_periph_clock_config`/`tim_channel_enable_output`, loop services `light_tick_update`/`light_pattern_step`/`modbus_shifter_link_monitor`/`lipo_charge_state_monitor`/`ssp_ble_tx_queue_pump`/`motor_fw_update_fsm_step`/`sspm_rx_reply_handler`/`sspm_tx_queue_pump`/`led_matrix_render·overlay_frame_region`/`dsp_recovery_telemetry_pump`/`charger_and_pc1_sense_debounce`/`supply_voltage_sample_step`/`output_value_filter_step`/`ble_telemetry_change_broadcast`/`update_sm_is_idle`/`log_upload_sm_step`/`display_mode_sm_step`/`factory_reset_sm_step`/`staged_msg_validate_and_dispatch`/`button_press_state_machines_step`/`app_ctx_ptr_set`, boot devices `display_module_init`/`hdc1080_write_config_reg`/`stc3115_wake`/`stc3115_fuel_gauge_init`/`lis3dh_accel_init`/`audio_amp_init`/`display_write_reg20_init`/`eeprom_read_id_block`/`eeprom_read_config_with_crc_fallback`/`flash_read_config_with_crc_restore`/`sound_groups_init_default`/`region_speed_preset_table_load`/`flash_program_rdp_level_once`/`reset_reason_log_and_clear`/`log_wake_reason`/`log_console_subsystem_init`), OTA helpers (`flash_cache_disable`, `flash_cache_enable`, `download_chunks_pending_count`, `shifter_update_status_get`, `shifter_update_request`, `batteryware_update_status_get`, `batteryware_update_set_pending`, `bus_rx_byte_locked`), BLE (`maybe_enqueue_tx_message`), lock/alarm state (`bike_is_locked`, `ble_lock_state_get`, `ble_unlock_state_get`, `bike_state_is_standby`, `bike_status_coarse_get`), modem/tracking (`modem_sim_state_machine`, `sms_info_tracking_state_machine`), battery (`modbus_bat_service_step`, `modbus_bat_submit`, `modbus_shift_submit`, `battery_request_telemetry`, `bms_modbus_read`, `console_battery_dump`, `stc_read`, `gas_gauge_reset`, `batteryware_update_arm`), motor (`motor_get_timer_cb`), shifter (`shifterstatus_dump_v200`, `shifterstatus_dump_v201`), ADC (`hw_version_lookup`, `adc_read_vgsm`, `adc_read_5vsw`), console (`console_cmd_show`, `console_cmd_ver`), log (`log_buffer_dump`), flash/eeprom (`config_persist_dual_bank`, `flash_config_bank_write`, `save_state_record_to_eeprom`, `settings_factory_reset`, `reboot_restart_task`, `bat_reset_release_cb`), misc (`testmode_command_dispatch`, `rtc_fill_time_fields`), **+ 42 `status_process` per-state sub-handlers** (`status-process.md`): shifter-SM steps (`shifter_sm_get_step`/`set_step_3`/`_10`/`_13`, `shifter_get_active_flag`, `shifter_firmware_update_step`), `state_flags_set`/`clear`/`test` (64-bit flag pair ctx+0x3B8), LIS3DH (`lis3dh_int1_clear`/`powerdown`/`config_motion_int` — **SOURCED → `lis3dh.c` this pass**; `accel_enable`→`stc_gas_gauge_set_run`), `locked_state_step`, `power_assist_gear_step`, `diagnostics_run_step`, `internal_lipo_charge_step`, `enter_stop_mode`, `system_reset` (NVIC), `led_driver_set`/`enter_shipping_mode`, `light_sensor_read_step`, `charge_level_adc_get`, `battery_on_detect_step`/`substate_advance`, `bms_write_reg8_and_poll`, `telemetry_datalog_emit`, `sched_timer_arm_or_alloc`, `set_unlock_state_persist`, `sms_track_state_get`, `state_table_ptr_get`, etc. |
 
 `function_count = 814` per `ghidra/exports/mainware_program.json` (3 OEM functions newly
 created an earlier pass: `console_cmd_shipping`, `shiftdebug_pump_task`, `bat_reset_release_cb`;
@@ -137,7 +137,343 @@ UART7 block — `usart1_tx_byte` `0x08035E28`, `usart1_puts` `0x08035E5C`, `usar
 prototypes set**, 2 RAM globals labelled (`g_usart1_dev_pp` `0x200098A4`, `g_console_port_sel`
 `0x20000114`), program saved. One new function created → `function_count` is now **817**.
 
+## Remaining `FUN_` triage (full sweep)
+
+**Refreshed census (now re-confirmed by a 14-agent verification + 3-range completeness
+critic, every remaining function decompiled): of the 130 `FUN_` still in the program,
+exactly — 116 vendor/stock-HAL (NOT worth decoding, HAL boundary) + 14 phantom
+already-sourced (Ghidra-split tails / externs whose OEM addr is cited in src). The 12
+"genuinely-undecoded bespoke" carried below are now ALL SOURCED (this pass).** The census
+critic examined 137 `FUN_` across 0x08020000–0x0805FFFF and found **0 missed bespoke** —
+it positively re-ID'd the previously-fuzzy strays too (`0x080313F8`=newlib `_sbrk` guard;
+`0x08032BB4`/`C60`/`C6A`=stock `HAL_SPI_MspInit`/`MspDeInit` for SPI1; `0x0803C3B6`=
+`HAL_TIM_PWM_MspInit` tail). The decomp is **complete for bespoke VanMoof logic** — only
+newlib/libgcc + CubeF4 HAL remain extern by design.
+
+**The 14 phantom already-sourced (do NOT re-count as pending):** the 8 modem step-tails
+`0x080301E6`–`0x08030642` (split loop-bodies of the sourced `modem_step_*`),
+`tx_table_handle_in_use` (`0x08039FE0`, ssp.c), `console_activity_timer_rearm` (`0x08029FE8`,
+console_edit.c), the `HAL_TIM_PWM_MspInit` TIM1 tail (`0x0803C3B6`, tim.c), and the HAL
+boundaries `HAL_RTC_SetTime`/`SetDate` (`0x08022F44`/`0x08023042`, rtc.c) + the I2C2-DMA write
+(`0x08024BC0`, display.c) — all kept extern by design.
+
+**The genuinely-undecoded bespoke — ALL 12 NOW SOURCED (this pass, 11/11 adversarially verified PASS):**
+- ~~HIGH `0x08043148`~~ **DONE → `console_passthrough_io_install` (console.c)** (prior pass).
+- **`0x080317F4` → `comm_register_buffer` + `0x08035D0C` → `comm_buffers_register_all` (new `comm.c`)** —
+  the 16-slot inter-module comm-buffer registry (pool @SRAM `0x2000069C`: init-flag byte + 16×0xC
+  records {buf, size(u16), 3×u16 zeroed}); `comm_buffers_register_all` wires all 16 link buffers from
+  the five per-port contexts (`0x2000094C`/`0x20004DB4`/`0x20001A44`/`0x20002B3C`/`0x20003C34`).
+- **`0x0803805C` → `rtc_msp_init` + `0x08038A04` → `rtc_wakeup_event_cb` (rtc.c)** — `HAL_RTC_MspInit`
+  (enables `RCC_BDCR.RTCEN` via the bit-band alias `0x42470E3C` + NVIC IRQ 3 = RTC_WKUP) and the
+  wake-up event latch (sets `*(*(u32**)(0x20000094+0x24))=1`).
+- **`0x08040288` → `HAL_CRC_MspInit` + `0x080402B8` → `HAL_CRC_MspDeInit` + `0x080402E8` →
+  `crc_accumulate_device_uid` (crc.c)** — CRC clock-gate on/off (`RCC_AHB1ENR` bit 12, CRCEN, base
+  `0x40023830`) and a CRC-32 over the 96-bit device unique-ID (`0x1FFF7A10`) used by `console_cmd_show`.
+- **`0x0803A538` → `ble_interval_debounce` (ble.c)** — the BLE telemetry-change 8000-tick one-shot
+  debounce (`scheduler_*`, timer name `"*tmr"`), used by `ble_telemetry_change_broadcast`.
+- **`0x08032CBC` → `adc_config_shadow_copy` (sensor.c)** — latches the live ADC sampling config
+  (`ADC_CTX+0x18/0x1c/0x20`) into the shadow (`+0x24/0x28/0x2c`) while status byte `+0x22` is clear.
+- **`0x0803D648` → `sms_tracking_latch_once` + `0x0803D65C` → `sms_tracking_get` (modem.c)** — the SMS
+  info-tracking one-shot latch + getter (flag @`0x2000839C`).
+- **`0x08043EB8` = `Default_Handler`** (already reconstructed in `startup_stm32f413.S` — the spin target
+  of the unused vector slots; renamed in Ghidra this pass, not a new function) **and `0x08043EC8` →
+  `reset_region_empty_stub`** (an unreferenced no-op frame in the reset region; reproduced in startup.S).
+
+(Historical 4-range survey below, retained for the vendor/HAL detail.)
+
+**Not worth decoding (~130, vendor/stock — decode only for a byte-exact build):**
+- **newlib / libgcc (~30):** the `0x08020400–0x0802290C` block — `vfprintf`/`_printf_i`/pad,
+  `_malloc_r`/`_free_r`/`_realloc_r`/`_sbrk_r`, `__aeabi_dmul`/`dadd`/`d2iz`/`uldivmod`,
+
+**Not worth decoding (~130, vendor/stock — decode only for a byte-exact build):**
+- **newlib / libgcc (~30):** the `0x08020400–0x0802290C` block — `vfprintf`/`_printf_i`/pad,
+  `_malloc_r`/`_free_r`/`_realloc_r`/`_sbrk_r`, `__aeabi_dmul`/`dadd`/`d2iz`/`uldivmod`,
+  `memchr`/`memmove`/`memmem`/`strnlen`.
+- **Stock CubeF4 HAL (~85):** **CAN** bxCAN (9), **RTC** Init/SetTime/SetDate (6), **FLASH**
+  option-byte/RDP + program byte/half/word + unlock/lock/erase (16), **GPIO** AFR/MODER/EXTI (6),
+  **UART** SetConfig + full IT engine (14), **I2C** master/mem/DMA IRQ interior (16), **TIM**
+  Start/Stop + IRQ interior stubs (6), **RCC**/MCO/clock-freq (3), **CRC**/SysTick (3), and ~15
+  empty `HAL_*_Callback` weak stubs.
+
+**Worth decoding — bespoke app (~45), by cluster (priority order):**
+1. ~~**Modem AT-command state machine (HIGH, ~11):**~~ **DONE / was over-counted.** The eight
+   "AT-sequence runners" `0x080301E6`/`08030286`/`08030326`/`080303C6`/`08030466`/`08030502`/
+   `080305A2`/`08030642` are **Ghidra-split tails** of the already-sourced `modem_step_sms_init` /
+   `_sms_read` / `_sms_write` / `_ctx_activate` / `_ctx_deactivate` / `_ping_send` / `_message_send` /
+   `_location_send` in `modem.c` (each parent has a conditional branch Ghidra promoted to a separate
+   function — they are NOT undecoded). `0x0802F3A0` was the already-sourced `modem_at_response_match`
+   (renamed in Ghidra). `0x08035C94` (the RX response-line accumulator, misnamed `modem_uart_tx_byte`)
+   was the only genuinely-unsourced piece → **now sourced in `modem.c`**. `0x080330E4` is a
+   status→string mapper belonging to cluster #4 (announce dispatcher), not modem. Net: modem layer
+   complete; the 8 tail-fragments remain as cosmetic `FUN_` artifacts of sourced parents.
+2. **Debug-console command engine + VT100 editor (HIGH, ~13):** **11/13 DONE → new `console_edit.c`**
+   (10/10 adversarially verified): `console_cmd_match` (`0x08040904`), `console_history_init`/`_rotate`
+   (`0804094C`/`080409A0`), the two dispatchers `console_dispatch_login` (`08040A00`, pre-auth: runs the
+   `login` cmd) / `console_dispatch_command` (`080426BC`, logged-in match+arg-split), history nav
+   `console_history_recall`/`_prev`/`_next` (`08041184`/`080411CA`/`080411FA`), tab-autocomplete
+   `console_autocomplete_apply`/`_search` (`08041232`/`0804125C`), and the VT100/CSI→keycode decoder
+   `console_vt100_decode_key` (`080431A4`), and **now the line editor itself** `console_line_editor`
+   (`080434F8`, ~200 lines — insert/overwrite, backspace/delete with mid-line redraw, Home/End/cursor
+   moves, history up/down, tab-completion echo, Enter→dispatch; 3 adversarial-verify catches folded in:
+   the Delete reposition loop's `+1`, the Tab `write(ac_match,ac_len)` source, and the pre-login
+   "recogni**s**ed" British-spelling string vs the logged-in "recogni**z**ed"). **One non-editor stray
+   deferred:** `FUN_08043148` — not a prompt-setup but a 3rd console-I/O-table installer (writes
+   g_log_func[0..4] by port selector) whose installed [0]/[2]/[3] point at undefined functions
+   `0x08036B74/76/78`; resolve those first.
+3. ~~SSPM inter-module bus (HIGH)~~ **DONE → `ssp.c`** — `sspm_bus_recv_frame` (SLIP+CRC16 RX
+   de-framer), `tx_table_release_by_handle`/`tx_table_free_count` (`08039F90`/`0803A510`;
+   `08039FE0` was already `tx_table_handle_in_use`), `sspm_ble_cmd_bridge`/`sspm_ble_read_bridge`.
+4. ~~Announce/telemetry dispatcher (HIGH)~~ **DONE → `battery.c`** — `manchester_announce_decode`
+   (serial/fw/SoC/SoH·NoC·WST), `wst_status_to_string`, `staged_msg_crc16`, `tim10_announce_period_cb`
+   (TIM10 double-buffer). Verify caught the SoC `%d` being signed (OEM `ldrsb`) — fixed.
+5. ~~HDC1080 driver (MED)~~ **DONE → `sensor.c`** — `hdc1080_set_pointer` + `hdc1080_read`
+   (soft-float, 0.1 °C / %RH; constants 2⁻¹⁶/165/40/10/100, signed temp / unsigned RH).
+6. ~~EXTI/TIM filters (MED)~~ **DONE** — `sensor_deglitch_filter` (6-sample min/max-reject mean,
+   `0x08038ED4`) → `sensor.c`; `console_magic_sequence_match` (`"\x1b[14~"` gesture ring,
+   `0x08037188`) → `console.c`. (The named app-hooks `exti9_5_app_hook`/`tim7_app_hook` that *call*
+   the filter, plus `0x08029FE8`/`0x0803A538` timer glue, remain bodies-deferred.)
+7. ~~I2C event callbacks + bus scan (MED)~~ **DONE → `i2c.c`** — `i2c_tx_complete_callback`,
+   `i2c_error_callback` (+`display_request_recovery`), `i2c_bus_scan` (diagnostic 0..0xFE probe).
+8. **Low/glue:** misc setters/getters/flag-latches (`0x0803D648`/`0803D65C`, `08040288`/`080402B8`
+   bit-toggles, `08032CBC` shadow-reg copy, MspInit/DeInit strays `08032BB4`/`08032C60`/`08032C6A`/
+   `0803805C`/`0803C3B6` — the last is the `HAL_TIM_PWM_MspInit` fall-through fragment).
+
 ## Per-module decomp log
+
+- **3 deferred named-externs SOURCED (the validation sweep's leftovers) + 6 more validated — all PASS.**
+  The three functions earlier flagged as named-only (stack-aliasing/intricate) are now reconstructed and
+  **adversarially verified 3/3 PASS** (build clean **text 1996**, 0 warnings): **`modem_sms_dispatch_command`
+  → modem.c** (`0x0803D668`, the inbound-SMS remote-command interpreter — `#<8-char code>*<cmd>` →
+  `key`/`TrackingOn`/`TrackingOff`/`ping`/`makeNoise`; the SMS half of the anti-theft surface paralleling
+  `ble_cmd_dispatch`. All command + log + format strings resolved byte-for-byte from rodata; the `ping` JSON
+  status report does signed `/10` on battery (`int16 ctx+0x3D2`) and distance (`int32 ctx+0x31C`), reads the
+  firmware version from flash `0x08020004`, and formats the MAC from `ctx+0x390..0x395`). **`flash_config_bank_write`
+  → flash.c** (`0x080316D0`, the single-bank config writer behind `config_persist_dual_bank`: erase → CRC the
+  first 0x33 words into the record's reserved last word → program 0xD0 bytes → self-checking CRC verify from
+  flash; modeled with a `union{w[0x34]; {hdr[4];boot_cfg_block;}}` for the by-value record + indexed CRC store).
+  **`save_state_record_to_eeprom` → app.c** (`0x0803E2CC`, the dual-copy EEPROM state writer: CRC first 0xE
+  words into word 0xE → write at EEPROM offsets 0 and 0x40 with a 5 ms/watchdog gap; same union pattern,
+  link-compatible with all ~19 existing callers which each keep their own extern). **6 more validated PASS:**
+  `eeprom_write_region`, `console_soc_set`, `modem_step_message_send`, `modem_at_response_copy`,
+  `matrix_draw_icon`, `volume_low_set`. **New deferred-extern found (NOT a bug):** `flash_read_config_with_crc_restore`
+  (`0x08031784`, the config-*load* twin of `config_persist_dual_bank` — reads bank A, CRC-verifies, falls back
+  to bank B and heals bank A on recovery) is a named-only extern; spec captured, a sourcing candidate.
+  A further 10-function batch then ran (9 PASS) and **caught 1 more real bug — `modem_step_poweron`** drove the
+  **wrong GPIO** for the modem main-supply enable: `MODEM_PWR_EN_PIN` was `0x0010` (PB4) but the OEM writes
+  GPIOB **mask 0x4 = PB2** (confirmed by my own disasm: `r5`=GPIOB base, first `movs r1,#0x4`). Fixed the macro
+  (also used by poweroff → both now correct) and the "PB4"→"PB2" doc references; also restored timer[0]'s OEM
+  name `"interval_tmr"` (was `"timeout_tmr"`). The other 9 PASSed (`console_cmd_battery`/`_adc`, `modem_handle_uuloc`,
+  `bms_telemetry_unpack`, `battery_charge_display_step`, `slip_send_frame`, `matrix_draw_level_bar`,
+  `shifter_send_gear`, `led_driver_standby_write`).
+  3 funcs sourced (decomp-c 515→518); modem prototype set in Ghidra + program saved.
+
+- **Validation sweep, batches 2-5 (lean re-verification workflows) — 9 more real bugs found + fixed.**
+  After the over-scoped 48-agent run bottlenecked on the single Ghidra MCP server, the remaining important
+  functions were re-validated in lean ~11-agent batches. **Batch A (10 funcs + shifter.c hazard): all PASS,
+  0 missing-arg bugs in shifter.c** (the bare-paren `shifter_send_gear()`/`shifter_crc_update()` calls are
+  decompiler artifacts — the disassembly confirms r0 holds the value at the `bl`). **Batch B (11 funcs +
+  states.c hazard): 6 PASS, 5 FIXED, 1 deferred-extern noted:**
+  (1) **`sim_iccid_check` (modem.c) — address-vs-deref:** the ICCID is reached via a *pointer* stored at
+  `ctx+0x3E8` (OEM `ldr [ctx,#0x3E8]` then `+0x50`), not a flat `ctx+0x3E8+0x50` offset — the anti-theft
+  ICCID compare + log were reading the wrong address. Now `*(char **)(ctx+0x3E8)+0x50`.
+  (2) **`modem_at_exec` (modem.c) — wrong arg:** the `>`-prompt echo passed `'\0'` instead of the `'>'` rx
+  byte; `'\0'` fails the accumulator's printable filter so the `>` was dropped, breaking every `expect==">"`
+  data-prompt wait (CMGS SMS send). Now passes `rx`.
+  (3) **`HAL_I2C_Master_Transmit` (i2c.c) — missing `__HAL_I2C_CLEAR_ADDRFLAG`:** the SR1-then-SR2 read after
+  `MasterRequestWrite` was omitted; without it SCL stays stretched and TX never advances. Added.
+  (4) **`HAL_I2C_Mem_Read` (i2c.c) — same ADDR-clear missing in all 4 `XferSize` branches** (and the `>=3`
+  else branch was absent entirely); reads would time out. Rewrote the selector to the canonical CubeF4
+  ordering (==0 clear,STOP / ==1 ACK-off,clear,STOP / ==2 ACK-off,POS,clear / else clear).
+  (5) **`led_driver_set_shipping_mode()` (states.c:1744) — missing arg:** the K&R extern hid a dropped
+  argument (the OEM passes the post-decremented `G_STATE[0x27]`). Now `led_driver_set_shipping_mode(G_STATE[0x27])`.
+  **Batch C (11 funcs + display.c hazard): 9 PASS, 2 FIXED, display.c hazard clean:**
+  (6) **`HAL_I2C_Master_Receive` (i2c.c) — the SAME ADDR-clear omission in all 4 `XferSize` branches** as
+  its Transmit/Mem_Read siblings (the third I2C HAL function with this bug) → receives would hang. Added the
+  per-branch SR1/SR2 clear (==0 clear,STOP / ==1 ACK-off,clear,STOP / ==2 ACK-off,POS,clear / else ACK-on,clear).
+  (7) **`ssp_rx_byte` (ssp.c) — extra dereference:** masked RXNEIE at `*(*(*(0x20009864))+0xC)` (three loads)
+  where the OEM does two (`*(0x20009864)` is the UART5 base, `+0xC` is CR1) — so it poked a bogus address and
+  never gated the UART5 RX IRQ around the ring read. Removed the extra hop (now matches the `uart_send_byte`
+  idiom; verified the other byte-pumps don't share it). **The whole CubeF4 I2C transfer driver is now
+  validated** (Transmit/Receive/Mem_Read fixed, Mem_Write/Init clean). PASSed clean across C:
+  `HAL_I2C_Mem_Write`, `HAL_I2C_Init`, `usart2/3_irq_handler`, `uart5_irq_handler`, `sspm_bus_get_byte`,
+  `mainware_boot_init_sequence`, `stc3115_i2c_read`, `light_pattern_action_apply`; display.c hazard sweep found
+  0 missing-arg / address-vs-deref issues (the request setters correctly take descriptor addresses).
+  **Batch D (10 funcs + ble.c hazard): 6 PASS, 2 FIXED, 2 deferred-externs, ble.c hazard clean:**
+  (8) **`login_handler` (console.c) — AUTH-STATE DESYNC (address-vs-deref + struct-model):** the OEM (and our
+  own `logout` + `console_edit`) write/read `logged_in`(+0x2D9)/`fail_count`(+0x2E0) at the **`g_app_state`
+  base** (`0x20009368`), but `login_handler` wrote them through `ctx_sub` (→`0x200083A8`) — so a *correct*
+  password set the wrong byte and the session never registered as logged-in (login effectively broken). Root
+  cause: `logged_in`/`fail_count` were mis-declared inside `struct session_ctx` when they actually live in the
+  outer `struct app_state` adjacent to `ctx_sub`. Fixed the struct model (moved both fields to `app_state` with
+  new `_Static_assert`s at 0x2D9/0x2E0) and `login_handler` (now `g_app_state.logged_in/.fail_count`), matching
+  the other two accessors. Also restored the OEM `"Please wait..\r\n"` lockout string (was missing `\r\n`).
+  (9) **`flash_erase` (flash.c) — wrong log string:** logged `"Flash erase error %d"`; OEM string @`0x08052F18`
+  is `"Sector error %d\r\n"`. Corrected (observable-output divergence). PASSed clean: `HAL_UART_Init`,
+  `flash_write`, `config_persist_dual_bank`, `console_region_set`, `matrix_draw_number`, `modem_at_response_match`;
+  ble.c hazard sweep found 0 missing-arg / address-vs-deref issues (config_persist by-value struct + request-
+  setter descriptor addresses all correct).
+  **Deferred-externs noted (named-only, no committed body — not bugs):** `flash_config_bank_write`
+  (`0x080316D0`) and `save_state_record_to_eeprom` (`0x0803E2CC`) join `modem_sms_dispatch_command` as
+  documented stack-aliasing-ABI named-externs; the verifiers captured each one's full OEM spec for a future
+  reconstruction pass.
+  **Deferred-extern noted (not a bug):** `modem_sms_dispatch_command` (`0x0803D668`, the inbound-SMS remote-
+  command interpreter — the SMS half of the anti-theft surface) is a *named extern with no committed body*;
+  the verifier captured its full OEM spec (8-char code, `#`/`*` delimiters, `key`/`TrackingOn`/`TrackingOff`/
+  `ping`/`makeNoise` commands + their persist/BLE actions) for a future reconstruction. PASSed clean this
+  pass: `battery_charge_lookup`, `ble_read_request_dispatch`, `pack_validate`, `boot_init_cold`,
+  `light_sensor_read_step`, `lis3dh_accel_init`, the 10 of batch A. Build clean **text 1996**, 0 warnings.
+
+- **Validation sweep of the already-sourced C (29-agent re-verification workflow) — 1 real bug fixed.**
+  A curated high-risk set of **28 already-committed functions** (the UART4↔5/UART7↔8 swap-edited serial
+  layer, the fixed-point/soft-float math, the SLIP/Modbus framing, and structural spot-checks of the six
+  giant hand-assembled engines) was re-derived from raw OEM disassembly and diffed against the committed
+  source; a 29th agent re-checked the whole serial-peripheral mapping chain (init Instance base → ISR home
+  file → NVIC slot → `hardware.md`) for coherence. **Result: 25 PASS + 3 resolved.** (1) **REAL BUG FIXED —
+  `bat_modbus_master_step` (battery.c case 2):** `bus_crc16_update()` was called with **no argument** (the
+  K&R `extern int bus_crc16_update()` let it compile), so the Modbus function-code byte could be dropped
+  from the running CRC and **every BMS response would fail the case-7 trailing-CRC check** — now
+  `bus_crc16_update(rx)`, matching all 24 sibling calls; swept battery.c to confirm it was the only
+  missing-arg call. (2)+(3) **behaviour-equivalent, documented (not changed):** `sspm_bus_recv_frame`'s
+  `"PE\r\n"` log goes through `g_log_func` (printf slot) where the OEM uses the `puts` vtable slot — byte-
+  identical output for a constant string, and consistent with how all of ssp.c models logging;
+  `console_printf` kicks the watchdog unconditionally where the OEM throttles ~1-in-256 (IWDG never times
+  out either way) and returns `len` vs the OEM's incidental-r0 (printf return is ignored) — both within the
+  behaviour-equivalent goal, now noted in code comments. The serial-mapping coherence agent + the
+  `uart4_irq_handler` verifier both PASS, independently re-confirming the UART4/5/7/8 correction. Build
+  clean **text 1996**, 0 warnings.
+
+- **Remaining bespoke glue SOURCED (12 funcs across new `comm.c` + `crc.c`/`rtc.c`/`modem.c`/`ble.c`/
+  `sensor.c`/`startup_stm32f413.S`) — the bespoke application layer is now complete.** All build clean
+  **text 1996**, 0 warnings, and **adversarially verified by a 14-agent workflow: 11/11 new decodes PASS
+  (high confidence, no issues) + a 3-range completeness critic that examined 137 `FUN_` and found 0
+  missed bespoke** (it could not falsify the completeness claim). **New `comm.c`/`comm.h`:**
+  `comm_register_buffer` (`0x080317F4`, the 16-slot inter-module comm-buffer registry — pool @SRAM
+  `0x2000069C`, one init-flag byte then 16×0xC records `{buf, size(u16), 3×u16 zeroed}`; first call
+  zero-inits the occupancy field, alloc returns the first free slot) and `comm_buffers_register_all`
+  (`0x08035D0C`, 16 registrations wiring each per-port context's RX/TX rings — bases `0x2000094C`/
+  `0x20004DB4`/`0x20001A44`/`0x20002B3C`/`0x20003C34`; was an extern stub in `main.c`, now sourced).
+  **`crc.c`:** `HAL_CRC_MspInit`/`HAL_CRC_MspDeInit` (`0x08040288`/`0x080402B8`, gate `RCC_AHB1ENR` bit 12
+  CRCEN on/off, guarded on `hcrc->Instance == CRC 0x40023000`; MspInit keeps the CubeF4 read-back delay)
+  and `crc_accumulate_device_uid` (`0x080402E8`, copies the 96-bit device UID `0x1FFF7A10` to a stack
+  buffer → `HAL_CRC_Accumulate(handle 0x20009D90, buf, 3)`, returns the CRC via r0-passthrough; the
+  `console_cmd_show` device hash). **`rtc.c`:** `rtc_msp_init` (`0x0803805C`, the `HAL_RTC_MspInit`
+  override called from `HAL_RTC_Init` — sets `RCC_BDCR.RTCEN` via the peripheral bit-band alias
+  `0x42470E3C` and enables NVIC IRQ 3 = RTC_WKUP, guarded on `hrtc->Instance == RTC 0x40002800`) and
+  `rtc_wakeup_event_cb` (`0x08038A04`, the wake-up event latch fired by `rtc_wakeup_irq_handler`:
+  `*(*(u32**)(0x20000094+0x24)) = 1`). **`modem.c`:** `sms_tracking_latch_once`/`sms_tracking_get`
+  (`0x0803D648`/`0x0803D65C`, the SMS info-tracking one-shot latch + getter on flag @`0x2000839C`).
+  **`ble.c`:** `ble_interval_debounce` (`0x0803A538`, used by `ble_telemetry_change_broadcast` — while
+  any watched change bit is set it keeps an 8000-tick `scheduler_*` one-shot armed in `*slot` (timer
+  name `"*tmr"` @`0x080529D0`) and reports `scheduler_slot_is_idle`; releases + reports ready when the
+  bits clear; preserves the OEM 6-arg stack ABI). **`sensor.c`:** `adc_config_shadow_copy` (`0x08032CBC`,
+  latches the live ADC sampling config `ADC_CTX+0x18/0x1c/0x20` into the shadow `+0x24/0x28/0x2c` while
+  the status byte `+0x22` is clear; OEM loads `+0x20` as a word, stores its low half). **`startup.S`:**
+  `0x08043EB8` was identified as the OEM **`Default_Handler`** (the spin target of the unused vector
+  slots — already reconstructed in startup.S; renamed + marked no-return in Ghidra this pass, NOT a new
+  function), and `reset_region_empty_stub` (`0x08043EC8`, an unreferenced no-op frame just past
+  Default_Handler — exact instruction sequence reproduced for reset-region coverage). 12 Ghidra renames
+  + 12 prototypes + 1 no-return, program saved. **pending 142→130, decomp-c 504→515; the JSON needs a
+  `DumpMainwareProgram.java` re-dump.**
+
+- **Console passthrough I/O-table installer → `console.c`** (1 func + 3 no-op stubs, PASS-verified,
+  build clean **text 1996**) — `console_passthrough_io_install` (`0x08043148`, the survey's lone
+  HIGH-value remaining item). On entering the `gsmdebug`/`bledebug` raw-UART passthrough,
+  `light_tick_update` calls it to install a **silent** `g_log_func` table (`0x20009D98`): slots
+  [0]/[2]/[3] printf/puts/write become the no-op stubs `0x08036B78`/`74`/`76` (all `bx lr`-class —
+  created+named `io_noop_printf/puts/write`) so firmware log output can't corrupt the forwarded byte
+  stream, while [1]/[4] tx/rx bind to the active console port (UART7, or USART1 when
+  `g_console_port_sel` `0x20000114`==1). The two branches differ only in slots [1]/[4]; verified
+  byte-for-byte against the literal pool @`0x08043180`. (Also added the prior `console_magic_sequence_match`
+  prototype to console.h.) 1 rename + 3 functions created + 1 prototype, program saved.
+  **pending 143→142, decomp-c 503→504.**
+
+- **Triage clusters #3–#7 SOURCED (16 funcs across `ssp.c`/`battery.c`/`sensor.c`/`console.c`/`i2c.c`)**
+  — the four HIGH + three MED clusters from the remaining-FUN_ triage, all build clean **text 1996**,
+  0 warnings, and **adversarially verified by a 15-agent fan-out workflow (14 PASS + 1 confirmed FAIL,
+  fixed → 16/16 faithful)**. **#3 SSPM RX → `ssp.c`:** `sspm_bus_recv_frame` (`0x0803A0C0`, the SLIP+
+  CRC-16 RX de-framer — twin of `sspm_bus_send_frame`; SLIP state @`0x20007F94`, the returned status vs
+  persistent state byte diverge per-branch, reproduced exactly), `tx_table_release_by_handle` /
+  `tx_table_free_count` over the 16×0x18 endpoint table @`0x20007E14`, and the `sspm_ble_cmd_bridge` /
+  `sspm_ble_read_bridge` tail-call bridges to the BLE dispatchers. **#4 announce → `battery.c`:**
+  `manchester_announce_decode` (`0x08043B28`, decodes the staged inter-module announce frame types
+  0 serial / 1 fw-version / 2 SoC / 3 SoH·NoC·WST into the telemetry cache + logs), `wst_status_to_string`
+  (WST_NONE/DISCHARGE/CHARGE/BYPASS/UNKNOWN), `staged_msg_crc16` (Modbus CRC-16, implicit-r0 return), and
+  `tim10_announce_period_cb` (`0x08043DE0`, TIM10 period-elapsed cb reloading CNT to Period−0x682 and
+  committing the pending→active double-buffer @`0x200096D4`). **Verify-caught bug (fixed):** the `soc %d`
+  log loaded the cached SoC with `ldrsb` (signed) — peer-controllable `msg[1]` ≥0x80 must print negative,
+  so the arg is now `(int8_t)cache[0]`. **#5 HDC1080 → `sensor.c`:** `hdc1080_set_pointer` +
+  `hdc1080_read` (I²C dev 0x80, 4-byte read → soft-float convert, temperature to 0.1 °C signed via
+  `__aeabi_d2iz`, RH to % unsigned via `__aeabi_d2uiz`; constants 2⁻¹⁶/165/40/10/100, the −40 done as
+  `__aeabi_dsub`). **#6 → `sensor.c`/`console.c`:** `sensor_deglitch_filter` (`0x08038ED4`, 6-sample ring,
+  drop min+max, `(sum−max−min)>>2`) and `console_magic_sequence_match` (`0x08037188`, 5-byte rolling ring
+  @`0x20005E20` matched against the literal `"\x1b[14~"` F4 sequence, a `light_tick_update` helper).
+  **#7 I²C → `i2c.c`:** `i2c_tx_complete_callback` / `i2c_error_callback` (per-controller log; an I2C1
+  error also calls `display_request_recovery`) and `i2c_bus_scan` (`diagnostics_run_step`'s 0..0xFE probe
+  of both buses via `HAL_I2C_IsDeviceReady`). 16 renames + 13 prototypes, program saved.
+  **pending 167→151, decomp-c 487→503; function_count stays 817.**
+
+- **ES3 console command engine + VT100 key decoder → `console_edit.c`/`console_edit.h` (NEW)** —
+  the interactive front-end that drives the 49-command console (the per-command handlers were already
+  in `console.c`). 11 funcs, **10/10 adversarially verified**, build clean **text 1996**, 0 warnings.
+  `console_cmd_match` (`0x08040904`, command/whitespace token match); the **9-slot input-history ring**
+  `console_history_init`/`_rotate`/`_recall`/`_prev`/`_next` (`0804094C`/`080409A0`/`08041184`/`080411CA`/
+  `080411FA`) over nine 0x51-byte line buffers at `0x20009368+i*0x51`, ring-ctrl block at ctx `+0x2E4`;
+  **tab-autocomplete** `console_autocomplete_search`/`_apply` (`0804125C`/`08041232`, prefix-scan the cmd
+  table via `bounded_strncmp`); and the **two command dispatchers** over the 49-entry table @flash
+  `0x0804F5C4`: `console_dispatch_login` (`08040A00`) is the **pre-auth path** — every typed line before
+  login is matched to the literal `"login"` command and run through its handler (the gate);
+  `console_dispatch_command` (`080426BC`) is the logged-in path (match line → split args at first space →
+  handler). The **VT100/ANSI escape decoder** `console_vt100_decode_key` (`080431A4`) reads keys via the
+  `g_log_func` I/O vtable slot [4] and folds CSI (`ESC [`) / SS3 (`ESC O`) sequences into internal key
+  codes 0x80–0x98 (arrows/F-keys/Home/End/Ins/Del/PgUp/PgDn), with a 10-tick scheduler timer to emit a
+  lone `ESC`. Escape state at ctx `+0x368/+0x369`. **Follow-on (same module): the line editor**
+  `console_line_editor` (`0x080434F8`) — the ~200-line glue loop pulling one decoded key and applying
+  it (insert/overwrite, BS/DEL mid-line redraw via `\x1b[K`/`\x1b[1D`, Home/End/left/right, history
+  up/down, tab-completion echo of the staged match, Enter→`console_dispatch_login`/`_command`, Esc→
+  clear). Active line at session `+0x350`, in-line cursor `+0x36A`, logged-in flag `+0x2D9` (pre-login
+  echoes `'*'`). Adversarial verify caught 3 real bugs (now fixed): Delete's reposition loop emits one
+  fewer `\x1b[1D` than Backspace (`+1` start), Tab echoes `ac_match`/`ac_len` (not the line), and the
+  pre-login unknown-command string is the British "recognised" while the logged-in one is "recognized".
+  **Still out (not the editor):** `FUN_08043148`, a 3rd I/O-table installer pointing at undefined
+  `0x08036B74/76/78`. 12 renames + 8 prototypes, program saved.
+  **pending 179→167, decomp-c 475→487; function_count stays 817.**
+
+- **EEPROM read surface → `eeprom.c`** (2 funcs, build clean **text 1996**) — the on-board
+  AT24C EEPROM (device **0xA0**, I2C3) read side, joining the existing region writer.
+  `eeprom_read_id_block` (`0x0803E138`) writes the **command byte 0xFA** then reads **6 bytes**,
+  returning `(recv | xmit) & 0xFF` (0 = OK); probed once at boot. A user cross-reference from
+  VanMoof firmware **1.9.x** identifies the identical routine there as **`Security_GetLockState`** —
+  the 6 bytes are the bike's lock/security state (recorded in a Ghidra plate comment + the source
+  comment; name derived from this binary's own disassembly per the separate-target discipline, the
+  sibling name as confirmation). `eeprom_read_bounded` (`0x0803E174`, ex-`FUN_`) = the bounded
+  `HAL_I2C_Mem_Read` primitive (rejects len 0 or a read past the 0x80-byte device) behind
+  `eeprom_read_config_with_crc_fallback`. The no-bound-check sibling `eeprom_read_raw` (`0x0803E182`)
+  was named (not sourced). 2 renames + 2 prototypes + 1 plate comment, program saved.
+  **pending 183→181, decomp-c 472→474, named unchanged 135; function_count stays 817.**
+
+- **STC3115 fuel-gauge driver → `stc3115.c`/`stc3115.h` (NEW)** — the ST STC3115 LiPo
+  coulomb-counter/OCV gas gauge on **I2C3** (handle `0x20009B04`, shared with the LIS3DH),
+  8-bit address **0xE0**. Sourced the transport + RAM-CRC + conversion + measurement layers
+  (16 funcs, adversarially verified **15/15 PASS**, build clean **text 1996**): I²C primitives
+  `stc3115_i2c_read`/`_write` (`0x080392C0`/`0x08039448`, reg-addr write then read/write N), the
+  register accessors `stc3115_read_reg`/`write_reg`/`read_word`/`write_word`/`read_block`/`write_block`
+  (`0x080393DC`/`0x080394A6`/`0x080393FE`/`0x080394BE`/`0x080392F4`/`0x0803948C` — read_reg/write_reg
+  were extern stubs in `sensor.c`, now bodied), the 16-byte SRAM RAM-mirror layer `stc3115_ram_read`/
+  `ram_write`/`ram_init`/`ram_crc8`/`ram_update_crc` (`0x08039302`/`0x0803949A`/`0x08039294`/`0x0803924C`/
+  `0x08039280`; **g_stc3115_ram @0x20006E80**, signature **0x53A9** at [0], **CRC-8 poly 0x07** at [15]),
+  the fixed-point `stc3115_conv` (`0x0803923C`, `((v*scale)>>11 +1)/2`), `stc3115_check_id`
+  (`0x08039428`, reg 0x18==**0x14** part-ID gate), and the measurement burst-read
+  `stc3115_read_measurements` (`0x0803930E`): reads regs 0..14 and converts SOC%/voltage(12-bit,
+  scale 0x2333)/current(14-bit, scale 0x968)/temp(°C×10)/counter/OCV into the caller's struct
+  (out[1..7]). The verifier confirmed the byte→register map and the current↔out[4]/voltage↔out[3]
+  index split exactly. **Register map** documented in `stc3115.h` (0 MODE, 1 CTRL, 2-3 SOC, 4-5 COUNTER,
+  6-7 CURRENT, 8-9 VOLTAGE, 10 TEMP, 13-14 OCV, 0x13 CC_CNF, 0x14 VM_CNF, 0x18 ID, 0x20.. RAM). The
+  config/startup/SOC-algorithm layer (`stc3115_apply_config`, `startup_from_ocv`/`restore`,
+  `init_device`, the periodic `stc_read`) was **named + prototyped** (extern, deferred — `apply_config`
+  has decompiler-dropped varargs in its `write_word` calls that need disasm-level resolution; `stc_read`
+  is the large SOC-tracking algorithm with 64-bit reciprocal-multiply divides). `sensor.c`'s existing
+  externs are satisfied by the new module. 18 renames + 11 prototypes + 1 RAM label, program saved.
+  **pending 201→183, decomp-c 456→472, named 133→135; function_count stays 817.**
 
 - **Timer subsystem → `tim.c`/`tim.h` (NEW)** — the board's TIM bring-up, sourced
   (9 funcs, adversarially verified **7/7 PASS**, build clean **text 1996**). Board init

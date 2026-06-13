@@ -84,7 +84,7 @@ void login_handler(char *input)
      * this line. */
     if (scheduler_slot_is_idle(g_console_state.login_state)) {
         scheduler_release(&g_console_state.login_state);
-        g_app_state.ctx_sub->fail_count = 0;
+        g_app_state.fail_count = 0;
     }
 
     if (input[0] == '\0') {
@@ -96,7 +96,7 @@ void login_handler(char *input)
          * window — any input typed during cooldown extends the wait —
          * and stall the user. */
         scheduler_start(g_console_state.login_state, LOGIN_LOCKOUT_TICKS, 0);
-        g_log_func("Please wait..");
+        g_log_func("Please wait..\r\n");
         return;
     }
 
@@ -118,8 +118,8 @@ void login_handler(char *input)
      * branch fires when this call is the LIMIT-th failure. */
     g_log_func("Error login\r\n");
     {
-        uint8_t fc = g_app_state.ctx_sub->fail_count;
-        g_app_state.ctx_sub->fail_count = (uint8_t)(fc + 1u);
+        uint8_t fc = g_app_state.fail_count;
+        g_app_state.fail_count = (uint8_t)(fc + 1u);
         if (fc == LOGIN_FAIL_LIMIT - 1u) {
             uint8_t slot = scheduler_alloc();
             g_console_state.login_state = slot;
@@ -129,8 +129,8 @@ void login_handler(char *input)
     return;
 
 login_ok:
-    g_app_state.ctx_sub->fail_count = 0;
-    g_app_state.ctx_sub->logged_in = 1;
+    g_app_state.fail_count = 0;
+    g_app_state.logged_in = 1;
     g_log_func("\r\nWelcome to ES3\r\n");
 }
 
@@ -1022,12 +1022,12 @@ void console_cmd_help(char *args)
     }
 }
 
-/* `logout` — clear the console session authenticated flag (ctx_sub +0x2D9 =
- * logged_in) directly at the app-context base (OEM 0x08040A4C). */
+/* `logout` — clear the console session authenticated flag (g_app_state.logged_in,
+ * at +0x2D9 of the app-state base, OEM 0x08040A4C). */
 void console_cmd_logout(char *args)
 {
     (void)args;
-    *(volatile uint8_t *)(APP_CTX_BASE + CTX_LOGGED_IN) = 0;   /* g_app_state.ctx_sub->logged_in */
+    *(volatile uint8_t *)(APP_CTX_BASE + CTX_LOGGED_IN) = 0;   /* g_app_state.logged_in */
 }
 
 /* `blereset` — pulse the BLE module reset line (GPIOE PE5) high 10 ms then low
@@ -1363,7 +1363,10 @@ int console_printf(const char *fmt, ...)
 
     for (i = 0; i < len && i <= 255 && msg[i] != '\0'; i++) {
         while (ringbuf_push_byte(UART7_TX_RING, (uint8_t)msg[i]) == 0) {
-            /* ring full: let the ISR drain it completely, then retry the push */
+            /* ring full: let the ISR drain it completely, then retry the push.
+             * (The OEM throttles the kick via a persistent down-counter, skipping
+             * ~1 kick in 256; reproduced here as an unconditional kick — the IWDG
+             * never times out either way, so it is behaviour-equivalent.) */
             UART7_HANDLE[0xC / 4] |= 0x80u;
             do {
                 watchdog_kick();
@@ -1373,6 +1376,8 @@ int console_printf(const char *fmt, ...)
     }
 
     UART7_HANDLE[0xC / 4] |= 0x80u;                /* re-enable so the ISR sends the tail */
+    /* OEM leaves an incidental r0 here (printf-style return is ignored by all
+     * callers of g_log_func[0]); we return the formatted length. */
     return len;
 }
 
@@ -1612,4 +1617,72 @@ void usart1_irq_handler(void)
             USART1_HANDLE[1] = b;
         }
     }
+}
+
+/* Magic-key-sequence detector (OEM 0x08037188, a light_tick_update helper):
+ * keeps a 5-entry rolling ring of recently received console bytes at SRAM
+ * 0x20005E20 (count at [0], the bytes at [4..8]), reset whenever ESC arrives,
+ * and reports a match once they spell the escape sequence "\x1b[14~" (the F4
+ * key). The OEM materialises the pattern on the stack and memcmp's it against
+ * the ring; reproduced faithfully. */
+int console_magic_sequence_match(int key)
+{
+    static const uint8_t pattern[8] = { 0x1b, 0x5b, 0x31, 0x34, 0x7e, 0, 0, 0 };
+    uint8_t *ring = (uint8_t *)0x20005e20u;
+    uint8_t  local[8];
+    uint8_t  count;
+
+    memcpy(local, pattern, 8);
+    if (key == 0x1b) {
+        ring[0] = 0;
+    }
+    count = ring[0];
+    ring[4 + count] = (uint8_t)key;
+    count = (uint8_t)(count + 1);
+    ring[0] = count;
+    if (count == 5) {
+        ring[0] = 0;
+    }
+    return memcmp(local, ring + 4, 5) == 0;
+}
+
+/* No-op console I/O vectors (OEM 0x08036B78 vararg-discard / 0x08036B74 / 0x08036B76,
+ * each a `bx lr`-class stub): while a raw-UART passthrough owns the line, the
+ * printf/puts/write slots are silenced so firmware log output cannot corrupt the
+ * forwarded byte stream. */
+static int  cmdmode_noop_printf(const char *fmt, ...) { (void)fmt; return 0; }
+static void cmdmode_noop_puts(const char *s) { (void)s; }
+static void cmdmode_noop_write(const uint8_t *buf, uint16_t len) { (void)buf; (void)len; }
+
+/* Install the "silent" console I/O table for the command-mode passthrough: the
+ * printf/puts/write slots become no-ops while tx_byte/rx_byte stay bound to the
+ * active console port — UART7, or USART1 when `g_console_port_sel` (0x20000114) == 1.
+ * `light_tick_update` calls this on entry to the `gsmdebug`/`bledebug` raw passthrough;
+ * `console_io_table_install` restores the normal table on the F4-sequence exit.
+ * OEM 0x08043148. */
+typedef struct {
+    int  (*printf)(const char *fmt, ...);   /* [0] */
+    int  (*tx_byte)(uint8_t b);             /* [1] */
+    void (*puts)(const char *s);            /* [2] */
+    void (*write)(const uint8_t *buf, uint16_t len); /* [3] */
+    int  (*rx_byte)(uint8_t *out);          /* [4] */
+} cmdmode_io_t;
+
+void console_passthrough_io_install(void)
+{
+    cmdmode_io_t *io = (cmdmode_io_t *)0x20009d98u;        /* g_log_func */
+
+    if (*(volatile uint8_t *)0x20000114u != 1) {          /* UART7 console active */
+        io->printf  = cmdmode_noop_printf;
+        io->tx_byte = uart7_tx_byte;
+        io->puts    = cmdmode_noop_puts;
+        io->write   = cmdmode_noop_write;
+        io->rx_byte = uart_rx_ringbuf_get_byte;
+        return;
+    }
+    io->printf  = cmdmode_noop_printf;                     /* USART1 (2nd port) active */
+    io->tx_byte = usart1_tx_byte;
+    io->puts    = cmdmode_noop_puts;
+    io->write   = cmdmode_noop_write;
+    io->rx_byte = usart1_rx_byte;
 }

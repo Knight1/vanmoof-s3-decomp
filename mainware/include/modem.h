@@ -108,4 +108,10 @@ void sim_iccid_check(void);
 int  modem_uart_putc(uint8_t b);
 void usart2_irq_handler(void);
 
+/* SMS info-tracking one-shot latch (flag @ 0x2000839C). latch_once returns 0 on
+ * the first call (and arms the flag), 1 afterwards; _get reads the flag. OEM
+ * 0x0803D648 / 0x0803D65C. */
+int     sms_tracking_latch_once(void);
+uint8_t sms_tracking_get(void);
+
 #endif

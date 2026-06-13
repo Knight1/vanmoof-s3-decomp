@@ -19,4 +19,11 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
 void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
                                unsigned char *payload);
 
+/* Telemetry change-interval debounce (OEM 0x0803A538): keeps an 8000-tick
+ * one-shot armed in *slot while any watched change bit is set, returns ready
+ * once it elapses (or immediately when the bits clear). */
+int ble_interval_debounce(unsigned char *slot, unsigned int unused,
+                          unsigned int mask_a, unsigned int mask_b,
+                          unsigned int test_a, unsigned int test_b);
+
 #endif

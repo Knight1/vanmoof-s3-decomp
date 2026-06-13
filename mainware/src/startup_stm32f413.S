@@ -124,6 +124,23 @@ Default_Handler:
     .size   Default_Handler, .-Default_Handler
 
 /* ---------------------------------------------------------------------------
+ * reset_region_empty_stub (OEM 0x08043EC8) — an unreferenced no-op that sits in
+ * the reset region just past Default_Handler: no callers, not a vector target.
+ * Full frame + nop + return; behaviourally a no-op. Reconstructed (exact
+ * instruction sequence) for coverage of the reset/startup flash region.
+ * ------------------------------------------------------------------------- */
+    .section .text.reset_region_empty_stub,"ax",%progbits
+    .type   reset_region_empty_stub, %function
+reset_region_empty_stub:
+    push    {r3, r4, r5, r6, r7, lr}
+    nop
+    pop     {r3, r4, r5, r6, r7}
+    pop     {r3}
+    mov     lr, r3
+    bx      lr
+    .size   reset_region_empty_stub, .-reset_region_empty_stub
+
+/* ---------------------------------------------------------------------------
  * Link entry + placeholders so the partial tree links:
  *   main             — the real super-loop is sourced in src/main.c (OEM
  *                      0x0803DEA8) but defined __attribute__((weak)) there, so

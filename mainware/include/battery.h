@@ -44,4 +44,10 @@ void    batteryware_update_arm(void);
 void    batteryware_update_set_pending(void);
 uint8_t batteryware_update_status_get(void);
 
+/* Inter-module "Manchester" announce decoder + staging. */
+const char *wst_status_to_string(uint32_t wst);                       /* 0x080330E4 */
+void        manchester_announce_decode(const uint8_t *msg, int len, uint8_t *cache); /* 0x08043B28 */
+uint16_t    staged_msg_crc16(const uint8_t *buf, int len);            /* 0x08043AF0 */
+void        tim10_announce_period_cb(void *htim);                     /* 0x08043DE0 */
+
 #endif

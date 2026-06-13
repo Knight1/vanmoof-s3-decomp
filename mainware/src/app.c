@@ -4,6 +4,7 @@
 
 #include "app.h"
 #include "audio.h"
+#include "crc.h"        /* crc_dev_t, HAL_CRC_Accumulate handle */
 #include "flash.h"      /* struct boot_cfg_block, config_persist_dual_bank */
 #include "i2c.h"
 #include "log.h"
@@ -534,4 +535,44 @@ void settings_factory_reset(void *ctx_, int mode)
         ((uint32_t)cfg->dark_threshold_lux << 16) | cfg->backup_code,
         *(const struct boot_cfg_block *)&cfg->cfg_byte_104);
     g_log_func("res: %s\r\n", res ? "ERROR" : "OK");
+}
+
+/* Persist a 0x3C-byte "state record" to BOTH copies in the on-board EEPROM (OEM
+ * save_state_record_to_eeprom, 0x0803E2CC). Like config_persist_dual_bank the
+ * record arrives as 4 register words ([a][b][c][d] = the first 16 bytes) plus a
+ * 0x2C-byte by-value tail; its last word (offset 0x38) is reserved for the CRC
+ * over the first 0xE words. Written at EEPROM offset 0 and 0x40 (a 5 ms gap +
+ * watchdog kick between). Returns the OR of the two per-write status bytes.
+ *
+ * ABI note: the OEM is called both with all 15 record words spread as positional
+ * args (states.c/update.c/shifter.c — ABI-faithful to this by-value form) and with
+ * 4 args + a caller-side staging block (ble.c/console.c/main.c); each caller keeps
+ * its own extern, so this definition links with all of them. */
+extern uint32_t HAL_CRC_Accumulate(crc_dev_t *hcrc, uint32_t *buf, uint32_t len);  /* 0x08023234 */
+extern uint32_t eeprom_write_region(uint32_t addr, const uint8_t *src, uint32_t len); /* 0x0803E258 */
+extern void     watchdog_kick(void);                                              /* 0x080314D8 */
+
+struct state_record_tail { uint8_t bytes[0x2C]; };   /* the 0x2C-byte by-value tail */
+
+uint8_t save_state_record_to_eeprom(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
+                                    struct state_record_tail tail)
+{
+    union {
+        uint32_t w[0x0F];                                  /* 0x3C bytes = 15 words */
+        struct { uint32_t hdr[4]; struct state_record_tail body; } rec;
+    } u;
+
+    u.rec.hdr[0] = a;
+    u.rec.hdr[1] = b;
+    u.rec.hdr[2] = c;
+    u.rec.hdr[3] = d;
+    u.rec.body   = tail;
+
+    u.w[0x0E] = HAL_CRC_Accumulate((crc_dev_t *)0x20009D90u, u.w, 0x0E);  /* CRC words 0..0xD -> word 0xE */
+
+    uint8_t rc1 = (uint8_t)eeprom_write_region(0x00, (const uint8_t *)u.w, 0x3C);
+    watchdog_kick();
+    systick_delay(5);
+    uint8_t rc2 = (uint8_t)eeprom_write_region(0x40, (const uint8_t *)u.w, 0x3C);
+    return (uint8_t)((rc1 | rc2) & 0xFF);
 }

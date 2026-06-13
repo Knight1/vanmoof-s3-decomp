@@ -120,3 +120,90 @@ void stc_gas_gauge_set_run(void)
     uint8_t mode = (uint8_t)stc3115_read_reg(0);
     stc3115_write_reg(0, (uint8_t)(mode | 1u));
 }
+
+/* ── HDC1080 temperature/humidity (I2C dev 0x80) + a sensor de-glitch filter ── */
+
+extern int HAL_I2C_Master_Transmit(void *h, uint16_t addr, const uint8_t *d,
+                                   uint16_t n, uint32_t tmo);
+extern int HAL_I2C_Master_Receive(void *h, uint16_t addr, uint8_t *d,
+                                  uint16_t n, uint32_t tmo);
+
+/* Set the HDC1080 read pointer to register 0 (temperature) — also triggers a
+ * conversion. OEM 0x08033164. */
+void hdc1080_set_pointer(void *hi2c)
+{
+    uint8_t reg[5];
+
+    reg[0] = 0;
+    HAL_I2C_Master_Transmit(hi2c, 0x80, reg, 1, 0x32);
+}
+
+/* Read the HDC1080's 4 result bytes (temp MSB/LSB, humidity MSB/LSB) and convert
+ * to temperature in 0.1 degC and relative humidity in %:
+ *   T  = (raw / 2^16) * 165 - 40, scaled x10
+ *   RH = (raw / 2^16) * 100
+ * (OEM 0x08033188 — soft-float, constants 2^-16 / 165 / 40 / 10 / 100 from
+ * flash). Returns the HAL status (0 = OK). */
+int hdc1080_read(void *hi2c, int16_t *temp_dC, uint16_t *rh_pct)
+{
+    uint8_t b[4];
+    int rc = HAL_I2C_Master_Receive(hi2c, 0x80, b, 4, 0x32);
+
+    if (rc == 0) {
+        uint16_t t_raw = (uint16_t)((b[0] << 8) | b[1]);
+        uint16_t h_raw = (uint16_t)((b[2] << 8) | b[3]);
+        *temp_dC = (int16_t)(int)(((double)t_raw * (1.0 / 65536.0) * 165.0 - 40.0) * 10.0);
+        *rh_pct  = (uint16_t)(unsigned)((double)h_raw * (1.0 / 65536.0) * 100.0);
+    }
+    return rc;
+}
+
+/* 6-sample min/max-reject mean filter (OEM 0x08038ED4): push `sample` into a
+ * 6-deep ring at 0x20006E48 (count byte + six u16) and return the mean of the
+ * middle four — the running sum minus the highest and lowest, divided by 4.
+ * Used by the EXTI9_5 / TIM7 application hooks to de-glitch a sampled input. */
+uint32_t sensor_filter6_push(uint16_t sample)
+{
+    volatile uint8_t  *ring    = (volatile uint8_t *)0x20006e48u;
+    volatile uint16_t *samples = (volatile uint16_t *)(0x20006e48u + 4u);
+    uint8_t count = ring[0];
+    uint32_t sum = 0, max = 0, min = 0xffff;
+    int i;
+
+    samples[count] = sample;
+    count = (uint8_t)(count + 1);
+    ring[0] = count;
+    if (count == 6) {
+        ring[0] = 0;
+    }
+    for (i = 0; i < 6; i++) {
+        uint32_t v = samples[i];
+        if (v < min) {
+            min = v;
+        }
+        if (max < v) {
+            max = v;
+        }
+        sum = (sum + v) & 0xffff;
+    }
+    return ((sum - max - min) & 0x3ffff) >> 2;
+}
+
+/* ADC sampling-config shadow copy (OEM 0x08032CBC), called from the ADC
+ * config-apply path. While the ADC status byte (ADC_CTX+0x22) is clear it
+ * latches the live sampling config — the two words at +0x18/+0x1c and the half
+ * at +0x20 — into the shadow fields at +0x24/+0x28/+0x2c. The OEM loads +0x20 as
+ * a word and stores only its low half. */
+void adc_config_shadow_copy(void)
+{
+    if (*(volatile uint8_t *)(ADC_CTX + 0x22) != 0) {
+        return;
+    }
+    uint32_t cfg_lo = *(volatile uint32_t *)(ADC_CTX + 0x18);
+    uint32_t cfg_hi = *(volatile uint32_t *)(ADC_CTX + 0x1c);
+    uint16_t cfg_x  = (uint16_t)*(volatile uint32_t *)(ADC_CTX + 0x20);
+
+    *(volatile uint32_t *)(ADC_CTX + 0x24) = cfg_lo;
+    *(volatile uint32_t *)(ADC_CTX + 0x28) = cfg_hi;
+    *(volatile uint16_t *)(ADC_CTX + 0x2c) = cfg_x;
+}

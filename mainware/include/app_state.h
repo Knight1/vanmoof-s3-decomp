@@ -58,10 +58,11 @@ struct session_ctx {
                                      *                  block; not individually
                                      *                  decoded yet. */
     uint8_t  _pad2[0x114];          /* +0x1C5..+0x2D8 */
-    uint8_t  logged_in;             /* +0x2D9 — non-zero once login succeeded */
-    uint8_t  _pad3[0x06];           /* +0x2DA..+0x2DF */
-    uint8_t  fail_count;            /* +0x2E0 — consecutive failed login tries */
-    uint8_t  _pad4[0xB7];           /* +0x2E1..+0x397 */
+    /* logged_in (+0x2D9) and fail_count (+0x2E0) are NOT in session_ctx — they
+     * live in the OUTER struct app_state (adjacent to ctx_sub @ +0x2DC). The OEM
+     * login_handler/logout/console_edit all address them off the g_app_state base
+     * (0x20009368), never through ctx_sub. */
+    uint8_t  _pad3[0xBF];           /* +0x2D9..+0x397 */
     char     user_password[0x3C];   /* +0x398..+0x3D3 — user-configurable
                                      *           service password; empty
                                      *           string means "not set".
@@ -88,17 +89,23 @@ _Static_assert(__builtin_offsetof(struct session_ctx, volume_medium)    == 0x106
 _Static_assert(__builtin_offsetof(struct session_ctx, volume_high)      == 0x107, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, region)           == 0x109, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, region_lock)      == 0x144, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, logged_in)        == 0x2D9, "");
-_Static_assert(__builtin_offsetof(struct session_ctx, fail_count)       == 0x2E0, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, user_password)    == 0x398, "");
 _Static_assert(__builtin_offsetof(struct session_ctx, set_soc)          == 0x3D4, "");
 
 struct app_state {
-    uint8_t  _pad0[0x2DC];        /* +0x000..+0x2DB */
+    uint8_t  _pad0[0x2D9];        /* +0x000..+0x2D8 */
+    uint8_t  logged_in;           /* +0x2D9 — non-zero once console login succeeded
+                                   *          (set by login_handler, cleared by
+                                   *          `logout`, read by the line editor's
+                                   *          pre-login '*' echo) */
+    uint8_t  _pad1[0x02];         /* +0x2DA..+0x2DB */
     struct session_ctx *ctx_sub;  /* +0x2DC — points into a per-session block */
+    uint8_t  fail_count;          /* +0x2E0 — consecutive failed login tries */
     /* ... grows further; not yet decoded. */
 };
-_Static_assert(__builtin_offsetof(struct app_state, ctx_sub) == 0x2DC, "");
+_Static_assert(__builtin_offsetof(struct app_state, logged_in)  == 0x2D9, "");
+_Static_assert(__builtin_offsetof(struct app_state, ctx_sub)    == 0x2DC, "");
+_Static_assert(__builtin_offsetof(struct app_state, fail_count) == 0x2E0, "");
 
 extern struct app_state g_app_state;   /* SRAM 0x20009368 */
 

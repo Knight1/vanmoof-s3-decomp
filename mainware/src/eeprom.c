@@ -16,6 +16,13 @@ extern void  watchdog_kick(void);   /* 0x080314D8 */
 extern int HAL_I2C_Mem_Write(void *handle, uint16_t dev_addr, uint16_t mem_addr,
                              uint16_t mem_addr_size, const uint8_t *data,
                              uint16_t size, uint32_t timeout);
+extern int HAL_I2C_Mem_Read(void *handle, uint16_t dev_addr, uint16_t mem_addr,
+                            uint16_t mem_addr_size, uint8_t *data,
+                            uint16_t size, uint32_t timeout);
+extern uint32_t HAL_I2C_Master_Transmit(void *handle, uint16_t dev_addr,
+                                        const uint8_t *data, uint16_t size, uint32_t timeout);
+extern uint32_t HAL_I2C_Master_Receive(void *handle, uint16_t dev_addr,
+                                       uint8_t *data, uint16_t size, uint32_t timeout);
 
 uint32_t eeprom_write_region(uint32_t addr, const uint8_t *src, uint32_t len)
 {
@@ -57,4 +64,37 @@ uint32_t eeprom_write_region(uint32_t addr, const uint8_t *src, uint32_t len)
     }
 
     return 0;
+}
+
+/* Read the 6-byte ID / security block from the EEPROM (device 0xA0): send the
+ * command byte 0xFA, then read 6 bytes into `out6`. Returns the OR of the two
+ * I2C status bytes (0 = OK). Probed once during boot
+ * (mainware_boot_init_sequence). In later VanMoof firmware (1.9.x) this same
+ * routine is named Security_GetLockState — the 6 bytes are the bike's
+ * lock/security state. OEM eeprom_read_id_block, 0x0803E138. */
+int eeprom_read_id_block(uint8_t *out6)
+{
+    uint8_t cmd[5];
+    uint32_t e1, e2;
+
+    cmd[0] = 0xFA;
+    e1 = HAL_I2C_Master_Transmit(g_eeprom_i2c_handle, 0xA0, cmd, 1, 0x32);
+    e2 = HAL_I2C_Master_Receive(g_eeprom_i2c_handle, 0xA0, out6, 6, 0x32);
+    return (int)((e2 | e1) & 0xFF);
+}
+
+/* Bounded EEPROM read: `len` bytes from byte-address `addr` (1-byte memory
+ * addressing). Rejects len 0 or a read crossing the 0x80-byte device. Returns
+ * the HAL_I2C_Mem_Read status (0 = OK) or 1 on bad args. OEM 0x0803E174 (the
+ * read primitive behind eeprom_read_config_with_crc_fallback). */
+int eeprom_read_bounded(uint32_t addr, uint8_t *out, uint32_t len)
+{
+    if (len == 0) {
+        return 1;
+    }
+    if (addr + len > 0x80) {
+        return 1;
+    }
+    return HAL_I2C_Mem_Read(g_eeprom_i2c_handle, 0xA0, (uint16_t)addr, 1, out,
+                            (uint16_t)len, 0x32);
 }
