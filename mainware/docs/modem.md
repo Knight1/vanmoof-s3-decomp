@@ -134,14 +134,95 @@ top of four parsing primitives:
 | `modem_build_uhttpc_payload` | `0x0802F838` | `UHTTPC` | body `%s` = `g_modem_http_payload` |
 | `modem_build_ugaop` | `0x0802F980` | `UGAOP=` | host `ublox1.vanmoof.com`, port `46434` |
 
-### Inbound SMS remote control
+### Inbound SMS remote control — `modem_sms_dispatch_command`
 
-`modem_handle_cmgr_sms` hands the SMS body to **`modem_sms_dispatch_command`**
-(`0x0803D668`): bodies of the form `#<8-char-code>*<cmd>` drive remote actions —
-unlock / factory-reset / bike-state change / location report (formats the BLE MAC
-+ counters and POSTs) / bell (`ssp_ble_enqueue_tx_packet`). This is the SMS half
-of the anti-theft control surface (the BLE half is `ble_cmd_dispatch`). Mapped +
-named; the dispatcher body itself is not yet sourced.
+`modem_handle_cmgr_sms` (the `AT+CMGR` reply handler) stores the SMS originating
+number into `g_modem_sms_number` (so a reply can be returned) and hands the
+message text to **`modem_sms_dispatch_command`** (`0x0803D668`, sourced in
+`modem.c`). This is the **SMS half of the anti-theft control surface** (the BLE
+half is `ble_cmd_dispatch`).
+
+**Wire format:** `#<8-char code>*<command>[<arg>]`
+
+```
+#ABCD1234*TrackingOn
+│└──┬───┘│└────┬────┘
+│   │    │     └ command keyword (+ optional arg, e.g. the ping GUID)
+│   │    └ '*' delimiter (body[9])
+│   └ 8-char code (body[1..8])
+└ '#' start marker (body[0])
+```
+
+A body that doesn't start with `#` is ignored (empty reply); one whose `body[9]`
+isn't `*` is dropped silently. On any **matched** command the bike writes an
+acknowledgement `#<code>*ack#` back into `g_modem_sms_body`, which the `SMS_WRITE`
+step then sends to `g_modem_sms_number` via `AT+CMGS`.
+
+**Commands** (matched by `bounded_strncmp` on `body+10`):
+
+| command | action |
+| --- | --- |
+| `key` | clears the owner **backup code** (`session_ctx+0x100 = 0x00FF` = "not set") and persists config to both flash banks (`config_persist_dual_bank`) — a remote "forget the owner PIN". Logs `GSM rem bu`. |
+| `TrackingOn` | gated on **PC2 (`GPIOC` pin 2) == 0**; sets bike-state byte `ctx+0x310 = 4`, writes the state record to EEPROM (`save_state_record_to_eeprom`), `maybe_set_state_if_unlocked(4)`, sets tracking flag bit 2. Logs `SMS received tracking on`. (Gate high → logs `Ignore SMS received tracking on`, no action.) |
+| `TrackingOff` | if `ctx+0x310 != 0x0B`, sets it to `0x0B` + writes the EEPROM record; then `maybe_set_state_if_unlocked(0x0E)` + clears tracking flag bit 2. Logs `SMS received tracking off`. |
+| `ping` | builds a JSON **status report** into `g_modem_http_payload` (see below), sets flag bit 0. The arg after `ping` (`body+14`, ≤0x20 bytes) is a caller-supplied `guid` echoed into the report. |
+| `makeNoise` | drives `GPIOD` pin 5 (PD5) low, applies audio-amp volume `0x26` (`amp_volume_brownout_apply`), and enqueues a 2-byte `{0x1A,0x28}` bell packet to the BLE coprocessor (`ssp_ble_enqueue_tx_packet(200, 2, …)`) — rings the bell. |
+
+**The 8-char code — where it comes from, where it's stored, what checks it**
+
+The code is **`body[1..8]` of the inbound SMS** — supplied by the *sender* of the
+message (VanMoof's backend). The firmware:
+
+- **does not store it** (it lives only in a stack local for the call), and
+- **does not validate it** against any device secret, owner PIN, IMEI, or stored
+  token. It is copied verbatim into the `#<code>*ack#` reply (for `ping`, the
+  trailing `guid` plays the same role), so the backend can **correlate** its
+  request with the bike's response.
+
+So the 8-char code is a **transaction / correlation token, not an authentication
+secret.** `modem_sms_dispatch_command` and its caller `modem_handle_cmgr_sms`
+never check the *sender's* number either. The anti-theft authentication of this
+surface therefore rests **entirely** on:
+
+1. the **SIM lock** (`sim_iccid_check`, below) — the bike refuses to operate on
+   any SIM whose ICCID isn't the VanMoof Vodafone-NL batch, so the SIM can't be
+   moved into an attacker's own device; and
+2. the **secrecy of the bike's provisioned phone number** — only VanMoof's
+   backend knows the number on that locked SIM.
+
+Anyone who learns the bike's SIM phone number and the (fixed, in-image) command
+format can drive these commands; the 8-char code adds no barrier. Recorded here
+from the disassembly as a property of the design — not a reconstruction defect.
+
+**`ping` — the status-report payload**
+
+`ping` formats this into `g_modem_http_payload` (`0x20009C20`, `snprintf` bound
+`0x8A`) — note the single quotes, that is the exact OEM format string:
+
+```json
+'guid':'<guid>','statistics':{'batt':<n>,'mac':'<AA:BB:CC:DD:EE:FF>','swv':'<maj.min.pat>','dist':<n>}
+```
+
+| field | source | scaling |
+| --- | --- | --- |
+| `guid` | the SMS arg after `ping` (`body+14`, ≤0x20 chars) | echoed verbatim |
+| `batt` | `(int16) session_ctx+0x3D2` | signed `/10` |
+| `mac`  | BLE MAC, `session_ctx+0x390..0x395` | `%02X:…` |
+| `swv`  | firmware-version word at flash `0x08020004` | `(v>>24).((v>>16)&0xFF).((v>>8)&0xFF)`, `%d.%02d.%02d` |
+| `dist` | `(int32) session_ctx+0x31C` | signed `/10` |
+
+The report is then POSTed to the backend over HTTPS by the `MESSAGE_SEND` step
+(`AT+UHTTPC=0,5,"/bike-message",…,"{%s}",…` — the payload is wrapped in `{ }`).
+The equivalent request as `curl`:
+
+```sh
+curl -X POST 'https://ublox1.vanmoof.com/bike-message' \
+     -H 'Content-Type: application/json' \
+     -d "{'guid':'7e3f0a91c2','statistics':{'batt':84,'mac':'A4:DA:32:11:22:33','swv':'1.07.06','dist':1234}}"
+```
+
+(`batt 84` = raw `int16` 840 ÷ 10; `dist 1234` = raw 12340 ÷ 10; the bike fills in
+its own MAC, firmware version, and echoes back the `guid` the backend sent.)
 
 ## The SIM lock — ICCID / Vodafone-NL check
 
@@ -187,8 +268,10 @@ The modem timer slots live at SRAM `0x20000070` (`[0]`/`[1]` AT send/response
 timers, reused by POWERON; `[2]` = the AT-init command count). The modem working
 context (AT engine state, tx scratch buffer at `+0x18`, and a per-step
 `(substate,substep)` pair for each `modem_step_*`) is one struct at SRAM
-`0x20000294`. The parsed IMEI/IMSI/ICCID/CSQ land in the session context
-(`ctx+0x3E8` modem-info block; ICCID at `+0x50`).
+`0x20000294`. The parsed IMEI/IMSI/ICCID/CSQ land in a modem-info block reached
+through a **pointer** at `session_ctx+0x3E8`: `sim_iccid_check` reads the ICCID at
+`*(char **)(ctx+0x3E8) + 0x50` (an inner dereference — `ctx+0x3E8` holds the block
+pointer, not the block itself).
 
 The response handlers first write into a block of fixed SRAM scratch buffers
 (the identity strings are a descending 16-byte run; the response handlers fill
