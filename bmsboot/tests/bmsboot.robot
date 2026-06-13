@@ -16,6 +16,11 @@ ${REPL}           @${CURDIR}/bmsboot.repl
 ${EEPROM}         @${CURDIR}/../build/eeprom_test.bin
 ${VTOR_RAM}       0x20000000      # boot_hw_init relocates the vector table here
 ${SCB_VTOR}       0xE000ED08      # SCB->VTOR register
+${APP_BASE}       0x08005000      # application bank base (image header lives here)
+# Scratch + stack for the direct-call (leaf) tests, high in the 20 KB SRAM
+# (0x20000000..0x20005000) clear of the loader's own rings/state.
+${SCRATCH}        0x20004000
+${STACKTOP}       0x20005000
 
 *** Keywords ***
 Create Loader Machine
@@ -32,6 +37,92 @@ Resolve Symbol
     ${addr}=    Execute Command    sysbus GetSymbolAddress "${name}"
     ${addr}=    Strip String       ${addr}
     [Return]    ${addr}
+
+Return Trap
+    [Documentation]    Address of Default_Handler (a `b .` self-loop) with the Thumb bit
+    ...                set, used as LR so a called function parks the CPU harmlessly on
+    ...                return (BX LR) instead of running off into undefined code.
+    ${trap}=    Resolve Symbol     Default_Handler
+    ${trap}=    Evaluate           ${trap} | 1
+    [Return]    ${trap}
+
+Call Leaf Function
+    [Documentation]    Invoke a Thumb function by symbol name and return R0 (its return
+    ...                value), stripped. Arguments R0..R3 must already be set. Sets up a
+    ...                fresh stack, points LR at the Return Trap self-loop, runs a brief
+    ...                window so the call completes, then reads R0.
+    [Arguments]    ${symbol}
+    ${addr}=    Resolve Symbol    ${symbol}
+    ${trap}=    Return Trap
+    Execute Command           cpu SetRegister 13 ${STACKTOP}
+    Execute Command           cpu SetRegister 14 ${trap}
+    Execute Command           cpu PC ${addr}
+    Execute Command           emulation RunFor "0.001"
+    ${r0}=    Execute Command    cpu GetRegister 0
+    ${r0}=    Strip String      ${r0}
+    [Return]    ${r0}
+
+Seed Image Header
+    [Documentation]    Write a VanMoof image header into flash at ${addr}: magic (+0x00),
+    ...                crc32 (+0x08), size (+0x0C). Other header words are left as-is.
+    [Arguments]    ${addr}    ${magic}    ${crc32}    ${size}
+    Execute Command    sysbus WriteDoubleWord ${addr} ${magic}
+    ${crcaddr}=    Evaluate    ${addr} + 8
+    ${szaddr}=     Evaluate    ${addr} + 0xC
+    Execute Command    sysbus WriteDoubleWord ${crcaddr} ${crc32}
+    Execute Command    sysbus WriteDoubleWord ${szaddr} ${size}
+
+Drive OTA Bytes
+    [Documentation]    Feed a sequence of bytes to the loader's serial-download protocol
+    ...                the way the host does: write them into the USART1 RX ring, zero the
+    ...                TX ring indices (so replies land at s_tx_buf[0]), then call
+    ...                uart_rx_drain() once — it loops the ring, feeding each byte to
+    ...                ota_process_byte(). The OTA state (s_ota) and replies persist in
+    ...                SRAM across the single drain call.
+    [Arguments]    @{bytes}
+    ${rxbuf}=    Resolve Symbol    s_rx_buf
+    ${rxhead}=   Resolve Symbol    s_rx_head
+    ${rxtail}=   Resolve Symbol    s_rx_tail
+    ${txwidx}=   Resolve Symbol    s_tx_widx
+    ${txridx}=   Resolve Symbol    s_tx_ridx
+    ${enabled}=  Resolve Symbol    s_uart_enabled
+    # The TX enqueue (uart_tx_byte/string) no-ops unless the comms port is up; on the
+    # normal download path download_pin_check sets this — assert it directly here.
+    Execute Command    sysbus WriteByte ${enabled} 1
+    Execute Command    sysbus WriteWord ${txwidx} 0
+    Execute Command    sysbus WriteWord ${txridx} 0
+    ${n}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${rxbuf} + ${n}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${n}=    Evaluate    ${n} + 1
+    END
+    Execute Command    sysbus WriteWord ${rxhead} ${n}
+    Execute Command    sysbus WriteWord ${rxtail} 0
+    ${trap}=    Return Trap
+    Execute Command    cpu SetRegister 13 ${STACKTOP}
+    Execute Command    cpu SetRegister 14 ${trap}
+    ${drain}=    Resolve Symbol    uart_rx_drain
+    Execute Command    cpu PC ${drain}
+    Execute Command    emulation RunFor "0.02"
+
+Tx Byte At Should Be
+    [Documentation]    Assert the byte at offset ${off} of the loader's TX ring (s_tx_buf)
+    ...                equals ${expected} — used to read back ACK (0x79) / NAK (0x1F) replies.
+    [Arguments]    ${off}    ${expected}
+    ${txbuf}=    Resolve Symbol    s_tx_buf
+    ${a}=    Evaluate    ${txbuf} + ${off}
+    ${v}=    Execute Command    sysbus ReadByte ${a}
+    Should Be Equal As Integers    ${v}    ${expected}
+
+Read Byte Symbol
+    [Documentation]    Read a single byte at a resolved symbol and return it as an int.
+    [Arguments]    ${symbol}
+    ${a}=    Resolve Symbol    ${symbol}
+    ${v}=    Execute Command    sysbus ReadByte ${a}
+    ${v}=    Strip String       ${v}
+    ${v}=    Convert To Integer    ${v}    16
+    [Return]    ${v}
 
 *** Test Cases ***
 Vector Table Is Well Formed
@@ -180,3 +271,104 @@ Real Provisioned EEPROM Boots Normally
     Wait For Log Entry        IN_LOOP
     ${flag}=    Execute Command    sysbus ReadByte 0x08080000
     Should Be Equal As Integers    ${flag}    0x55
+
+# --- image_verify: the boot-decision validation primitive (direct leaf calls) ---
+# image_verify(slot) checks magic (+0x00 == 0xAA55AA55) and size (+0x0C < 0x15801),
+# then an MPEG-2 CRC-32 (the HW CRC unit, stubbed to return 0) over the header (with
+# the crc/size words blanked) + body, compared against the stored crc (+0x08). So a
+# header whose crc word is 0 verifies; any other crc word mismatches. Each case seeds
+# a header in the AP bank and calls image_verify directly.
+
+Image Verify Rejects A Bad Magic
+    [Documentation]    A bank whose first word isn't 0xAA55AA55 is rejected up front with
+    ...                IMG_MAGIC_BAD (2) — before any CRC work.
+    Create Loader Machine
+    Seed Image Header    ${APP_BASE}    0x00000000    0x00000000    0x00000028
+    Execute Command      cpu SetRegister 0 ${APP_BASE}
+    ${rc}=    Call Leaf Function    image_verify
+    Should Be Equal As Integers    ${rc}    2
+
+Image Verify Rejects A CRC Mismatch
+    [Documentation]    Magic + size valid but the stored CRC-32 (here 0xDEADBEEF) doesn't
+    ...                match the computed one (stub CRC = 0) -> IMG_CRC_BAD (1).
+    Create Loader Machine
+    Seed Image Header    ${APP_BASE}    0xAA55AA55    0xDEADBEEF    0x00000028
+    Execute Command      cpu SetRegister 0 ${APP_BASE}
+    ${rc}=    Call Leaf Function    image_verify
+    Should Be Equal As Integers    ${rc}    1
+
+Image Verify Accepts A Matching Image
+    [Documentation]    Magic + size valid and the stored CRC matches the computed CRC
+    ...                (both 0 with the stubbed CRC unit) -> IMG_OK (0). Confirms the accept
+    ...                path of the boot decision's validator.
+    Create Loader Machine
+    Seed Image Header    ${APP_BASE}    0xAA55AA55    0x00000000    0x00000028
+    Execute Command      cpu SetRegister 0 ${APP_BASE}
+    ${rc}=    Call Leaf Function    image_verify
+    Should Be Equal As Integers    ${rc}    0
+
+# --- Serial-download ("WHO?") OTA protocol over USART1 -----------------------
+# The host drives the loader one byte at a time. These feed byte sequences through
+# the RX ring into ota_process_byte() (via a single uart_rx_drain call) and read the
+# single-byte ACK (0x79) / NAK (0x1F) replies back from the TX ring. A fresh machine
+# starts with s_ota zeroed (state IDLE), so each test is an independent transaction.
+
+OTA Who Keepalive Emits The Banner
+    [Documentation]    The "W H O ? \\r" keepalive makes the resident loader re-announce
+    ...                itself: the idle handler enqueues STR_BANNER_WHO on the terminating
+    ...                CR. Confirm the banner bytes land in the TX ring.
+    Create Loader Machine
+    ${banner}=    Resolve Symbol    STR_BANNER_WHO
+    ${txbuf}=     Resolve Symbol    s_tx_buf
+    Drive OTA Bytes    0x57  0x48  0x4F  0x3F  0x0D
+    ${expected}=    Execute Command    sysbus ReadBytes ${banner} 23
+    ${actual}=      Execute Command    sysbus ReadBytes ${txbuf} 23
+    Should Be Equal    ${actual}    ${expected}
+
+OTA Set-Address Command With A Valid Address Is Acked
+    [Documentation]    Full set-address transaction: command header '1' 0xCE (cmd + ~cmd)
+    ...                then argument "08 00 50 00 58" (the AP-bank base 0x08005000, big-
+    ...                endian, with a correct trailing XOR). The loader ACKs the command,
+    ...                ACKs the argument, latches the address and enters the data phase.
+    ...                Confirm both ACKs and the data state.
+    Create Loader Machine
+    Drive OTA Bytes    0x31  0xCE  0x08  0x00  0x50  0x00  0x58
+    Tx Byte At Should Be    0    0x79          # command-header ACK
+    Tx Byte At Should Be    1    0x79          # argument ACK
+    # s_ota.state == OTA_ST_DATA (2): the address latched and the loader awaits payload.
+    ${state}=    Read Byte Symbol    s_ota
+    Should Be Equal As Integers    ${state}    2
+
+OTA Argument With A Bad XOR Is NAKed
+    [Documentation]    Same set-address command but the argument's trailing XOR byte is
+    ...                wrong (0x00 instead of 0x58) — the loader rejects it with a NAK and
+    ...                does not enter the data phase.
+    Create Loader Machine
+    Drive OTA Bytes    0x31  0xCE  0x08  0x00  0x50  0x00  0x00
+    Tx Byte At Should Be    0    0x79          # command-header ACK
+    Tx Byte At Should Be    1    0x1F          # argument NAK (bad XOR)
+    ${state}=    Read Byte Symbol    s_ota
+    Should Not Be Equal As Integers    ${state}    2
+
+OTA Argument Below The AP Bank Is NAKed
+    [Documentation]    A well-formed argument (XOR ok) whose address falls below the
+    ...                writable AP bank (here 0x08004000 <= OTA_LO_BOUND) is refused with a
+    ...                NAK — the loader only accepts write targets at/above APP_BASE.
+    Create Loader Machine
+    Drive OTA Bytes    0x31  0xCE  0x08  0x00  0x40  0x00  0x48
+    Tx Byte At Should Be    1    0x1F          # argument NAK (out of range)
+
+OTA Data Block Is Programmed Into Flash
+    [Documentation]    Complete set-address + one data block in a single transaction: after
+    ...                the command + address (0x08005080, a non-header page so it programs
+    ...                inline) the loader is in the data phase; feed a block "L=3, 11 22 33
+    ...                44, XOR" and confirm the payload word is programmed into flash at
+    ...                0x08005080 (the write-through half-page stub lets flash_program_verify
+    ...                succeed) and the block is ACKed.
+    Create Loader Machine
+    Drive OTA Bytes    0x31  0xCE  0x08  0x00  0x50  0x80  0xD8
+    ...                0x03  0x11  0x22  0x33  0x44  0x47
+    ${w}=    Execute Command    sysbus ReadDoubleWord 0x08005080
+    Should Match Regexp    ${w}    (?i)0x0*44332211
+    # Three ACKs: command, argument, data block.
+    Tx Byte At Should Be    2    0x79

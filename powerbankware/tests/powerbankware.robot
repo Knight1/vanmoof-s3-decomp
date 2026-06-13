@@ -185,6 +185,35 @@ Nibble To Hex Should Be
     ${r}=    Call Leaf Function    nibble_to_hex
     Should Be Equal As Integers    ${r}    ${expected}
 
+Read Sram Dword
+    [Documentation]    Read a 32-bit SRAM word and return it as an integer.
+    [Arguments]    ${addr}
+    ${v}=    Execute Command    sysbus ReadDoubleWord ${addr}
+    ${v}=    Strip String       ${v}
+    ${v}=    Convert To Integer    ${v}    16
+    [Return]    ${v}
+
+Inject Console Line
+    [Documentation]    Put the BMS in text-console mode and write an ASCII line terminated
+    ...                by CR into the USART2 RX ring. uart_rx_handler accumulates the
+    ...                printable bytes into its line buffer and, on the CR, dispatches the
+    ...                line to cmd_dispatch (the 20-entry command parser). The same bytes
+    ...                also feed modbus_process, but a non-0xAA first byte leaves the Modbus
+    ...                state machine idle, so the console path is what acts.
+    [Arguments]    ${text}
+    Execute Command    sysbus WriteByte ${RX_STATE} 0x20         # RX channel active (' ')
+    Execute Command    sysbus WriteWord ${MODE_WORD} 0          # text-console path
+    Execute Command    sysbus WriteWord ${MB_STATE} 0
+    ${bytes}=    Evaluate    [ord(c) for c in "${text}"] + [0x0D]
+    ${n}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${RX_RING} + ${n}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${n}=    Evaluate    ${n} + 1
+    END
+    Execute Command    sysbus WriteWord ${RX_WR} ${n}
+    Execute Command    sysbus WriteWord ${RX_RD} 0
+
 *** Test Cases ***
 # --- Boot / liveness ---------------------------------------------------------
 
@@ -437,3 +466,76 @@ Modbus Read Truncates To The Requested Register Count
     Should Be Equal As Integers    ${bc}    4
     ${valid}=    Response Is Crc Valid    ${len}
     Should Be True    ${valid}
+
+# --- System tick + ASCII console commands ------------------------------------
+# tick_get is the free-running 1 ms counter the firmware's timeout loops poll.
+# The text console (cmd_dispatch, 20-entry name table) shares the USART2 link with
+# Modbus: in text-console mode each printable byte is buffered and dispatched on CR.
+# These drive a few commands with clean SRAM-only effects end to end through the
+# real RX path and assert the dispatched handler ran.
+
+Tick Get Reads The System Tick Counter
+    [Documentation]    tick_get returns the 32-bit ms counter at SRAM 0x20002614. Seed a
+    ...                known sentinel there and confirm the routine reads it back — a focused
+    ...                check of the time base the timeout loops poll (parallel to batteryware).
+    Create Leaf Machine
+    Execute Command       sysbus WriteDoubleWord 0x20002614 0x0001E240
+    ${t}=    Call Leaf Function    tick_get
+    Should Be Equal As Integers    ${t}    0x0001E240
+
+Console Upgrade AP Command Sets The Upgrade-Mode Bit
+    [Documentation]    "Upgrade AP\\r" must parse, match command-table entry 4, and run
+    ...                cmd_upgrade_ap, which sets mode-word bit 1 (0x0002 at 0x200006a0).
+    ...                Exercises the full console parse -> name-match -> dispatch path.
+    Create Leaf Machine
+    Inject Console Line    Upgrade AP
+    Process Rx Ring
+    ${mode}=    Read Sram Word    ${MODE_WORD}
+    ${bit}=    Evaluate    ${mode} & 0x2
+    Should Be Equal As Integers    ${bit}    0x2
+
+Console Upgrade BL Command Sets The Bootloader-Mode Bit
+    [Documentation]    "Upgrade BL\\r" matches entry 5 and runs cmd_upgrade_bl, which sets
+    ...                mode-word bit 0 (0x0001) — a different command resolving to a
+    ...                different handler, so the name table isn't collapsing to one entry.
+    Create Leaf Machine
+    Inject Console Line    Upgrade BL
+    Process Rx Ring
+    ${mode}=    Read Sram Word    ${MODE_WORD}
+    ${bit}=    Evaluate    ${mode} & 0x1
+    Should Be Equal As Integers    ${bit}    0x1
+
+Console CHG CAL Command Latches The Calibration Target
+    [Documentation]    "CHG CAL=64\\r" matches entry 6 and runs cmd_chg_cal_set, which
+    ...                decodes the value, latches it at the cal-target cell (0x20000228),
+    ...                and selects charge-calibration via mode bit 14 (0x4000). Confirms
+    ...                both the KEY=VALUE value parse and the dispatch.
+    Create Leaf Machine
+    Inject Console Line    CHG CAL=64
+    Process Rx Ring
+    ${mode}=    Read Sram Word    ${MODE_WORD}
+    ${bit}=    Evaluate    ${mode} & 0x4000
+    Should Be Equal As Integers    ${bit}    0x4000
+    ${target}=    Read Sram Dword    0x20000228
+    Should Be Equal As Integers    ${target}    64
+
+Console DSG CAL Command Selects Discharge Calibration
+    [Documentation]    "DSG CAL=10\\r" matches entry 8 and runs cmd_dsg_cal_set, selecting
+    ...                discharge calibration via mode bit 15 (0x8000) — distinct from the
+    ...                charge bit, confirming the two near-identical names route correctly.
+    Create Leaf Machine
+    Inject Console Line    DSG CAL=10
+    Process Rx Ring
+    ${mode}=    Read Sram Word    ${MODE_WORD}
+    ${bit}=    Evaluate    ${mode} & 0x8000
+    Should Be Equal As Integers    ${bit}    0x8000
+
+Unknown Console Command Has No Effect
+    [Documentation]    A name that matches nothing in the 20-entry table leaves the
+    ...                dispatch index at 0 (the no-op default), so no handler runs and the
+    ...                mode word is untouched — the matcher doesn't false-positive on garbage.
+    Create Leaf Machine
+    Inject Console Line    ZZNotACommand
+    Process Rx Ring
+    ${mode}=    Read Sram Word    ${MODE_WORD}
+    Should Be Equal As Integers    ${mode}    0

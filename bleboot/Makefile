@@ -52,7 +52,7 @@ LDFLAGS      := $(ARCH_FLAGS) \
                 -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map \
                 -nostartfiles -nostdlib
 
-.PHONY: all clean compare size disasm help
+.PHONY: all clean compare size disasm help renode-test
 .DEFAULT_GOAL := all
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
@@ -93,6 +93,13 @@ compare: $(BUILD_DIR)/$(PROJECT).bin
 	@diff_bytes=$$(cmp -l $(OEM_IMAGE) $(BUILD_DIR)/$(PROJECT).bin 2>/dev/null | wc -l); \
 	echo "differing bytes: $$diff_bytes"
 	@cmp $(OEM_IMAGE) $(BUILD_DIR)/$(PROJECT).bin && echo "BYTE-EQUIVALENT" || true
+
+# Renode emulation smoke tests. Runs from the repo root so the suite's
+# @bleboot/... paths resolve. Requires `renode-test` on PATH.
+renode-test: $(BUILD_DIR)/$(PROJECT).elf
+	@command -v renode-test >/dev/null 2>&1 || { \
+		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
+	cd .. && renode-test bleboot/tests/$(PROJECT).robot
 
 clean:
 	rm -rf $(BUILD_DIR)
