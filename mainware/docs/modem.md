@@ -175,7 +175,7 @@ dump, not to `sim_iccid_check`, which logs `sim` / `no sim`.)
 
 | signal | pin | drive | notes |
 | --- | --- | --- | --- |
-| main supply enable | **PB4** | 1 = on | dropped at POWEROFF case 3 |
+| main supply enable | **PB2** | 1 = on | dropped at POWEROFF case 3 |
 | level-shifter enable | **PA15** | 1 = on | |
 | reset | **PE6** | 1 = held in reset | deasserted (0) at power-on |
 | PWR_KEY | **PB0** | pulse | held low, pulsed high ~150 ms to toggle the module |

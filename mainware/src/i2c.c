@@ -543,6 +543,9 @@ int HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t dev_addr,
         return HAL_ERROR;
     }
 
+    (void)hi2c->Instance->SR1;   /* clear ADDR: read SR1 then SR2 (else SCL stays stretched) */
+    (void)hi2c->Instance->SR2;
+
     for (;;) {
         if (hi2c->XferSize == 0u) {
             hi2c->Instance->CR1 |= I2C_CR1_STOP;
@@ -607,16 +610,27 @@ int HAL_I2C_Master_Receive(I2C_HandleTypeDef *hi2c, uint16_t dev_addr,
         return HAL_ERROR;
     }
 
+    /* Clear the ADDR flag (read SR1 then SR2) before the RX loop; without it SCL
+     * stays stretched and RXNE/BTF never advance. The clear's position relative
+     * to the ACK/POS/STOP writes is per-branch (CubeF4). */
     if (hi2c->XferSize == 0u) {
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
         hi2c->Instance->CR1 |= I2C_CR1_STOP;
     } else if (hi2c->XferSize == 1u) {
         hi2c->Instance->CR1 &= ~I2C_CR1_ACK;
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
         hi2c->Instance->CR1 |= I2C_CR1_STOP;
     } else if (hi2c->XferSize == 2u) {
         hi2c->Instance->CR1 &= ~I2C_CR1_ACK;
         hi2c->Instance->CR1 |= I2C_CR1_POS;
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
     } else {
         hi2c->Instance->CR1 |= I2C_CR1_ACK;
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
     }
 
     while (hi2c->XferSize != 0u) {
@@ -782,14 +796,26 @@ int HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t dev_addr, uint16_t mem_ad
         return HAL_ERROR;
     }
 
+    /* Clear the read-phase ADDR flag (read SR1 then SR2) before the RX loop;
+     * without it SCL stays stretched and RXNE never asserts. The clear's
+     * position relative to the ACK/POS/STOP writes is per-branch (CubeF4). */
     if (hi2c->XferSize == 0u) {
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
         hi2c->Instance->CR1 |= I2C_CR1_STOP;
     } else if (hi2c->XferSize == 1u) {
         hi2c->Instance->CR1 &= ~I2C_CR1_ACK;
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
         hi2c->Instance->CR1 |= I2C_CR1_STOP;
     } else if (hi2c->XferSize == 2u) {
         hi2c->Instance->CR1 &= ~I2C_CR1_ACK;
         hi2c->Instance->CR1 |= I2C_CR1_POS;
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
+    } else {
+        (void)hi2c->Instance->SR1;
+        (void)hi2c->Instance->SR2;
     }
 
     while (hi2c->XferSize != 0u) {

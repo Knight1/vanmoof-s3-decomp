@@ -20,6 +20,7 @@
 
 #include <stdint.h>
 #include "modem.h"
+#include "flash.h"  /* config_persist_dual_bank + struct boot_cfg_block (SMS 'key' cmd) */
 #include "log.h"
 #include "scheduler.h"
 #include "util.h"   /* ringbuf_t + ring primitives for the USART2 transport */
@@ -151,7 +152,7 @@ extern const uint8_t g_modem_at_script[];
 #define GPIOE_BASE 0x40021000u
 
 /* Modem power-control pins (see hardware.md). */
-#define MODEM_PWR_EN_PIN   0x0010u   /* PB4  — main supply enable          */
+#define MODEM_PWR_EN_PIN   0x0004u   /* PB2  — main supply enable          */
 #define MODEM_LVLSH_PIN    0x8000u   /* PA15 — level-shifter enable        */
 #define MODEM_RESET_PIN    0x0040u   /* PE6  — reset (1 = held in reset)    */
 #define MODEM_PWRKEY_PIN   0x0001u   /* PB0  — PWR_KEY (pulse to toggle)    */
@@ -260,7 +261,9 @@ int modem_at_exec(void *txbuf, int bufsize, const char *fmt, int num_resp,
             while (modem_uart_rx_byte(&rx) != 0 && (--guard != 0)) {
                 int r;
                 if (*expect == '>' && rx == '>') {
-                    modem_uart_tx_byte((void *)uart_h, '\0');
+                    /* echo the '>' prompt itself into the accumulator (it passes
+                     * the printable filter); the OEM passes rx here, not 0. */
+                    modem_uart_tx_byte((void *)uart_h, rx);
                     rx = '\r';
                 }
                 r = modem_uart_tx_byte((void *)uart_h, rx);
@@ -363,7 +366,7 @@ unsigned int modem_step_poweron(void)
         HAL_GPIO_WritePin((void *)GPIOB_BASE, MODEM_PWRKEY_PIN, 0);
         if (g_modem_at_timer[0] == SCHED_SLOT_NONE) {
             g_modem_at_timer[0] = scheduler_alloc();
-            scheduler_set_timer_name(g_modem_at_timer[0], 1, "timeout_tmr");
+            scheduler_set_timer_name(g_modem_at_timer[0], 1, "interval_tmr");
             scheduler_start(g_modem_at_timer[0], 1, (sched_cb_t)0);
         }
         if (g_modem_at_timer[1] == SCHED_SLOT_NONE) {
@@ -730,7 +733,9 @@ void sim_iccid_check(void)
 {
     static const char ICCID_VANMOOF_PREFIX[] = "8931440400";
     uint8_t *ctx = G_CTX_PTR;
-    const char *iccid = (const char *)(ctx + 0x3E8 + 0x50);
+    /* ctx+0x3E8 holds a POINTER to the modem identity block; the ICCID is at
+     * +0x50 within it (OEM ldr [ctx,#0x3E8] then +0x50 — an inner deref). */
+    const char *iccid = *(char **)(ctx + 0x3E8) + 0x50;
 
     console_cmd_ver(0);
     g_log_func("PDOCP %d\r\n", *(uint16_t *)(ctx + 0x498));
@@ -1418,4 +1423,141 @@ int sms_tracking_latch_once(void)
 uint8_t sms_tracking_get(void)
 {
     return SMS_TRACK_FLAG;
+}
+
+/* ── inbound-SMS remote-command interpreter (the SMS half of the anti-theft
+ *    surface; the BLE half is ble_cmd_dispatch) ─────────────────────────────── */
+
+extern int  save_state_record_to_eeprom();                  /* 0x0803E2CC (K&R: 4 reg + 11-word tail) */
+extern void maybe_set_state_if_unlocked(char state);        /* 0x08029B88 — set bike state when unlocked */
+extern void app_ctx_clear_field_328(void);                  /* 0x0803DBB8 */
+extern void amp_volume_brownout_apply(unsigned char *vol);  /* audio-amp volume apply */
+extern unsigned char ssp_ble_enqueue_tx_packet(unsigned int id, unsigned int kind,
+                                               unsigned char *buf, unsigned char last);
+
+/* The modem/SMS dispatch state struct (OEM SRAM 0x2000839C): byte[0] is the
+ * sms-tracking one-shot latch (see sms_tracking_*), +4 caches the session-context
+ * pointer, +8 is a flags byte (bit0 = ping reported, bit2 = tracking armed). */
+#define SMS_STATE_BASE   0x2000839Cu
+#define SMS_STATE_CTX    (*(uint8_t * volatile *)(SMS_STATE_BASE + 4))
+#define SMS_STATE_FLAGS  (*(volatile uint8_t *)(SMS_STATE_BASE + 8))
+
+/* modem_sms_dispatch_command (OEM 0x0803D668). Parse "#<8-char code>*<command>"
+ * from an inbound SMS body and act on it: `key` (clear the owner backup code +
+ * persist config), `TrackingOn`/`TrackingOff` (arm/disarm GPS tracking + persist
+ * the state record), `ping` (build a JSON status report into the HTTP payload),
+ * `makeNoise` (ring the bell). On any matched command an "#<code>*ack#" reply is
+ * written to `out`. A body that doesn't start with '#' yields an empty reply. */
+void modem_sms_dispatch_command(char *out, unsigned int size, char *body)
+{
+    char code[12];   /* the 8-char authentication code + NUL */
+
+    if (body[0] != '#') {
+        *out = '\0';
+        return;
+    }
+
+    for (unsigned int i = 0; i < 8; i++) {   /* code = body[1..8] */
+        code[i] = body[i + 1];
+    }
+    code[8] = '\0';
+
+    if (body[9] != '*') {
+        return;
+    }
+
+    char    *cmd = body + 10;
+    uint8_t *ctx = SMS_STATE_CTX;
+
+    if (bounded_strncmp(cmd, "key", 3) == 0) {
+        *(uint16_t *)(ctx + 0x100) = 0xFF;                 /* backup code -> "not set" */
+        g_log_func("GSM rem bu\r\n");
+        config_persist_dual_bank(*(uint32_t *)(ctx + 0xF4), *(uint32_t *)(ctx + 0xF8),
+                                 *(uint32_t *)(ctx + 0xFC), *(uint32_t *)(ctx + 0x100),
+                                 *(struct boot_cfg_block *)(ctx + 0x104));
+        snprintf(out, size, "#%s*ack#", code);
+    } else if (bounded_strncmp(cmd, "TrackingOn", 10) == 0) {
+        if (HAL_GPIO_ReadPin((void *)0x40020800u, 4) == 0) {   /* GPIOB pin 2 */
+            log_print_timestamp_prefix();
+            g_log_func("SMS received tracking on\r\n");
+            ctx[0x310] = 4;
+            if (save_state_record_to_eeprom(
+                    *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314),
+                    *(uint32_t *)(ctx + 0x318), *(uint32_t *)(ctx + 0x31C),
+                    *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+                    *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32C),
+                    *(uint32_t *)(ctx + 0x330), *(uint32_t *)(ctx + 0x334),
+                    *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33C),
+                    *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344),
+                    *(uint32_t *)(ctx + 0x348)) != 0) {
+                g_log_func(" ERROR Save values\r\n");
+            }
+            maybe_set_state_if_unlocked(4);
+            app_ctx_clear_field_328();
+            SMS_STATE_FLAGS |= 4;
+        } else {
+            log_print_timestamp_prefix();
+            g_log_func("Ignore SMS received tracking on\r\n");
+        }
+        snprintf(out, size, "#%s*ack#", code);
+    } else if (bounded_strncmp(cmd, "TrackingOff", 0xB) == 0) {
+        if (ctx[0x310] != 0x0B) {
+            ctx[0x310] = 0x0B;
+            if (save_state_record_to_eeprom(
+                    *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314),
+                    *(uint32_t *)(ctx + 0x318), *(uint32_t *)(ctx + 0x31C),
+                    *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+                    *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32C),
+                    *(uint32_t *)(ctx + 0x330), *(uint32_t *)(ctx + 0x334),
+                    *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33C),
+                    *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344),
+                    *(uint32_t *)(ctx + 0x348)) != 0) {
+                g_log_func(" ERROR Save values\r\n");
+            }
+        }
+        maybe_set_state_if_unlocked(0x0E);
+        log_print_timestamp_prefix();
+        g_log_func("SMS received tracking off\r\n");
+        SMS_STATE_FLAGS &= 0xFB;
+        snprintf(out, size, "#%s*ack#", code);
+    } else if (bounded_strncmp(cmd, "ping", 4) == 0) {
+        char    *guid = cmd + 4;                            /* body + 14 */
+        char     guid_buf[36];
+        for (unsigned int i = 0; i < 0x20; i++) {
+            guid_buf[i] = guid[i];
+        }
+        guid_buf[0x20] = '\0';
+
+        /* MAC string (6 bytes at ctx+0x390) -> scratch @ 0x20009CAC */
+        snprintf((char *)0x20009CACu, 0x12, "%02X:%02X:%02X:%02X:%02X:%02X",
+                 ctx[0x390], ctx[0x391], ctx[0x392], ctx[0x393], ctx[0x394], ctx[0x395]);
+
+        /* firmware version word @ flash 0x08020004 -> "maj.min.pat" @ 0x20009C10 */
+        uint32_t ver = *(volatile uint32_t *)0x08020004u;
+        snprintf((char *)0x20009C10u, 0xF, "%d.%02d.%02d",
+                 (int)(ver >> 0x18), (int)((ver >> 0x10) & 0xFF), (int)((ver >> 8) & 0xFF));
+
+        int16_t batt_raw = *(int16_t *)(ctx + 0x3D2);
+        int32_t dist_raw = *(int32_t *)(ctx + 0x31C);
+        /* JSON status report -> g_modem_http_payload @ 0x20009C20 (signed /10 on
+         * batt and dist, exactly the OEM 0x66666667 magic-multiply). */
+        snprintf((char *)0x20009C20u, 0x8A,
+                 "'guid':'%s','statistics':{'batt':%d,'mac':'%s','swv':'%s','dist':%d}",
+                 guid_buf, (int)(int16_t)(batt_raw / 10),
+                 (char *)0x20009CACu, (char *)0x20009C10u, dist_raw / 10);
+
+        SMS_STATE_FLAGS |= 1;
+        snprintf(out, size, "#%s*ack#", code);
+    } else if (bounded_strncmp(cmd, "makeNoise", 9) == 0) {
+        HAL_GPIO_WritePin((void *)0x40020C00u, 0x20, 0);    /* GPIOD pin 5 low */
+        unsigned char pkt[5];
+        pkt[0] = '&';                                       /* amp volume 0x26 */
+        amp_volume_brownout_apply(pkt);
+        pkt[1] = 0x1A;
+        pkt[2] = 0x28;
+        if (ssp_ble_enqueue_tx_packet(200, 2, pkt + 1, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place\r\n");
+        }
+        snprintf(out, size, "#%s*ack#", code);
+    }
 }

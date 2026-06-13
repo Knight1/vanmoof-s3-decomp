@@ -240,7 +240,7 @@ them. The motion INT1 is the high-pass-filtered OR of X/Y/Z high events at ±2 g
 ### Cellular modem (u-blox SARA-G350) — power & control pins
 
 The modem driver (`src/modem.c`, `docs/modem.md`) drives these lines (matching
-the masks above): **PB4** main-supply enable (1 = on), **PA15** level-shifter
+the masks above): **PB2** main-supply enable (1 = on), **PA15** level-shifter
 enable, **PE6** reset (1 = held; deasserted at power-on — the `E output high
 0x40`), **PB0** PWR_KEY (held low, pulsed high ~150 ms to toggle the module — the
 `B output high 0x400` is a sibling), **PB1** aux (held low), **PE10** SIM-present

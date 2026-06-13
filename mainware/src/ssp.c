@@ -283,10 +283,12 @@ uint32_t slip_send_frame(const uint8_t *buf, int len)
 
 /* Atomically pop one byte from the bus RX ring (OEM ssp_rx_byte, 0x08036528).
  * The RX-source interrupt is masked around the ring access:
- *   g_ssp_rx_dev_pp @ 0x20009864 -> a wrapper whose first word points at the
- *   peripheral control block; that block's +0xC word is the interrupt-enable,
- *   bit 5 (0x20) gates the RX source. The RX ring handle is at *(g_ssp_ctx+0xB3C)
- *   (g_ssp_ctx @ 0x20001A44 — the same UART/bus context uart_send_byte uses).
+ *   g_ssp_rx_dev_pp @ 0x20009864 holds a pointer to the UART5 peripheral block;
+ *   that block's +0xC word is CR1, bit 5 (0x20 = RXNEIE) gates the RX source.
+ *   (Single deref of the pp, then +0xC — the same idiom uart_send_byte uses; the
+ *   OEM does `ldr r2,[0x20009864]; ldr r3,[r2,#0xC]`, NOT a second deref hop.)
+ *   The RX ring handle is at *(g_ssp_ctx+0xB40) (g_ssp_ctx @ 0x20001A44 — the same
+ *   UART/bus context uart_send_byte uses).
  * ABI quirk preserved (as with uart_send_byte): the function returns no value of
  * its own — r0 survives from ringbuf_get_byte through the trailing unmask — so it
  * implicitly returns the get status (1 = byte produced, 0 = empty). slip_rx_packet
@@ -294,18 +296,17 @@ uint32_t slip_send_frame(const uint8_t *buf, int len)
 int ssp_rx_byte(uint8_t *out)
 {
     void * volatile *pp_wrap = (void * volatile *)0x20009864u;
-    void *wrap = *pp_wrap;                                  /* control wrapper object */
-    volatile uint32_t *ctl = *(volatile uint32_t * volatile *)wrap;  /* peripheral block */
+    volatile uint32_t *ctl = (volatile uint32_t *)*pp_wrap;  /* UART5 peripheral block */
 
-    ctl[3] &= ~0x20u;                                       /* mask RX interrupt (reg +0xC) */
+    ctl[3] &= ~0x20u;                                       /* mask RXNEIE (CR1 +0xC, bit5) */
     __asm volatile ("dsb 0xf" ::: "memory");
     __asm volatile ("isb 0xf" ::: "memory");
 
     ringbuf_t *rb = *(ringbuf_t * volatile *)(*(uint32_t *)0x20001A44u + 0xB40u);
     uint32_t rc = ringbuf_get_byte(rb, out);
 
-    ctl = *(volatile uint32_t * volatile *)wrap;            /* OEM re-derefs the wrapper */
-    ctl[3] |= 0x20u;                                        /* unmask RX interrupt */
+    ctl = (volatile uint32_t *)*pp_wrap;                   /* OEM re-derefs the pp */
+    ctl[3] |= 0x20u;                                        /* unmask RXNEIE */
     return (int)rc;
 }
 

@@ -84,7 +84,7 @@ void login_handler(char *input)
      * this line. */
     if (scheduler_slot_is_idle(g_console_state.login_state)) {
         scheduler_release(&g_console_state.login_state);
-        g_app_state.ctx_sub->fail_count = 0;
+        g_app_state.fail_count = 0;
     }
 
     if (input[0] == '\0') {
@@ -96,7 +96,7 @@ void login_handler(char *input)
          * window — any input typed during cooldown extends the wait —
          * and stall the user. */
         scheduler_start(g_console_state.login_state, LOGIN_LOCKOUT_TICKS, 0);
-        g_log_func("Please wait..");
+        g_log_func("Please wait..\r\n");
         return;
     }
 
@@ -118,8 +118,8 @@ void login_handler(char *input)
      * branch fires when this call is the LIMIT-th failure. */
     g_log_func("Error login\r\n");
     {
-        uint8_t fc = g_app_state.ctx_sub->fail_count;
-        g_app_state.ctx_sub->fail_count = (uint8_t)(fc + 1u);
+        uint8_t fc = g_app_state.fail_count;
+        g_app_state.fail_count = (uint8_t)(fc + 1u);
         if (fc == LOGIN_FAIL_LIMIT - 1u) {
             uint8_t slot = scheduler_alloc();
             g_console_state.login_state = slot;
@@ -129,8 +129,8 @@ void login_handler(char *input)
     return;
 
 login_ok:
-    g_app_state.ctx_sub->fail_count = 0;
-    g_app_state.ctx_sub->logged_in = 1;
+    g_app_state.fail_count = 0;
+    g_app_state.logged_in = 1;
     g_log_func("\r\nWelcome to ES3\r\n");
 }
 
@@ -1022,12 +1022,12 @@ void console_cmd_help(char *args)
     }
 }
 
-/* `logout` — clear the console session authenticated flag (ctx_sub +0x2D9 =
- * logged_in) directly at the app-context base (OEM 0x08040A4C). */
+/* `logout` — clear the console session authenticated flag (g_app_state.logged_in,
+ * at +0x2D9 of the app-state base, OEM 0x08040A4C). */
 void console_cmd_logout(char *args)
 {
     (void)args;
-    *(volatile uint8_t *)(APP_CTX_BASE + CTX_LOGGED_IN) = 0;   /* g_app_state.ctx_sub->logged_in */
+    *(volatile uint8_t *)(APP_CTX_BASE + CTX_LOGGED_IN) = 0;   /* g_app_state.logged_in */
 }
 
 /* `blereset` — pulse the BLE module reset line (GPIOE PE5) high 10 ms then low

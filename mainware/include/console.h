@@ -20,7 +20,7 @@ int console_next_token(char **pp);
  * line against the user-configurable service password
  * (`g_app_state.ctx_sub->user_password`) and, failing that, against a
  * hard-coded fallback embedded in the image. On success it sets
- * `g_app_state.ctx_sub->logged_in = 1`; on failure it counts attempts
+ * `g_app_state.logged_in = 1`; on failure it counts attempts
  * and arms a 5-second lockout via the scheduler. */
 void login_handler(char *input);
 
