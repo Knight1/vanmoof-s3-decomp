@@ -121,8 +121,33 @@ LDFLAGS      := $(ARCH_FLAGS) \
                 -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map \
                 -nostartfiles -nostdlib
 
-.PHONY: all clean compare size disasm help
+.PHONY: all clean compare size disasm help test renode-test
 .DEFAULT_GOAL := all
+
+# ---- Renode test image -------------------------------------------------------
+# The production link uses --gc-sections, which drops the self-contained leaf
+# routines (crc32_le, crc16_modbus, lcg_random_u15) the minimal reconstruction
+# doesn't yet reference. `make test` relinks the same objects but force-retains
+# those symbols (--undefined makes each a GC root) so the Renode suite can call
+# them directly. Identical bytes otherwise — test scaffolding only.
+TEST_ELF   := $(BUILD_DIR)/$(PROJECT)_test.elf
+TEST_KEEP  := -Wl,--undefined=crc32_le -Wl,--undefined=crc16_modbus \
+              -Wl,--undefined=lcg_random_u15 -Wl,--undefined=monitor_strlen \
+              -Wl,--undefined=svc_5560_char_uuid_to_index
+
+$(TEST_ELF): $(OBJS) $(LD_SCRIPT)
+	$(LD) $(LDFLAGS) $(TEST_KEEP) $(OBJS) -o $@
+
+test: $(TEST_ELF)
+	@$(SIZE) $(TEST_ELF)
+	@echo "built $(TEST_ELF) (Renode test image — CRC/LCG leaves retained)"
+
+# Renode emulation smoke tests. Runs from the repo root so the suite's
+# @bleware/... paths resolve. Requires `renode-test` on PATH.
+renode-test: $(TEST_ELF)
+	@command -v renode-test >/dev/null 2>&1 || { \
+		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
+	cd .. && renode-test bleware/tests/$(PROJECT).robot
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
 

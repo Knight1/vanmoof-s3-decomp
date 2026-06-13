@@ -1,0 +1,190 @@
+*** Settings ***
+Documentation     Renode smoke tests for the VanMoof bleware image — the BLE-MCU
+...               application on the CC2642R1F (ARM Cortex-M4F).
+...               Build the test image first:  make -C bleware test
+...               then run:  renode-test bleware/tests/bleware.robot
+...               `make test` relinks the objects retaining the self-contained leaf
+...               routines (crc32_le, crc16_modbus, lcg_random_u15) that the minimal
+...               reconstruction's production link drops via --gc-sections.
+...
+...               The image's vector table sits at flash 0x00000090 (just past the
+...               0x90-byte OAD header). The CRC + PRNG primitives are the functional
+...               surface exercised here.
+Suite Setup       Setup
+Suite Teardown    Teardown
+Test Teardown     Test Teardown
+Resource          ${RENODEKEYWORDS}
+
+*** Variables ***
+${ELF}            @${CURDIR}/../build/bleware_test.elf
+${REPL}           @${CURDIR}/bleware.repl
+${VTOR}           0x00000090      # app vector table base (SP @ +0, reset @ +4)
+${SCRATCH}        0x20007000      # leaf-test data buffer, high in the 80 KB SRAM
+${STACKTOP}       0x20014000      # top of SRAM
+# LCG state lives at the very base of SRAM (data/bss): the two lock-callback
+# pointers and the 32-bit state.
+${LCG_LOCK_ENTER}    0x20000000
+${LCG_LOCK_EXIT}     0x20000004
+${LCG_STATE}         0x20000008
+
+*** Keywords ***
+Create Boot Machine
+    [Documentation]    Build the machine, load the app image and point the vector
+    ...                table at 0x00000090. Register a reset macro so a soft reset
+    ...                restores the offset.
+    Execute Command           mach create "bleware"
+    Execute Command           machine LoadPlatformDescription ${REPL}
+    Execute Command           sysbus LoadELF ${ELF}
+    Execute Command           cpu VectorTableOffset ${VTOR}
+    Execute Command           macro reset "cpu VectorTableOffset ${VTOR}"
+
+Create Leaf Machine
+    [Documentation]    Minimal machine for direct-call (leaf) tests: load the platform
+    ...                and ELF, nothing else. The CRC/PRNG routines touch no trim/clock
+    ...                status registers, so none of the boot hooks are needed here.
+    Execute Command           mach create
+    Execute Command           machine LoadPlatformDescription ${REPL}
+    Execute Command           sysbus LoadELF ${ELF}
+
+Resolve Symbol
+    [Documentation]    Look up a symbol's address in the loaded ELF, stripped.
+    [Arguments]    ${name}
+    ${addr}=    Execute Command    sysbus GetSymbolAddress "${name}"
+    ${addr}=    Strip String       ${addr}
+    [Return]    ${addr}
+
+Hook Return
+    [Documentation]    Hook a function (by symbol) to return immediately — cpu.PC =
+    ...                cpu.LR before its prologue, so callers proceed as if it ran.
+    [Arguments]    ${symbol}
+    ${a}=    Resolve Symbol    ${symbol}
+    Execute Command    cpu AddHook ${a} "cpu.PC = cpu.LR"
+
+Return Trap
+    [Documentation]    Address of _exit (a `b .` self-loop) with the Thumb bit set,
+    ...                used as LR so a called function parks the CPU harmlessly on
+    ...                return (BX LR) instead of running off into undefined code.
+    ...                (bleware has no Default_Handler symbol — its default vectors point
+    ...                into ROM — but _exit is the same `b .` shape.)
+    ${trap}=    Resolve Symbol     _exit
+    ${trap}=    Evaluate           ${trap} | 1
+    [Return]    ${trap}
+
+Call Leaf Function
+    [Documentation]    Invoke a Thumb function by symbol name and return R0 (its return
+    ...                value), stripped. Arguments R0..R3 must already be set. Sets up a
+    ...                fresh stack, points LR at the Return Trap self-loop, runs a brief
+    ...                window so the call completes, then reads R0.
+    [Arguments]    ${symbol}
+    ${addr}=    Resolve Symbol    ${symbol}
+    ${trap}=    Return Trap
+    Execute Command           cpu SetRegister 13 ${STACKTOP}
+    Execute Command           cpu SetRegister 14 ${trap}
+    Execute Command           cpu PC ${addr}
+    Execute Command           emulation RunFor "0.002"
+    ${r0}=    Execute Command    cpu GetRegister 0
+    ${r0}=    Strip String      ${r0}
+    [Return]    ${r0}
+
+Load Scratch Bytes
+    [Documentation]    Write a list of byte literals into the SRAM scratch buffer
+    ...                (${SCRATCH}), one byte per ascending address.
+    [Arguments]    @{bytes}
+    ${i}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${SCRATCH} + ${i}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${i}=    Evaluate    ${i} + 1
+    END
+
+*** Test Cases ***
+Vector Table Is Well Formed
+    [Documentation]    Static check (no execution): vector slot 0 (initial SP) points
+    ...                into SRAM and slot 1 (reset PC) into app flash with the Thumb bit
+    ...                set — the CPU resets cleanly into this image past the OAD header.
+    Create Boot Machine
+    ${sp}=    Execute Command    sysbus ReadDoubleWord 0x00000090
+    ${pc}=    Execute Command    sysbus ReadDoubleWord 0x00000094
+    # Initial SP in SRAM (0x2001_3A00).
+    Should Match Regexp    ${sp}    (?i)0x0*2001[0-9a-f]+
+    # Reset vector in app flash (0x0000_0xxx) with the Thumb bit (odd) set.
+    Should Match Regexp    ${pc}    (?i)0x0*[0-9a-f]*[13579bdf]
+
+Reset Chain Reaches Main
+    [Documentation]    The startup chain — Reset_Handler (FPU enable, silicon trim,
+    ...                cinit C-runtime init) — must hand control to main(). SetupTrimDevice
+    ...                drives CC2642 trim MMIO that isn't modelled, so it is skipped;
+    ...                everything else runs unchanged.
+    Create Boot Machine
+    Create Log Tester         10
+    Hook Return               SetupTrimDevice
+    ${main}=    Resolve Symbol    main
+    Execute Command           cpu AddHook ${main} "self.Log(LogLevel.Error, 'REACHED_MAIN')"
+    Start Emulation
+    Wait For Log Entry        REACHED_MAIN
+
+# --- CRC primitives (direct leaf calls) --------------------------------------
+# crc32_le is the reflected CRC-32/zlib core (poly 0xEDB88320) the OAD/secrets
+# paths use; it returns the *un*-finalised value (no ^0xFFFFFFFF), so the standard
+# zlib CRC is the result XOR 0xFFFFFFFF. crc16_modbus is the CRC-16 (poly 0xA001)
+# that validates backoffice GATT payloads.
+
+CRC32 Standard Check Value
+    [Documentation]    crc32_le(seed=0xFFFFFFFF, "123456789", 9) returns 0x340BC6D9;
+    ...                XORed with 0xFFFFFFFF that is 0xCBF43926 — the canonical CRC32-IEEE
+    ...                check value. Validates the core against an external reference.
+    Create Leaf Machine
+    Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x36  0x37  0x38  0x39
+    Execute Command       cpu SetRegister 0 0xFFFFFFFF
+    Execute Command       cpu SetRegister 1 ${SCRATCH}
+    Execute Command       cpu SetRegister 2 9
+    ${raw}=    Call Leaf Function    crc32_le
+    ${final}=    Evaluate    (${raw} ^ 0xFFFFFFFF) & 0xFFFFFFFF
+    Should Be Equal As Integers    ${final}    0xCBF43926
+
+CRC32 Of A Zero-Length Buffer Returns The Seed
+    [Documentation]    With len 0 the loop never runs, so crc32_le returns the seed
+    ...                unchanged — guards the `while (len != 0)` boundary.
+    Create Leaf Machine
+    Execute Command       cpu SetRegister 0 0x12345678
+    Execute Command       cpu SetRegister 1 ${SCRATCH}
+    Execute Command       cpu SetRegister 2 0
+    ${raw}=    Call Leaf Function    crc32_le
+    Should Be Equal As Integers    ${raw}    0x12345678
+
+CRC16 Modbus Standard Check Value
+    [Documentation]    crc16_modbus("123456789", 9, seed=0xFFFF) must equal 0x4B37 — the
+    ...                canonical Modbus/CRC-16 check value (poly 0xA001, init 0xFFFF),
+    ...                matching the STM32 firmwares' modbus_crc16.
+    Create Leaf Machine
+    Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x36  0x37  0x38  0x39
+    Execute Command       cpu SetRegister 0 ${SCRATCH}
+    Execute Command       cpu SetRegister 1 9
+    Execute Command       cpu SetRegister 2 0xFFFF
+    ${crc}=    Call Leaf Function    crc16_modbus
+    Should Be Equal As Integers    ${crc}    0x4B37
+
+# --- LCG pseudo-random helper (direct leaf call) -----------------------------
+# lcg_random_u15 is the Borland/glibc LCG (state = 1103515245*state + 12345),
+# returning bits [30:16] as a 15-bit value. It wraps the update in a critical
+# section via two RAM-resident lock callbacks installed at runtime; for a leaf
+# call we point those at a `bx lr` stub so the body runs uncritically.
+
+LCG Random Produces The Expected Sequence Value
+    [Documentation]    Seed the LCG state to 1 and confirm one step yields 0x41C6:
+    ...                (1103515245*1 + 12345) = 0x41C67EA6, bits [30:16] = 0x41C6. The
+    ...                lock-enter/exit callback pointers are aimed at a 2-byte `bx lr`
+    ...                stub in scratch so the critical-section wrappers just return.
+    Create Leaf Machine
+    # `bx lr` (Thumb 0x4770) stub for the lock callbacks.
+    Execute Command    sysbus WriteWord ${SCRATCH} 0x4770
+    ${stub}=    Evaluate    ${SCRATCH} | 1
+    Execute Command    sysbus WriteDoubleWord ${LCG_LOCK_ENTER} ${stub}
+    Execute Command    sysbus WriteDoubleWord ${LCG_LOCK_EXIT} ${stub}
+    Execute Command    sysbus WriteDoubleWord ${LCG_STATE} 0x00000001
+    ${r}=    Call Leaf Function    lcg_random_u15
+    Should Be Equal As Integers    ${r}    0x41C6
+    # The state advanced to the full 32-bit LCG output.
+    ${st}=    Execute Command    sysbus ReadDoubleWord ${LCG_STATE}
+    ${st}=    Strip String       ${st}
+    Should Be Equal As Integers    ${st}    0x41C67EA6

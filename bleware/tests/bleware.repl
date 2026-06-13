@@ -1,0 +1,24 @@
+// TI CC2642R1F (ARM Cortex-M4F) — minimal Renode platform for the VanMoof
+// bleware application image.
+//
+// The application image carries a 0x90-byte OAD header at flash 0x00000000, its
+// vector table immediately after at 0x00000090 (SP 0x20013A00, reset
+// Reset_Handler). Only flash + SRAM are modelled; the leaf tests call the CRC /
+// LCG routines directly and the reach-main test skips the silicon-trim MMIO via a
+// hook, so this description stays model-agnostic and loads on any recent Renode.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+// 352 KB main flash (0x00000000..0x00057FFF): OAD header at 0, app vectors at 0x90.
+flash: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x58000
+
+// 80 KB SRAM. The LCG lock-pointer pair + state live at 0x20000000/04/08.
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x14000

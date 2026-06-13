@@ -1,0 +1,26 @@
+// TI CC2642R1F (ARM Cortex-M4F) — minimal Renode platform for the VanMoof
+// bleboot image (the TI BIM, Boot Image Manager).
+//
+// The BIM occupies the last 8 KB flash page (0x00056000..0x00057FFF); the CPU
+// resets into its vector table at 0x00056000 (SP 0x20014000, reset
+// Reset_Handler). Only flash + SRAM are modelled — the CRC and reach-main tests
+// drive the routines directly; the silicon-trim sequence and the SPI-flash / CRC
+// hardware the boot scan touches are skipped via hooks, so this description stays
+// model-agnostic and loads on any recent Renode.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+// 352 KB main flash (0x00000000..0x00057FFF); the BIM image lives at 0x00056000.
+flash: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x58000
+
+// 80 KB SRAM (stack top _estack = 0x20014000). The BIM's CRC scratch buffer is at
+// 0x20000300 and its chunk-size cache at 0x20000400.
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x14000
