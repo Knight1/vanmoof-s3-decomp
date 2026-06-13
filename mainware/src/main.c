@@ -166,7 +166,6 @@ extern int  hdc1080_write_config_reg(void *hi2c, int mode_a, int mode_b); /* 0x0
 extern int  eeprom_read_id_block(uint8_t *out6);      /* 0x0803E138 */
 extern int  eeprom_read_config_with_crc_fallback(void *out); /* 0x0803E1A8 */
 extern void settings_factory_reset(void *ctx, int mode);
-extern int  flash_read_config_with_crc_restore(void *out);   /* 0x08031784 */
 extern void sound_groups_init_default(void *cfg);     /* 0x0803FAC0 (seeds sound-group masks ctx+0xF4/F8/FC) */
 extern void region_speed_preset_table_load(void *out, int region_index); /* 0x0803FC24 */
 extern int  display_write_reg20_init(void);           /* 0x0803B248 (light-sensor bring-up) */

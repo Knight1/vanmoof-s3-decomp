@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>   /* memcpy (config-record bank copies) */
 
 #include "crc.h"
 #include "flash.h"
@@ -236,5 +237,33 @@ uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
     if (HAL_CRC_Accumulate(CRC_HANDLE, (uint32_t *)bank_dest, 0x34) != 0) {
         return 3;
     }
+    return 0;
+}
+
+/* Load the config record from internal flash with CRC self-repair (OEM
+ * flash_read_config_with_crc_restore, 0x08031784): copy bank A into `out` and
+ * verify its 0x34-word self-checking CRC; on failure log + fall back to bank B,
+ * and on a good bank B re-commit BOTH banks (healing the corrupt bank A) via
+ * config_persist_dual_bank. Returns 0 if either bank was valid, 1 if both are
+ * corrupt. `out` must be at least 0xD0 bytes. */
+int flash_read_config_with_crc_restore(void *out)
+{
+    uint32_t *rec = (uint32_t *)out;
+
+    memcpy(rec, (const void *)CONFIG_BANK_A_ADDR, 0xD0);
+    if (HAL_CRC_Accumulate(CRC_HANDLE, rec, 0x34) == 0) {
+        return 0;                                   /* bank A good */
+    }
+
+    g_log_func("  ERR:Read flash copy\r\n");
+    memcpy(rec, (const void *)CONFIG_BANK_B_ADDR, 0xD0);
+    if (HAL_CRC_Accumulate(CRC_HANDLE, rec, 0x34) != 0) {
+        return 1;                                   /* both banks corrupt */
+    }
+
+    /* bank B recovered -> heal bank A by re-committing both banks (the 0xC0-byte
+     * payload at rec+0x10 is passed by value, matching the OEM stack copy). */
+    config_persist_dual_bank(rec[0], rec[1], rec[2], rec[3],
+                             *(struct boot_cfg_block *)((uint8_t *)rec + 0x10));
     return 0;
 }

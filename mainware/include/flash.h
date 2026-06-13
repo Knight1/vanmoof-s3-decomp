@@ -51,4 +51,9 @@ uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
                                 struct boot_cfg_block payload,
                                 uint32_t bank_dest, uint32_t size);
 
+/* Load the config record from flash (bank A, CRC-verify, fall back to bank B and
+ * heal bank A on recovery). Returns 0 if either bank was valid, 1 if both are
+ * corrupt; `out` must be >= 0xD0 bytes. OEM 0x08031784 (sourced in flash.c). */
+int flash_read_config_with_crc_restore(void *out);
+
 #endif

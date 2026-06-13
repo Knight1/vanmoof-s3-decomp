@@ -1477,7 +1477,7 @@ void modem_sms_dispatch_command(char *out, unsigned int size, char *body)
                                  *(struct boot_cfg_block *)(ctx + 0x104));
         snprintf(out, size, "#%s*ack#", code);
     } else if (bounded_strncmp(cmd, "TrackingOn", 10) == 0) {
-        if (HAL_GPIO_ReadPin((void *)0x40020800u, 4) == 0) {   /* GPIOB pin 2 */
+        if (HAL_GPIO_ReadPin((void *)0x40020800u, 4) == 0) {   /* GPIOC pin 2 (PC2) */
             log_print_timestamp_prefix();
             g_log_func("SMS received tracking on\r\n");
             ctx[0x310] = 4;
