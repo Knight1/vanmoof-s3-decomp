@@ -622,11 +622,11 @@ Memcmp Orders By The First Differing Byte
 Strtol Parses Decimal Hex Negative And Saturates On Overflow
     [Documentation]    monitor_strtol mirrors the C strtol: base-10 digits, '0x' auto-hex
     ...                when base is 0, a leading '-' negates, and a value past 0x7FFFFFFF
-    ...                saturates to LONG_MAX. endptr is passed NULL (R1=0). NOTE: hex inputs
-    ...                containing the letters A-F/a-f are mis-parsed by the reconstruction's
-    ...                s_ctype table (see docs/strtol-hex-letter-bug.md), so the auto-hex case
-    ...                here uses numeric-only "0x10" to exercise base detection on a known-good
-    ...                path.
+    ...                saturates to LONG_MAX. endptr is passed NULL (R1=0). Character
+    ...                classification is driven by the byte-exact OEM ctype table
+    ...                (g_ctype_table[c+1]), so hex letters A-F/a-f and base-2..36 letter
+    ...                digits parse faithfully — the earlier hand-built s_ctype hex-letter
+    ...                gap is fixed (see docs/strtol-hex-letter-bug.md).
     # "12345" base 10 -> 12345
     Create Leaf Machine
     Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x00     # "12345"
@@ -635,8 +635,7 @@ Strtol Parses Decimal Hex Negative And Saturates On Overflow
     Execute Command    cpu SetRegister 2 10
     ${d}=    Call Leaf Function    monitor_strtol
     Should Be Equal As Integers    ${d}    12345
-    # "0x10" base 0 -> 16 (auto-detect hex; numeric digits only — letters are broken,
-    # see docs/strtol-hex-letter-bug.md)
+    # "0x10" base 0 -> 16 (auto-detect hex)
     Create Leaf Machine
     Load Scratch Bytes    0x30  0x78  0x31  0x30  0x00           # "0x10"
     Execute Command    cpu SetRegister 0 ${SCRATCH}
@@ -644,6 +643,38 @@ Strtol Parses Decimal Hex Negative And Saturates On Overflow
     Execute Command    cpu SetRegister 2 0
     ${h}=    Call Leaf Function    monitor_strtol
     Should Be Equal As Integers    ${h}    16
+    # "0xFF" base 0 -> 255 (auto-hex whose digits are letters — the fixed table path)
+    Create Leaf Machine
+    Load Scratch Bytes    0x30  0x78  0x46  0x46  0x00           # "0xFF"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 0
+    ${hff}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${hff}    255
+    # "AbCd" base 16 -> 0xABCD (mixed-case hex letter decode)
+    Create Leaf Machine
+    Load Scratch Bytes    0x41  0x62  0x43  0x64  0x00           # "AbCd"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 16
+    ${hmix}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${hmix}    0xABCD
+    # "zz" base 36 -> 1295 (0x50F): letter digits beyond hex exercise the full table
+    Create Leaf Machine
+    Load Scratch Bytes    0x7A  0x7A  0x00                       # "zz"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 36
+    ${z36}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${z36}    1295
+    # "G" base 16 -> 0: an out-of-range letter digit is rejected (no digits consumed)
+    Create Leaf Machine
+    Load Scratch Bytes    0x47  0x00                             # "G"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 16
+    ${grej}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${grej}    0
     # "-42" base 10 -> -42 (0xFFFFFFD6)
     Create Leaf Machine
     Load Scratch Bytes    0x2D  0x34  0x32  0x00                 # "-42"

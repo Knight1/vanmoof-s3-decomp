@@ -204,28 +204,31 @@ char *strcpy(char *dst, const char *src)
 
 #include <limits.h>
 
-/* ASCII character classification table — OEM DAT_000108E8 */
-static const uint8_t s_ctype[256] = {
-    [' ']  = 0x08, ['\t'] = 0x08, ['\n'] = 0x08, ['\r'] = 0x08,
-    ['+']  = 0x00, ['-']  = 0x00,
-    ['0']  = 0x44, ['1'] = 0x44, ['2'] = 0x44, ['3'] = 0x44,
-    ['4']  = 0x44, ['5'] = 0x44, ['6'] = 0x44, ['7'] = 0x44,
-    ['8']  = 0x44, ['9'] = 0x44,
-    ['A']  = 0x41, ['B'] = 0x41, ['C'] = 0x41, ['D'] = 0x41,
-    ['E']  = 0x41, ['F'] = 0x41,
-    ['a']  = 0x42, ['b'] = 0x42, ['c'] = 0x42, ['d'] = 0x42,
-    ['e']  = 0x42, ['f'] = 0x42,
-    ['x']  = 0x00, ['X']  = 0x80,  /* x: just space, X: hex marker */
-};
-/* OEM ctype bits (table at flash 0x00029B2D): bit0 = hex A-F, bit1 = hex
- * a-f, bit2 = decimal digit, bit3 = whitespace, bit6 = any hex digit.
- * All hex chars (0x44/0x41/0x42) carry bit6, so it marks "is hex". */
+/* Character classification table — the byte-exact OEM ctype table at flash
+ * 0x00029B2C (materialized in src/util.c as g_ctype_table). monitor_strtol
+ * loads its base from DAT_000108E8 = 0x29B2C and reads each entry as
+ * table[char + 1] (the `ldrb [reg, #1]` after `char + base`): index 0 is the
+ * EOF slot, so character `c`'s class is g_ctype_table[c + 1].
+ *
+ * Bit meaning (verified against the lsrs/bcs tests in OEM 0x107BC and the
+ * live table bytes):
+ *   bit0 (0x01) uppercase letter A-Z   digit = c - 'A' + 10  (OEM sub 0x37)
+ *   bit1 (0x02) lowercase letter a-z   digit = c - 'a' + 10  (OEM sub 0x57)
+ *   bit2 (0x04) decimal digit 0-9      digit = c - '0'       (OEM sub 0x30)
+ *   bit3 (0x08) whitespace
+ *   bit6 (0x40) hex digit (0-9 A-F a-f) — the '0x'/'0X' prefix probe
+ * Every letter is flagged (not just A-F/a-f) because the routine supports
+ * bases 2..36. (An earlier hand-built s_ctype covered only A-F/a-f and
+ * mis-parsed letter digits in bases 17..36; it is replaced by the real
+ * table so every base classifies faithfully.) The OEM `lsrs #7` hex probe
+ * leaves bit6 in the carry — matched by `>> 6 & 1` below, not bit7. */
+extern const uint8_t g_ctype_table[];   /* flash 0x00029B2C, src/util.c */
 
-static int s_isspace(uint8_t c)  { return (s_ctype[c] >> 3) & 1; }
-static int s_isdigit(uint8_t c)  { return (s_ctype[c] >> 2) & 1; }
-static int s_ishex_low(uint8_t c) { return (s_ctype[c] >> 1) & 1; }   /* bit1 = a-f */
-static int s_ishex_up(uint8_t c)  { return  s_ctype[c]       & 1; }   /* bit0 = A-F */
-static int s_ishex(uint8_t c)     { return (s_ctype[c] >> 6) & 1; }   /* bit6 = any hex */
+static int s_isspace(uint8_t c) { return (g_ctype_table[c + 1] >> 3) & 1; }  /* bit3 */
+static int s_isdigit(uint8_t c) { return (g_ctype_table[c + 1] >> 2) & 1; }  /* bit2 */
+static int s_isupper(uint8_t c) { return  g_ctype_table[c + 1]       & 1; }  /* bit0 A-Z */
+static int s_islower(uint8_t c) { return (g_ctype_table[c + 1] >> 1) & 1; }  /* bit1 a-z */
+static int s_ishex(uint8_t c)   { return (g_ctype_table[c + 1] >> 6) & 1; }  /* bit6 hex */
 
 unsigned int monitor_strtol(const uint8_t *nptr, uint8_t **endptr, int base)
 {
@@ -272,10 +275,10 @@ unsigned int monitor_strtol(const uint8_t *nptr, uint8_t **endptr, int base)
 
         if (s_isdigit(c)) {
             digit = c - '0';
-        } else if (s_ishex_low(c)) {
-            digit = c - 'a' + 10;
-        } else if (s_ishex_up(c)) {
+        } else if (s_isupper(c)) {        /* OEM order: bit0 (sub 0x37) before */
             digit = c - 'A' + 10;
+        } else if (s_islower(c)) {        /* bit1 (sub 0x57); a char sets at most one */
+            digit = c - 'a' + 10;
         } else {
             break;
         }
