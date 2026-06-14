@@ -348,3 +348,80 @@ uint8_t *ble_device_address(int addr_type)
 
     return rom_gap_get_dev_address(addr_type);
 }
+
+/* ---- xs3_hci.c PHY accessors (per-connection PHY fields) -------------
+ *
+ * The PHY state for each link lives in three bytes inside the same
+ * 0x7C-byte connection record used by the accessors above:
+ *
+ *   +0x66 u8   phy_requested   — PHY the host wants the link to use
+ *   +0x67 u8   phy_reapply     — re-apply request counter (bump => the
+ *                                 controller is asked to re-negotiate)
+ *   +0x68 u8   phy_current     — PHY the link is currently running
+ *
+ * All three follow the standard template (pend, conn-handle check,
+ * read/write, post) and are the strong definitions that override the
+ * WEAK_NOOP placeholders in hal_stubs.S. The sole caller of all three
+ * is hci_handle_phy_update_event (src/xs3_hci.c, OEM @ 0x0001C684). */
+
+/* Read the connection's current PHY (record+0x68) into *out_phy.
+ * Returns 0 on a matching conn handle, -1 otherwise. OEM @ 0x00022870. */
+int conn_phy_get_current(uint16_t conn, uint8_t *out_phy)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *out_phy = *(uint8_t *)((uint8_t *)e + 0x68);
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}
+
+/* Latch the host-requested PHY (record+0x66) and clear the re-apply
+ * counter (record+0x67). Returns 0 on a matching conn handle, -1
+ * otherwise. OEM @ 0x000228F0. */
+int conn_phy_set_requested(uint16_t conn, uint8_t phy)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *(uint8_t *)((uint8_t *)e + 0x67) = 0;
+        *(uint8_t *)((uint8_t *)e + 0x66) = phy;
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}
+
+/* Bump the re-apply counter (record+0x67), asking the controller to
+ * re-negotiate the PHY for this link. Returns 0 on a matching conn
+ * handle, -1 otherwise. OEM @ 0x00022050.
+ *
+ * The OEM loads the table base from a literal holding (base - 4) and
+ * immediately adds 4 back before indexing — a codegen artefact that
+ * resolves to the same g_ble_connection_table base used everywhere
+ * else; modelled here as the plain indexed access. */
+int conn_phy_reapply(uint16_t conn)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *(uint8_t *)((uint8_t *)e + 0x67) += 1;
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}

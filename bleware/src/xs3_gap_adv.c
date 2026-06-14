@@ -66,13 +66,12 @@ extern void *memcpy(void *dst, const void *src, unsigned int n);
  * to `out` and NUL-terminates. Not yet named/decoded elsewhere. */
 extern void bleware_snprintf(char *out, const char *fmt, ...);
 
-/* Disable-advertising helpers for the two sets (FUN_00024FE8 set #1,
- * FUN_00025010 set #2). Each pushes a disable command via
- * log_emit_v(0x10, ...) when the set's handle is valid and clears the
- * matching "ready" flag. They are separate OEM functions in the
- * 0x24xxx/0x25xxx band; declared here as cross-TU calls. */
-extern void gap_adv_disable_set1(void);   /* FUN_00024FE8 */
-extern void gap_adv_disable_set2(void);   /* FUN_00025010 */
+/* Disable-advertising helpers for the two sets are defined below
+ * (gap_adv_disable_set1 @ 0x00024FE8, gap_adv_disable_set2 @ 0x00025010).
+ * Forward-declared here because gap_adv_set_addr_and_restart calls them
+ * before they appear in source order. */
+int gap_adv_disable_set1(void);   /* OEM @ 0x00024FE8 */
+int gap_adv_disable_set2(void);   /* OEM @ 0x00025010 */
 
 /* The advertising configuration struct (RAM 0x20005290). */
 extern uint8_t g_gap_adv_cfg[];
@@ -379,4 +378,59 @@ void gap_adv_set_random_static_addr(void)
     *p |= 0xC0u;                            /* random-static type bits */
 
     gap_adv_set_addr_and_restart((const uint32_t *)addr);
+}
+
+/* Disable legacy advertising set #1.
+ *
+ * If the set has a valid handle (cfg[0] != 0xFF) a single disable command
+ * is pushed via the ICall service message — note that, unlike set #1's
+ * enable/load pushes, the disable descriptor carries no handle operand:
+ * the OEM issues log_emit_v(0x10, GAP_ADV_CMD_DISABLE) with exactly two
+ * arguments and the command reads the active handle from the GAP layer
+ * itself. The "ready" flag at +2 is cleared unconditionally afterwards
+ * (on both the disabled and the not-created paths).
+ *
+ * Returns 0 when a disable was issued, -1 when the set had no handle.
+ *
+ * OEM @ 0x00024FE8. */
+int gap_adv_disable_set1(void)
+{
+    uint8_t *cfg = g_gap_adv_cfg;
+    int rc;
+
+    if (cfg[ADV_OFF_HANDLE1] == ADV_HANDLE_NONE) {
+        rc = -1;
+    } else {
+        log_emit_v(0x10, GAP_ADV_CMD_DISABLE);
+        rc = 0;
+    }
+
+    /* OEM clears READY1 on both paths (the store sits after the branch
+     * join, not inside the else). */
+    cfg[ADV_OFF_READY1] = 0;
+    return rc;
+}
+
+/* Disable secondary / extended advertising set #2.
+ *
+ * Mirror of gap_adv_disable_set1 keyed on the set #2 handle (cfg+1), with
+ * one deliberate asymmetry preserved from the OEM: the "ready" flag at +3
+ * is cleared ONLY on the success (handle-valid) path — the store lives
+ * inside the else branch, not after the join, so a not-created set #2
+ * leaves READY2 untouched. (Set #1 clears READY1 unconditionally.)
+ *
+ * Returns 0 when a disable was issued, -1 when the set had no handle.
+ *
+ * OEM @ 0x00025010. */
+int gap_adv_disable_set2(void)
+{
+    uint8_t *cfg = g_gap_adv_cfg;
+
+    if (cfg[ADV_OFF_HANDLE2] == ADV_HANDLE_NONE) {
+        return -1;
+    }
+
+    log_emit_v(0x10, GAP_ADV_CMD_DISABLE);
+    cfg[ADV_OFF_READY2] = 0;
+    return 0;
 }

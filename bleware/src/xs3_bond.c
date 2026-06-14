@@ -181,19 +181,18 @@ static const char K_FN_PAIRSTATE[] = "gap_bondmanager_process_pairstate";
  *
  *   1  bond-store update in progress — notify FAIL only when `has_data`.
  *   2  encryption result — when `has_data`, notify FAIL and log the code.
- *   3  bond-save result — `success_code != 0` logs the failure and notifies
+ *   3  bond-save result — `has_data != 0` logs the failure and notifies
  *      FAIL; otherwise notifies OK and logs success.
  *
  * Any other status is ignored. The raw status is always latched into
  * g_bond_last_state first.
  *
  * OEM @ 0x00014E10. Dispatched from the bluetoothtask loop (FUN_000067C8)
- * on user-message type 0x03; that call site supplies only the first three
- * arguments, so `success_code` is meaningful only on the status==3 success
- * path that consumes it — preserved as the OEM 4-argument body.
+ * on user-message type 0x03 with three arguments. The OEM body uses only
+ * `status` (r0) and `has_data` (r2, the byte at message offset 4) for every
+ * decision and every logged value — there is no fourth argument.
  */
-void bond_save_event_cb(int status, unsigned short p2, int has_data,
-                        int success_code)
+void bond_save_event_cb(int status, unsigned short p2, int has_data)
 {
     (void)p2;   /* loaded by the caller, unused by the OEM body */
 
@@ -220,14 +219,14 @@ void bond_save_event_cb(int status, unsigned short p2, int has_data,
         return;
     }
 
-    if (success_code != 0) {
+    if (has_data != 0) {
         monitor_log(K_FILE, 0x9C, K_FN_PAIRSTATE, BOND_LOG_ERR,
-                    "Bond save failed: %d", success_code);
+                    "Bond save failed: %d", has_data);
         bleware_control_event_post(BOND_NOTIFY_FAIL);
         return;
     }
 
     bleware_control_event_post(BOND_NOTIFY_OK);
     monitor_log(K_FILE, 0x98, K_FN_PAIRSTATE, BOND_LOG_OK,
-                "Bond save success", success_code);
+                "Bond save success");
 }

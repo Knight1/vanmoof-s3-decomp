@@ -42,8 +42,8 @@ extern int   task_queue_publish_envelope(uint32_t kind, const void *payload,
                                                               /* FUN_000219A2 */
 
 #define STATE_MACHINE_QUEUE_KIND   0x32u
-#define STATE_MACHINE_LOG_TAG      0xE48F2A39u   /* DAT_00017D0C — opaque */
-#define STATE_MACHINE_LOG_FN       "post_event"  /* DAT_00017D08 → "post_event" */
+/* DAT_00017D08 — the OEM __func__ string for this function. */
+#define STATE_MACHINE_LOG_FN       "sm_dispatch_event_with_context"
 #define STATE_MACHINE_SRC_FILE     "source/xs3_statemachine.c"
 #define STATE_MACHINE_LOG_LINE     0x184         /* line 388 in the OEM source */
 
@@ -54,7 +54,7 @@ void state_machine_post(uint32_t state_id, const void *payload, uint16_t len)
     if (buf == NULL) {
         monitor_log(STATE_MACHINE_SRC_FILE, STATE_MACHINE_LOG_LINE,
                     STATE_MACHINE_LOG_FN, 2,
-                    "Could not allocate memory for X", state_id);
+                    "Could not allocate memory for XS3 event %d", state_id);
         firmware_abort();
     }
 
@@ -64,8 +64,13 @@ void state_machine_post(uint32_t state_id, const void *payload, uint16_t len)
     buf[3] = (uint8_t)(len >> 8);
     memcpy(buf + 4, payload, len);
 
+    /* The 4th argument is the queue-worker callback the bluetoothtask
+     * invokes to consume this message — OEM DAT_00017D0C holds
+     * &sm_dispatch_event_callback with the Thumb bit (0x0002719D), NOT an
+     * opaque tag. task_queue_publish_envelope stores it as the envelope's
+     * first word, which the consumer calls through. */
     task_queue_publish_envelope(STATE_MACHINE_QUEUE_KIND, buf, total,
-                                STATE_MACHINE_LOG_TAG);
+                                (uint32_t)(uintptr_t)&sm_dispatch_event_callback);
     monitor_free(buf);
 }
 
@@ -116,8 +121,9 @@ struct sm_state {
 
 /* Flash-resident state table (DAT_00019CB4 -> 0x0002B228) and the RAM
  * state-machine context block (DAT_00019CB8 -> 0x20005950); the live
- * current-state byte is at context[1]. */
-extern const struct sm_state g_sm_state_table[];   /* 0x0002B228 */
+ * current-state byte is at context[1]. Both are defined at the bottom of
+ * this file; forward-declared here so the dispatcher can reference them. */
+extern const struct sm_state  g_sm_state_table[];   /* 0x0002B228 */
 extern volatile uint8_t       g_sm_context[];       /* 0x20005950, [1] = cur state */
 
 /* Run one event through the current state's transition list.
@@ -165,7 +171,7 @@ void sm_run_dispatcher(uint32_t event_id, const void *payload, uint32_t len)
     uint32_t match_index = 0;
 
     for (;;) {
-        if (entry->handler != NULL && (uint8_t)event_id == entry->event_id) {
+        if (entry->handler != NULL && event_id == entry->event_id) {
             break;
         }
         remaining--;
@@ -227,3 +233,86 @@ void sm_dispatch_event_callback(const void *msg)
 
     sm_run_dispatcher(event_id, m + 4, len);
 }
+
+/* ---------------------------------------------------------------------
+ * Materialized state table (OEM flash data)
+ * ---------------------------------------------------------------------
+ *
+ * Pinned reconstruction of the flat state machine's data, read verbatim
+ * from the OEM image:
+ *
+ *   g_sm_state_table       @ 0x0002B228  (2 records, 16 bytes)
+ *   g_sm_transitions_state0 @ 0x0002BB14 (1 transition)
+ *   g_sm_transitions_state1 @ 0x00029EF8 (25 transitions)
+ *
+ * Reachability: state 0's only transition (event 0) advances to state 1
+ * on both the HANDLED and the default branch; every state-1 transition
+ * carries next_state == SM_STATE_NO_CHANGE (2) in both byte fields, so the
+ * machine settles in state 1 and never leaves. No state byte above 1 is
+ * ever produced, so the table is exactly 2 records — even though the
+ * superseded weak placeholder reserved room for 8 (0x40 bytes).
+ *
+ * Every transition handler is an uncarved Thumb thunk in the OEM image
+ * (no Ghidra symbol, reachable only through these pointers). Each is
+ * referenced below by its raw odd (Thumb) flash address with a cast and a
+ * FUN_xxxx tag. The handlers all return the 32-bit HANDLED sentinel
+ * 0x03000000 on the success path; the dispatcher reads next_state_handled
+ * (+1) for that case and next_state_default (+2) otherwise.
+ *
+ * The handler initializers are integer-to-pointer casts (a GCC-accepted
+ * address-constant extension for static initializers), so the arrays stay
+ * const to mirror the OEM .rodata placement.
+ */
+
+/* Cast a raw OEM Thumb code address to the state-machine handler type.
+ * Bit 0 (the Thumb state bit) is retained exactly as stored in flash. */
+#define SM_HANDLER(addr) \
+    ((uint32_t (*)(uint32_t, const void *, uint32_t))(uintptr_t)(addr))
+
+/* g_sm_transitions_state0 @ OEM flash 0x0002BB14 — single transition.
+ * event 0 -> handler FUN_00025944, advance to state 1 on both branches. */
+const struct sm_transition g_sm_transitions_state0[1] = {
+    { 0x00, 0x01, 0x01, 0x00, SM_HANDLER(0x00025945) },  /* FUN_00025944 */
+};
+
+/* g_sm_transitions_state1 @ OEM flash 0x00029EF8 — 25 transitions, all
+ * with next_state == 2 (SM_STATE_NO_CHANGE) so they never leave state 1. */
+const struct sm_transition g_sm_transitions_state1[25] = {
+    { 0x01, 0x02, 0x02, 0x00, SM_HANDLER(0x00027425) },  /* FUN_00027424 */
+    { 0x02, 0x02, 0x02, 0x00, SM_HANDLER(0x00027165) },  /* FUN_00027164 */
+    { 0x03, 0x02, 0x02, 0x00, SM_HANDLER(0x00027173) },  /* FUN_00027172 */
+    { 0x04, 0x02, 0x02, 0x00, SM_HANDLER(0x00027181) },  /* FUN_00027180 */
+    { 0x05, 0x02, 0x02, 0x00, SM_HANDLER(0x00024b0d) },  /* FUN_00024b0c */
+    { 0x06, 0x02, 0x02, 0x00, SM_HANDLER(0x000261e7) },  /* FUN_000261e6 */
+    { 0x0f, 0x02, 0x02, 0x00, SM_HANDLER(0x00026201) },  /* FUN_00026200 */
+    { 0x10, 0x02, 0x02, 0x00, SM_HANDLER(0x00024ceb) },  /* FUN_00024cea */
+    { 0x12, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c8b) },  /* FUN_00026c8a */
+    { 0x13, 0x02, 0x02, 0x00, SM_HANDLER(0x00027401) },  /* FUN_00027400 */
+    { 0x14, 0x02, 0x02, 0x00, SM_HANDLER(0x00025c77) },  /* FUN_00025c76 */
+    { 0x15, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c9d) },  /* FUN_00026c9c */
+    { 0x16, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c67) },  /* FUN_00026c66 */
+    { 0x17, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c79) },  /* FUN_00026c78 */
+    { 0x18, 0x02, 0x02, 0x00, SM_HANDLER(0x0001d7ad) },  /* FUN_0001d7ac */
+    { 0x19, 0x02, 0x02, 0x00, SM_HANDLER(0x00026089) },  /* FUN_00026088 */
+    { 0x1a, 0x02, 0x02, 0x00, SM_HANDLER(0x00024d3f) },  /* FUN_00024d3e */
+    { 0x1b, 0x02, 0x02, 0x00, SM_HANDLER(0x000273e9) },  /* FUN_000273e8 */
+    { 0x1c, 0x02, 0x02, 0x00, SM_HANDLER(0x000271c7) },  /* FUN_000271c6 */
+    { 0x1d, 0x02, 0x02, 0x00, SM_HANDLER(0x000271b9) },  /* FUN_000271b8 */
+    { 0x1e, 0x02, 0x02, 0x00, SM_HANDLER(0x00026ab9) },  /* FUN_00026ab8 */
+    { 0x1f, 0x02, 0x02, 0x00, SM_HANDLER(0x00027157) },  /* FUN_00027156 */
+    { 0x20, 0x02, 0x02, 0x00, SM_HANDLER(0x000273c5) },  /* FUN_000273c4 */
+    { 0x23, 0x02, 0x02, 0x00, SM_HANDLER(0x000273b9) },  /* FUN_000273b8 */
+    { 0x24, 0x02, 0x02, 0x00, SM_HANDLER(0x00027431) },  /* FUN_00027430 */
+};
+
+/* g_sm_state_table @ OEM flash 0x0002B228 — 2 state records.
+ * Indexed by g_sm_context[1] (the current-state byte). */
+const struct sm_state g_sm_state_table[2] = {
+    { g_sm_transitions_state0,  1 },   /* state 0 */
+    { g_sm_transitions_state1, 25 },   /* state 1 */
+};
+
+/* g_sm_context @ RAM 0x20005950 — the live state-machine context block.
+ * Only context[1] (the current-state byte) is touched by the dispatcher;
+ * the OEM reserves 4 bytes here. */
+volatile uint8_t g_sm_context[4];

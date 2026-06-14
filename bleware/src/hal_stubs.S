@@ -923,17 +923,7 @@ g_oad_header_magic:
 /* xs3_bond.c: all-bytes-equal predicate — OEM FUN_00025BFE (distinct from
  * secrets.c's static byte_range_all_equal @ 0x00026564). */
     WEAK_NOOP(bytes_all_equal)
-
-/* State-machine table (flash @ 0x2B228) + context (RAM @ 0x20005950). The
- * table is real .rodata in the OEM image; weak placeholder until it is
- * materialized as a pinned C table. */
-    .section .rodata.g_sm_state_table, "a", %progbits
-    .weak    g_sm_state_table
-    .type    g_sm_state_table, %object
-    .size    g_sm_state_table, 0x40
-g_sm_state_table:
-    .skip    0x40
-
+    
     .section .bss.g_sm_context, "aw", %nobits
     .weak    g_sm_context
     .type    g_sm_context, %object
@@ -983,13 +973,35 @@ g_bond_last_state:
 g_buttonpress_log_enabled:
     .skip    1
 
-/* util.c: C-runtime ctype table — OEM TI-CGT _ctype @ flash 0x00029B2C
- * (257 bytes: EOF slot + 256 per-char class bytes). Weak placeholder;
- * the real table is .rodata in the OEM image. */
-    .section .rodata.g_ctype_table, "a", %progbits
-    .weak    g_ctype_table
-    .type    g_ctype_table, %object
-    .size    g_ctype_table, 257
-g_ctype_table:
-    .skip    257
+/* util.c: g_ctype_table is now materialized as a real const array in
+ * src/util.c (read verbatim from OEM flash 0x00029B2C). */
+
+/* monitor.c console plumbing — the input parser (monitor_task_iteration
+ * @ 0x13924 / monitor_readline @ 0x9E84) calls these console-driver and
+ * libc helpers; weak fallbacks until that TU is decoded. --gc-sections
+ * drops them in the stub build (monitor_task_iteration has no caller yet).
+ * monitor_console_active's real body (0x27742) returns 1. */
+    WEAK_NOOP(monitor_console_read)      /* OEM 0x000238A8 */
+    WEAK_NOOP(monitor_console_flush)     /* OEM 0x000255D4 */
+    WEAK_NOOP(monitor_event_signal)      /* OEM 0x000232B8 */
+    WEAK_NOOP(monitor_console_active)    /* OEM 0x00027742 */
+    WEAK_NOOP(monitor_tab_complete)      /* OEM 0x0000C948 */
+    WEAK_NOOP(strcpy)                    /* OEM 0x00026AF4 */
+    WEAK_NOOP(strlen)                    /* ROM thunk via 0x00028058 */
+
+/* monitor console tick divisor (*0x0002BB88 == 10) + history word pointer
+ * (RAM 0x2000457C). */
+    .section .bss.g_console_tick_divisor, "aw", %nobits
+    .weak    g_console_tick_divisor
+    .type    g_console_tick_divisor, %object
+    .size    g_console_tick_divisor, 4
+g_console_tick_divisor:
+    .skip    4
+
+    .section .bss.g_monitor_history_word, "aw", %nobits
+    .weak    g_monitor_history_word
+    .type    g_monitor_history_word, %object
+    .size    g_monitor_history_word, 4
+g_monitor_history_word:
+    .skip    4
 

@@ -21,6 +21,8 @@
  *   audio_wav_open            @ 0x0000B164  (334 B; OEM __func__ "f_open")
  *   audio_clip_dump_one       @ 0x0000D5CC  (178 B; OEM __func__ "audio_dump")
  *   audio_get_clip_duration   @ 0x00022FE8  (60 B)
+ *   audiotask_kick            @ 0x000237C8
+ *   audio_player_stop_or_pause@ 0x00027630  (-> body @ 0x00026A68)
  */
 
 #include <stdint.h>
@@ -240,4 +242,115 @@ uint32_t audio_get_clip_duration(uint32_t index)
     uint32_t num_samples = hdr.data_size / block_align;
 
     return (num_samples * 1000u) / hdr.sample_rate;
+}
+
+/* ------------------------------------------------------------------------
+ * Audio-task control: kick the player and stop/pause the running clip.
+ *
+ * The audiotask owns a small RAM state block (0x20005670, the same block
+ * xs3_app.c's play path writes into) and a TI-RTOS Event handle. The two
+ * routines below are the OEM's control surface over that task.
+ * ---------------------------------------------------------------------- */
+
+/* Async command relay to the motor MCU (src/protocols/ssp.c). Both are
+ * also declared in bleware.h / other TUs; re-declared here to keep this
+ * audio TU self-contained, matching the OEM call frames exactly.
+ *   FUN_000244D8: N-byte publish  -> module_publish_command(cmd, buf, len)
+ *   FUN_00024508: 1-byte forward  -> module_forward_async(cmd, byte)        */
+extern int module_publish_command(uint32_t cmd_id, const void *buf,
+                                  uint32_t len);
+extern int module_forward_async(uint32_t cmd_id, uint8_t arg);
+
+/* TI-RTOS Event_post ROM thunk (@ 0x00027C70 -> ROM 0x1002CFB2). Posts
+ * the given flag bits to the task waiting on `event`. Same prototype used
+ * in src/ti_rtos_msgq.c. */
+extern void ti_event_post(void *event, uint32_t flags);
+
+/* Audio-player state block at RAM 0x20005670 (literal-pool entry at flash
+ * 0x000237FC). Mirrors xs3_app.c's AUDIO_PLAYER_STATE_BASE:
+ *   +0x04  uint8_t  clip index currently queued / playing
+ *   +0x14  uint32_t remaining repeat count
+ * The play path (play_sound_repeatedly) writes both fields then calls
+ * audiotask_kick(0). */
+#define AUDIO_PLAYER_STATE_BASE   0x20005670u
+#define AUDIO_PLAYER_OFF_INDEX    0x04u    /* uint8_t  clip index           */
+#define AUDIO_PLAYER_OFF_REPEAT   0x14u    /* uint32_t remaining repeats     */
+
+/* TI-RTOS Event handle for the audio task, held in RAM at 0x2003352C
+ * (literal-pool entry at flash 0x00026A78). Set up when the audio task is
+ * created; NULL before then. */
+#define AUDIO_EVENT_HANDLE_PTR    0x2003352Cu
+
+/* Cmd id published toward the motor MCU when a clip finishes its final
+ * repeat: a 2-byte payload {clip_index, 0}. */
+#define AUDIO_CMD_CLIP_DONE       0x113u
+/* Cmd id forwarded for each (re)trigger of the queued clip. */
+#define AUDIO_CMD_PLAY_CLIP       0x5571u
+
+/* Event-flag bit the stop/pause veneer posts to the audio task. */
+#define AUDIO_EVENT_FLAG_STOP     0x2u
+
+/* Advance the audio-task playback state machine.
+ *
+ * Only `action == 0` does any work; any non-zero action is a no-op early
+ * return (the OEM `cbnz r0` guard). On the active (action == 0) path:
+ *
+ *   - repeat counter (+0x14) still non-zero: decrement it and forward the
+ *     queued clip index to the motor MCU via module_forward_async(0x5571,
+ *     index) — i.e. (re)trigger one playback of the clip;
+ *   - repeat counter reached zero: publish a 2-byte "clip done" report
+ *     {index, 0} to the motor MCU via module_publish_command(0x113, …) and
+ *     clear the queued index byte (+0x04 = 0).
+ *
+ * Note the index byte (+0x04) is loaded up-front (before the repeat-count
+ * branch) and used as the forward argument on the decrement path — the OEM
+ * keeps it in r1 across the call, so module_forward_async receives the
+ * clip index as its byte argument.
+ *
+ * OEM @ 0x000237C8. */
+void audiotask_kick(int action)
+{
+    volatile uint8_t  *state_b = (volatile uint8_t  *)AUDIO_PLAYER_STATE_BASE;
+    volatile uint32_t *state_w = (volatile uint32_t *)AUDIO_PLAYER_STATE_BASE;
+
+    if (action != 0) {
+        return;
+    }
+
+    uint8_t  index  = state_b[AUDIO_PLAYER_OFF_INDEX];
+    uint32_t repeat = state_w[AUDIO_PLAYER_OFF_REPEAT / 4];
+
+    if (repeat == 0) {
+        uint8_t payload[2] = { index, 0 };
+        module_publish_command(AUDIO_CMD_CLIP_DONE, payload, 2);
+        state_b[AUDIO_PLAYER_OFF_INDEX] = 0;
+        return;
+    }
+
+    state_w[AUDIO_PLAYER_OFF_REPEAT / 4] = repeat - 1;
+    module_forward_async(AUDIO_CMD_PLAY_CLIP, index);
+}
+
+/* Stop (or pause) the currently playing audio clip.
+ *
+ * Posts event-flag bit 1 (`flags == 2`) to the audio task's Event handle,
+ * waking it so it can tear down / pause the active clip. If the handle has
+ * not been created yet (NULL) the call is a no-op.
+ *
+ * OEM @ 0x00027630: an entry veneer (`movs r0,#2; b.w 0x00026A68`) that
+ * tail-calls the shared body at 0x00026A68
+ * (`r1 = r0; r0 = *0x2003352C; if (r0) Event_post(r0, r1)`). The body is a
+ * generic "post r0 to the audio Event" helper, but this veneer overwrites
+ * its incoming r0 with the constant 2 *before* the branch — so the
+ * `action` parameter (kept to match bleware.h) is deliberately ignored and
+ * the flag posted is always 2. Quirk preserved: do NOT forward `action`. */
+void audio_player_stop_or_pause(int action)
+{
+    void *handle = *(void *volatile *)AUDIO_EVENT_HANDLE_PTR;
+
+    (void)action;   /* OEM veneer clobbers r0 with #2 before the call */
+
+    if (handle != NULL) {
+        ti_event_post(handle, AUDIO_EVENT_FLAG_STOP);
+    }
 }

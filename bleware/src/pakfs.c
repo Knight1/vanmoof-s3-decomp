@@ -84,8 +84,19 @@ struct pakfs_state {
     uint8_t              initialized;      /* +0x00                      */
     uint8_t              _pad1[3];         /* +0x01                      */
     struct pakfs_handle  slot[2];          /* +0x04, +0x14               */
-    uint8_t              scratch[PAKFS_ENTRY_BYTES]; /* +0x24            */
-    uint32_t             total_base_sum;   /* +0x5C                      */
+    /* The 0x40-byte entry scratch (+0x24..+0x63) and the running base-sum
+     * counter OVERLAP in the OEM singleton: the counter is at +0x5C, i.e.
+     * scratch +0x38, so each entry read overwrites it before
+     * pakfs_read_next_entry adds the handle base into it. Reproduced via a
+     * union so both keep their exact OEM offsets (counter at +0x5C, not the
+     * +0x64 a trailing field would land at). */
+    union {
+        uint8_t scratch[PAKFS_ENTRY_BYTES];  /* +0x24 (0x40 bytes)        */
+        struct {
+            uint8_t  _ovl[0x38];             /* +0x24                     */
+            uint32_t total_base_sum;         /* +0x5C                     */
+        };
+    };
 };
 
 static struct pakfs_state s_pakfs;
