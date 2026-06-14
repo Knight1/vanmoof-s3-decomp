@@ -135,10 +135,29 @@ TEST_KEEP  := -Wl,--undefined=crc32_le -Wl,--undefined=crc16_modbus \
               -Wl,--undefined=lcg_random_u15 -Wl,--undefined=monitor_strlen \
               -Wl,--undefined=svc_5560_char_uuid_to_index \
               -Wl,--undefined=timekeeper_submit_epoch \
-              -Wl,--undefined=timekeeper_read_be
+              -Wl,--undefined=timekeeper_read_be \
+              -Wl,--undefined=indicate_seq_peek \
+              -Wl,--undefined=ble_connection_is_active \
+              -Wl,--undefined=att_mtu_clamp \
+              -Wl,--undefined=ble_conn_state_byte \
+              -Wl,--undefined=ble_connection_get_session_key \
+              -Wl,--undefined=ble_connection_set_session_key \
+              -Wl,--undefined=memcpy -Wl,--undefined=memset \
+              -Wl,--undefined=memcmp -Wl,--undefined=monitor_strtol \
+              -Wl,--undefined=cccd_write_validate
+
+# Retaining the per-connection accessors pulls in their TI-RTOS Semaphore_pend/
+# post calls — weak ASM aliases that tail-branch to ROM thunks (thunk_EXT_FUN_
+# 1002bfb0 / _1002cd20) absent from this leaf image. cccd_write_validate similarly
+# reaches the per-connection record lookup FUN_00025A24 (ROM). The Renode suite
+# hooks all of these to return, so the bodies never execute; define the missing
+# symbols to a dead address purely to satisfy the link. Test scaffolding only.
+TEST_THUNKS := -Wl,--defsym=thunk_EXT_FUN_1002bfb0=0x90 \
+               -Wl,--defsym=thunk_EXT_FUN_1002cd20=0x90 \
+               -Wl,--defsym=FUN_00025A24=0x90
 
 $(TEST_ELF): $(OBJS) $(LD_SCRIPT) Makefile
-	$(LD) $(LDFLAGS) $(TEST_KEEP) $(OBJS) -o $@
+	$(LD) $(LDFLAGS) $(TEST_KEEP) $(TEST_THUNKS) $(OBJS) -o $@
 
 test: $(TEST_ELF)
 	@$(SIZE) $(TEST_ELF)

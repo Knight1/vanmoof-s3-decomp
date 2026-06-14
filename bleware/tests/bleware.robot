@@ -84,16 +84,64 @@ Call Leaf Function
     ${r0}=    Strip String      ${r0}
     [Return]    ${r0}
 
+Write Bytes At
+    [Documentation]    Write a list of byte literals starting at ${base}, one byte per
+    ...                ascending address.
+    [Arguments]    ${base}    @{bytes}
+    ${i}=    Set Variable    ${0}
+    FOR    ${b}    IN    @{bytes}
+        ${addr}=    Evaluate    ${base} + ${i}
+        Execute Command    sysbus WriteByte ${addr} ${b}
+        ${i}=    Evaluate    ${i} + 1
+    END
+
 Load Scratch Bytes
     [Documentation]    Write a list of byte literals into the SRAM scratch buffer
     ...                (${SCRATCH}), one byte per ascending address.
     [Arguments]    @{bytes}
-    ${i}=    Set Variable    ${0}
-    FOR    ${b}    IN    @{bytes}
-        ${addr}=    Evaluate    ${SCRATCH} + ${i}
-        Execute Command    sysbus WriteByte ${addr} ${b}
-        ${i}=    Evaluate    ${i} + 1
-    END
+    Write Bytes At    ${SCRATCH}    @{bytes}
+
+Stub Connection Semaphores
+    [Documentation]    The per-connection accessors guard every access with TI-RTOS
+    ...                Semaphore_pend/post (weak aliases that tail-branch to ROM thunks
+    ...                absent from this leaf image). Hook both to return immediately so the
+    ...                guarded body runs without the kernel.
+    Hook Return    ti_semaphore_pend
+    Hook Return    ti_semaphore_post
+
+Hook Returns Pointer
+    [Documentation]    Hook a function (by symbol) to return a fixed pointer value in R0 —
+    ...                set R0 then cpu.PC = cpu.LR, so a record-lookup helper hands back a
+    ...                caller-supplied scratch buffer instead of touching real state.
+    [Arguments]    ${symbol}    ${value}
+    ${a}=    Resolve Symbol    ${symbol}
+    Execute Command    cpu AddHook ${a} "cpu.SetRegisterUlong(0, ${value}); cpu.PC = cpu.LR"
+
+Read Byte
+    [Documentation]    Read one byte from ${addr}, stripped.
+    [Arguments]    ${addr}
+    ${v}=    Execute Command    sysbus ReadByte ${addr}
+    ${v}=    Strip String       ${v}
+    [Return]    ${v}
+
+Read DoubleWord
+    [Documentation]    Read a 32-bit word from ${addr}, stripped.
+    [Arguments]    ${addr}
+    ${v}=    Execute Command    sysbus ReadDoubleWord ${addr}
+    ${v}=    Strip String       ${v}
+    [Return]    ${v}
+
+Connection Entry Address
+    [Documentation]    Resolve the connection-state table and return the byte address of
+    ...                entry ${idx} (stride 0x7C). g_ble_connection_table is a pointer
+    ...                variable holding the storage base; write it explicitly so the test
+    ...                doesn't depend on .data being loaded, then index into the storage.
+    [Arguments]    ${idx}
+    ${ptr}=     Resolve Symbol    g_ble_connection_table
+    ${stor}=    Resolve Symbol    g_ble_connection_table_storage
+    Execute Command    sysbus WriteDoubleWord ${ptr} ${stor}
+    ${e}=    Evaluate    ${stor} + ${idx} * 0x7C
+    [Return]    ${e}
 
 *** Test Cases ***
 Vector Table Is Well Formed
@@ -347,3 +395,316 @@ Timekeeper Read Reconstructs The Stored Epoch
     END
     ${r}=    Call Leaf Function    timekeeper_read_be
     Should Be Equal As Integers    ${r}    0xCAFEF00D
+
+# --- Per-connection state accessors (direct leaf calls) ----------------------
+# The BLE stack keeps a 0x7C-byte record per connection (table g_ble_connection_
+# table, stride 0x7C). The accessors all share one shape: Semaphore_pend, check the
+# caller's conn matches the record's stored conn_handle (+0x48), read/write a field,
+# Semaphore_post. That conn_handle gate is the security-relevant part — a stale or
+# spoofed handle must be rejected. The semaphores are hooked to return (see
+# Stub Connection Semaphores); each test seeds a record then calls one accessor.
+
+Connection Indicate-Seq Peek Returns The Stored Sequence
+    [Documentation]    indicate_seq_peek(conn, *out) copies the record's indicate
+    ...                sequence number (+0x00) to *out and returns 0 when conn matches the
+    ...                stored conn_handle (+0x48). Seed entry 0 with handle 0 / seq 0x1234
+    ...                and confirm the read; then prove a mismatched handle is rejected (-1).
+    # (A) handle matches -> rc 0, sequence copied out
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e}=    Connection Entry Address    0
+    ${ch}=    Evaluate    ${e} + 0x48
+    Execute Command    sysbus WriteWord ${ch} 0
+    Execute Command    sysbus WriteWord ${e} 0x1234
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    ${rc}=    Call Leaf Function    indicate_seq_peek
+    Should Be Equal As Integers    ${rc}    0
+    ${seq}=    Execute Command    sysbus ReadWord ${SCRATCH}
+    ${seq}=    Strip String    ${seq}
+    Should Be Equal As Integers    ${seq}    0x1234
+    # (B) stored handle 7, caller asks for conn 0 -> rejected with -1
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e2}=    Connection Entry Address    0
+    ${ch2}=    Evaluate    ${e2} + 0x48
+    Execute Command    sysbus WriteWord ${ch2} 7
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    ${rc2}=    Call Leaf Function    indicate_seq_peek
+    Should Be Equal As Integers    ${rc2}    0xFFFFFFFF
+
+Connection Is-Active Reflects The Handle Match
+    [Documentation]    ble_connection_is_active(conn) returns 1 when the record's
+    ...                conn_handle equals conn, else 0. Confirm both: a live handle (0) and
+    ...                an unallocated slot (0xFFFF).
+    # live
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e}=    Connection Entry Address    0
+    ${ch}=    Evaluate    ${e} + 0x48
+    Execute Command    sysbus WriteWord ${ch} 0
+    Execute Command    cpu SetRegister 0 0
+    ${a}=    Call Leaf Function    ble_connection_is_active
+    Should Be Equal As Integers    ${a}    1
+    # unallocated (handle 0xFFFF) -> 0
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e2}=    Connection Entry Address    0
+    ${ch2}=    Evaluate    ${e2} + 0x48
+    Execute Command    sysbus WriteWord ${ch2} 0xFFFF
+    Execute Command    cpu SetRegister 0 0
+    ${b}=    Call Leaf Function    ble_connection_is_active
+    Should Be Equal As Integers    ${b}    0
+
+ATT MTU Clamp Reads The Negotiated MTU
+    [Documentation]    att_mtu_clamp(conn, *len) overwrites *len with the record's
+    ...                negotiated ATT MTU (+0x5C) and returns 0 on a handle match. Seed the
+    ...                MTU to 0x00F4 (244), pre-load *len with 0xFFFF, and confirm it is
+    ...                clamped down to the stored MTU.
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e}=    Connection Entry Address    0
+    ${ch}=    Evaluate    ${e} + 0x48
+    Execute Command    sysbus WriteWord ${ch} 0
+    ${mtu}=    Evaluate    ${e} + 0x5C
+    Execute Command    sysbus WriteWord ${mtu} 0x00F4
+    Execute Command    sysbus WriteWord ${SCRATCH} 0xFFFF
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    ${rc}=    Call Leaf Function    att_mtu_clamp
+    Should Be Equal As Integers    ${rc}    0
+    ${len}=    Execute Command    sysbus ReadWord ${SCRATCH}
+    ${len}=    Strip String    ${len}
+    Should Be Equal As Integers    ${len}    0x00F4
+
+Connection State Byte Reads Record Offset 0x65
+    [Documentation]    ble_conn_state_byte(conn, *out) copies the per-connection state
+    ...                byte at record +0x65 to *out, returning 0 on a handle match. Seed it
+    ...                with 0x5A and confirm the read.
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e}=    Connection Entry Address    0
+    ${ch}=    Evaluate    ${e} + 0x48
+    Execute Command    sysbus WriteWord ${ch} 0
+    ${sb}=    Evaluate    ${e} + 0x65
+    Execute Command    sysbus WriteByte ${sb} 0x5A
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    ${rc}=    Call Leaf Function    ble_conn_state_byte
+    Should Be Equal As Integers    ${rc}    0
+    ${v}=    Execute Command    sysbus ReadByte ${SCRATCH}
+    ${v}=    Strip String    ${v}
+    Should Be Equal As Integers    ${v}    0x5A
+
+Session Key Pointer Round-Trips Through The Connection Entry
+    [Documentation]    ble_connection_set_session_key(conn, key) stores the key pointer
+    ...                at record +0x50; ble_connection_get_session_key(conn) returns it. Set
+    ...                a known pointer and confirm the record holds it, then seed a record
+    ...                and confirm get returns the stored pointer — both gated on the handle.
+    # set: writes the pointer into the record
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e}=    Connection Entry Address    0
+    ${ch}=    Evaluate    ${e} + 0x48
+    Execute Command    sysbus WriteWord ${ch} 0
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 0xCAFE1000
+    ${rc}=    Call Leaf Function    ble_connection_set_session_key
+    Should Be Equal As Integers    ${rc}    0
+    ${kp}=    Evaluate    ${e} + 0x50
+    ${stored}=    Execute Command    sysbus ReadDoubleWord ${kp}
+    ${stored}=    Strip String    ${stored}
+    Should Be Equal As Integers    ${stored}    0xCAFE1000
+    # get: returns the stored pointer in R0
+    Create Leaf Machine
+    Stub Connection Semaphores
+    ${e2}=    Connection Entry Address    0
+    ${ch2}=    Evaluate    ${e2} + 0x48
+    Execute Command    sysbus WriteWord ${ch2} 0
+    ${kp2}=    Evaluate    ${e2} + 0x50
+    Execute Command    sysbus WriteDoubleWord ${kp2} 0xBEEF2000
+    Execute Command    cpu SetRegister 0 0
+    ${key}=    Call Leaf Function    ble_connection_get_session_key
+    Should Be Equal As Integers    ${key}    0xBEEF2000
+
+# --- C-runtime primitives (direct leaf calls) --------------------------------
+# memcpy / memset / memcmp / monitor_strtol are the decompiled equivalents of the
+# TI runtime routines bleware links against. They are wholly self-contained
+# (no globals, no kernel) so they make clean, externally-checkable leaf tests.
+
+Memcpy Copies The Buffer Including The Unaligned Tail
+    [Documentation]    memcpy(dst, src, n) word-copies the bulk then bytes the tail and
+    ...                returns dst. Copy a 21-byte ascending pattern (16-byte chunk + word +
+    ...                byte tail) between word-aligned buffers and confirm every byte lands
+    ...                and R0 == dst.
+    Create Leaf Machine
+    # ascending pattern 0x40..0x54 at SCRATCH.
+    ${n}=    Set Variable    ${21}
+    FOR    ${i}    IN RANGE    ${n}
+        ${a}=    Evaluate    ${SCRATCH} + ${i}
+        ${val}=    Evaluate    0x40 + ${i}
+        Execute Command    sysbus WriteByte ${a} ${val}
+    END
+    ${dst}=    Evaluate    ${SCRATCH} + 0x40
+    Execute Command    cpu SetRegister 0 ${dst}
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    Execute Command    cpu SetRegister 2 ${n}
+    ${ret}=    Call Leaf Function    memcpy
+    Should Be Equal As Integers    ${ret}    ${dst}
+    FOR    ${i}    IN RANGE    ${n}
+        ${a}=    Evaluate    ${dst} + ${i}
+        ${got}=    Read Byte    ${a}
+        ${exp}=    Evaluate    0x40 + ${i}
+        Should Be Equal As Integers    ${got}    ${exp}
+    END
+
+Memset Fills Exactly N Bytes And Stops
+    [Documentation]    memset(dst, 0xAB, 10) fills ten bytes and leaves the eleventh
+    ...                untouched — guards the length boundary across the word-fill + tail
+    ...                logic. Pre-mark the sentinel byte 0x55.
+    Create Leaf Machine
+    ${sent}=    Evaluate    ${SCRATCH} + 10
+    Execute Command    sysbus WriteByte ${sent} 0x55
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0xAB
+    Execute Command    cpu SetRegister 2 10
+    ${ret}=    Call Leaf Function    memset
+    Should Be Equal As Integers    ${ret}    ${SCRATCH}
+    FOR    ${i}    IN RANGE    10
+        ${a}=    Evaluate    ${SCRATCH} + ${i}
+        ${got}=    Read Byte    ${a}
+        Should Be Equal As Integers    ${got}    0xAB
+    END
+    ${tail}=    Read Byte    ${sent}
+    Should Be Equal As Integers    ${tail}    0x55
+
+Memcmp Orders By The First Differing Byte
+    [Documentation]    memcmp returns 0 on equal buffers and the signed difference of the
+    ...                first differing byte otherwise. Check equal, greater (+1), and less
+    ...                (-1) against "ABCD".
+    # equal
+    Create Leaf Machine
+    Load Scratch Bytes    0x41  0x42  0x43  0x44              # "ABCD" at SCRATCH
+    ${b}=    Evaluate    ${SCRATCH} + 0x10
+    FOR    ${i}    IN RANGE    4
+        ${sa}=    Evaluate    ${SCRATCH} + ${i}
+        ${da}=    Evaluate    ${b} + ${i}
+        ${v}=    Read Byte    ${sa}
+        Execute Command    sysbus WriteByte ${da} ${v}
+    END
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 ${b}
+    Execute Command    cpu SetRegister 2 4
+    ${eq}=    Call Leaf Function    memcmp
+    Should Be Equal As Integers    ${eq}    0
+    # greater: a="ABCE" vs b="ABCD" -> +1
+    Create Leaf Machine
+    Load Scratch Bytes    0x41  0x42  0x43  0x45
+    ${b2}=    Evaluate    ${SCRATCH} + 0x10
+    Write Bytes At    ${b2}    0x41  0x42  0x43  0x44
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 ${b2}
+    Execute Command    cpu SetRegister 2 4
+    ${gt}=    Call Leaf Function    memcmp
+    Should Be Equal As Integers    ${gt}    1
+    # less: a="ABCC" vs b="ABCD" -> -1
+    Create Leaf Machine
+    Load Scratch Bytes    0x41  0x42  0x43  0x43
+    ${b3}=    Evaluate    ${SCRATCH} + 0x10
+    Write Bytes At    ${b3}    0x41  0x42  0x43  0x44
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 ${b3}
+    Execute Command    cpu SetRegister 2 4
+    ${lt}=    Call Leaf Function    memcmp
+    Should Be Equal As Integers    ${lt}    0xFFFFFFFF
+
+Strtol Parses Decimal Hex Negative And Saturates On Overflow
+    [Documentation]    monitor_strtol mirrors the C strtol: base-10 digits, '0x' auto-hex
+    ...                when base is 0, a leading '-' negates, and a value past 0x7FFFFFFF
+    ...                saturates to LONG_MAX. endptr is passed NULL (R1=0). NOTE: hex inputs
+    ...                containing the letters A-F/a-f are mis-parsed by the reconstruction's
+    ...                s_ctype table (see docs/strtol-hex-letter-bug.md), so the auto-hex case
+    ...                here uses numeric-only "0x10" to exercise base detection on a known-good
+    ...                path.
+    # "12345" base 10 -> 12345
+    Create Leaf Machine
+    Load Scratch Bytes    0x31  0x32  0x33  0x34  0x35  0x00     # "12345"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 10
+    ${d}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${d}    12345
+    # "0x10" base 0 -> 16 (auto-detect hex; numeric digits only — letters are broken,
+    # see docs/strtol-hex-letter-bug.md)
+    Create Leaf Machine
+    Load Scratch Bytes    0x30  0x78  0x31  0x30  0x00           # "0x10"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 0
+    ${h}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${h}    16
+    # "-42" base 10 -> -42 (0xFFFFFFD6)
+    Create Leaf Machine
+    Load Scratch Bytes    0x2D  0x34  0x32  0x00                 # "-42"
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 10
+    ${neg}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${neg}    0xFFFFFFD6
+    # "99999999999" base 10 -> saturates to LONG_MAX 0x7FFFFFFF
+    Create Leaf Machine
+    Load Scratch Bytes    0x39  0x39  0x39  0x39  0x39  0x39  0x39  0x39  0x39  0x39  0x39  0x00
+    Execute Command    cpu SetRegister 0 ${SCRATCH}
+    Execute Command    cpu SetRegister 1 0
+    Execute Command    cpu SetRegister 2 10
+    ${ovf}=    Call Leaf Function    monitor_strtol
+    Should Be Equal As Integers    ${ovf}    0x7FFFFFFF
+
+# --- CCCD write validation (direct leaf call) --------------------------------
+# cccd_write_validate gates a Client Characteristic Config Descriptor write: it
+# rejects a short value or any bit outside {notify(1), indicate(2)} with 0x80, and
+# otherwise stores the new CCCD via the per-connection record (FUN_00025A24 lookup,
+# hooked here to hand back a scratch record).
+
+CCCD Write Validate Gates The Descriptor Value
+    [Documentation]    Confirm all three branches: a <2-byte value -> 0x80, an unsupported
+    ...                bit (0x0004) -> 0x80, and a valid 0x0001 (notify-enable) -> 0 with the
+    ...                new value stored into the (hooked) per-connection record.
+    # (A) valid notify-enable 0x0001 -> rc 0, stored into record
+    Create Leaf Machine
+    ${rec}=    Evaluate    ${SCRATCH} + 0x80
+    Hook Returns Pointer    FUN_00025A24    ${rec}
+    # record's stored CCCD (+2) starts at 0x0000 so the write path triggers.
+    ${recv}=    Evaluate    ${rec} + 2
+    Execute Command    sysbus WriteWord ${recv} 0x0000
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x01         # cccd low byte
+    ${vh}=    Evaluate    ${SCRATCH} + 1
+    Execute Command    sysbus WriteByte ${vh} 0x00              # cccd high byte
+    Execute Command    cpu SetRegister 0 0                      # conn
+    Execute Command    cpu SetRegister 1 ${SCRATCH}             # value
+    Execute Command    cpu SetRegister 2 2                      # len
+    ${ok}=    Call Leaf Function    cccd_write_validate
+    Should Be Equal As Integers    ${ok}    0
+    ${stored}=    Execute Command    sysbus ReadWord ${recv}
+    ${stored}=    Strip String    ${stored}
+    Should Be Equal As Integers    ${stored}    0x0001
+    # (B) unsupported bit 0x0004 -> 0x80 (rejected before any record write)
+    Create Leaf Machine
+    ${rec2}=    Evaluate    ${SCRATCH} + 0x80
+    Hook Returns Pointer    FUN_00025A24    ${rec2}
+    Execute Command    sysbus WriteByte ${SCRATCH} 0x04
+    ${vh2}=    Evaluate    ${SCRATCH} + 1
+    Execute Command    sysbus WriteByte ${vh2} 0x00
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    Execute Command    cpu SetRegister 2 2
+    ${bad}=    Call Leaf Function    cccd_write_validate
+    Should Be Equal As Integers    ${bad}    0x80
+    # (C) short value (len 1) -> 0x80
+    Create Leaf Machine
+    Execute Command    cpu SetRegister 0 0
+    Execute Command    cpu SetRegister 1 ${SCRATCH}
+    Execute Command    cpu SetRegister 2 1
+    ${short}=    Call Leaf Function    cccd_write_validate
+    Should Be Equal As Integers    ${short}    0x80
