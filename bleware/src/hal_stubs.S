@@ -976,18 +976,23 @@ g_buttonpress_log_enabled:
 /* util.c: g_ctype_table is now materialized as a real const array in
  * src/util.c (read verbatim from OEM flash 0x00029B2C). */
 
-/* monitor.c console plumbing — the input parser (monitor_task_iteration
- * @ 0x13924 / monitor_readline @ 0x9E84) calls these console-driver and
- * libc helpers; weak fallbacks until that TU is decoded. --gc-sections
- * drops them in the stub build (monitor_task_iteration has no caller yet).
- * monitor_console_active's real body (0x27742) returns 1. */
-    WEAK_NOOP(monitor_console_read)      /* OEM 0x000238A8 */
-    WEAK_NOOP(monitor_console_flush)     /* OEM 0x000255D4 */
-    WEAK_NOOP(monitor_event_signal)      /* OEM 0x000232B8 */
-    WEAK_NOOP(monitor_console_active)    /* OEM 0x00027742 */
-    WEAK_NOOP(monitor_tab_complete)      /* OEM 0x0000C948 */
-    WEAK_NOOP(strcpy)                    /* OEM 0x00026AF4 */
-    WEAK_NOOP(strlen)                    /* ROM thunk via 0x00028058 */
+/* monitor.c / console driver — the input parser (monitor_task_iteration
+ * @ 0x13924 / monitor_readline @ 0x9E84), its tab-completion helper
+ * (monitor_predict_command @ 0xC948), and the console-device driver
+ * (src/monitor/console.c: monitor_console_read/_flush/_active +
+ * monitor_event_signal) are now decoded; strcpy is strong in
+ * src/runtime.c. The driver's lowest-level UART/RTOS leaves stay
+ * undecoded and gc-section away with the (unrooted) console code, so no
+ * weak fallbacks are needed for them.
+ *
+ * strlen: the application reaches ROM libc strlen (ROM 0x1002FDDA)
+ * through the import veneer at flash 0x00028058 — represent it as a ROM
+ * alias, not a no-op (a no-op returns 0 and would break the line editor's
+ * up-arrow recall and tab completion). NOTE: trng_fill_16 above is also
+ * aliased to thunk_EXT_FUN_1002fdda — a pre-existing mislabel, since
+ * 0x1002FDDA is provably strlen (two call sites); trng_fill_16's true ROM
+ * address still needs re-checking. */
+    ROM_ALIAS0(strlen, thunk_EXT_FUN_1002fdda)
 
 /* monitor console tick divisor (*0x0002BB88 == 10) + history word pointer
  * (RAM 0x2000457C). */

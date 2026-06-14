@@ -252,57 +252,80 @@ void sm_dispatch_event_callback(const void *msg)
  * ever produced, so the table is exactly 2 records — even though the
  * superseded weak placeholder reserved room for 8 (0x40 bytes).
  *
- * Every transition handler is an uncarved Thumb thunk in the OEM image
- * (no Ghidra symbol, reachable only through these pointers). Each is
- * referenced below by its raw odd (Thumb) flash address with a cast and a
- * FUN_xxxx tag. The handlers all return the 32-bit HANDLED sentinel
- * 0x03000000 on the success path; the dispatcher reads next_state_handled
- * (+1) for that case and next_state_default (+2) otherwise.
- *
- * The handler initializers are integer-to-pointer casts (a GCC-accepted
- * address-constant extension for static initializers), so the arrays stay
- * const to mirror the OEM .rodata placement.
+ * Each transition handler is now decoded in src/state_machine_handlers.c
+ * (they were uncarved Thumb thunks in the OEM image, reachable only through
+ * these pointers); the tables reference them by symbol, with the OEM flash
+ * address each was carved from noted in a trailing comment. The handlers
+ * all return the 32-bit HANDLED sentinel 0x03000000 on the success path;
+ * the dispatcher reads next_state_handled (+1) for that case and
+ * next_state_default (+2) otherwise.
  */
 
-/* Cast a raw OEM Thumb code address to the state-machine handler type.
- * Bit 0 (the Thumb state bit) is retained exactly as stored in flash. */
-#define SM_HANDLER(addr) \
-    ((uint32_t (*)(uint32_t, const void *, uint32_t))(uintptr_t)(addr))
+/* The 26 transition handlers, decoded in src/state_machine_handlers.c.
+ * Each has the handler signature (event_id, payload, len) and returns the
+ * HANDLED sentinel; the OEM flash address each was carved from is noted
+ * beside the table entry below. */
+extern uint32_t sm_handler_ev00(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev01(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev02(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev03(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev04(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev05(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev06(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev0f(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev10(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev12(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev13(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev14(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev15(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev16(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev17(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev18(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev19(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1a(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1b(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1c(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1d(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1e(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev1f(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev20(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev23(uint32_t, const void *, uint32_t);
+extern uint32_t sm_handler_ev24(uint32_t, const void *, uint32_t);
 
 /* g_sm_transitions_state0 @ OEM flash 0x0002BB14 — single transition.
- * event 0 -> handler FUN_00025944, advance to state 1 on both branches. */
+ * event 0 -> handler 0x00025944, advance to state 1 on both branches. */
 const struct sm_transition g_sm_transitions_state0[1] = {
-    { 0x00, 0x01, 0x01, 0x00, SM_HANDLER(0x00025945) },  /* FUN_00025944 */
+    { 0x00, 0x01, 0x01, 0x00, sm_handler_ev00 },  /* OEM 0x00025944 */
 };
 
 /* g_sm_transitions_state1 @ OEM flash 0x00029EF8 — 25 transitions, all
  * with next_state == 2 (SM_STATE_NO_CHANGE) so they never leave state 1. */
 const struct sm_transition g_sm_transitions_state1[25] = {
-    { 0x01, 0x02, 0x02, 0x00, SM_HANDLER(0x00027425) },  /* FUN_00027424 */
-    { 0x02, 0x02, 0x02, 0x00, SM_HANDLER(0x00027165) },  /* FUN_00027164 */
-    { 0x03, 0x02, 0x02, 0x00, SM_HANDLER(0x00027173) },  /* FUN_00027172 */
-    { 0x04, 0x02, 0x02, 0x00, SM_HANDLER(0x00027181) },  /* FUN_00027180 */
-    { 0x05, 0x02, 0x02, 0x00, SM_HANDLER(0x00024b0d) },  /* FUN_00024b0c */
-    { 0x06, 0x02, 0x02, 0x00, SM_HANDLER(0x000261e7) },  /* FUN_000261e6 */
-    { 0x0f, 0x02, 0x02, 0x00, SM_HANDLER(0x00026201) },  /* FUN_00026200 */
-    { 0x10, 0x02, 0x02, 0x00, SM_HANDLER(0x00024ceb) },  /* FUN_00024cea */
-    { 0x12, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c8b) },  /* FUN_00026c8a */
-    { 0x13, 0x02, 0x02, 0x00, SM_HANDLER(0x00027401) },  /* FUN_00027400 */
-    { 0x14, 0x02, 0x02, 0x00, SM_HANDLER(0x00025c77) },  /* FUN_00025c76 */
-    { 0x15, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c9d) },  /* FUN_00026c9c */
-    { 0x16, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c67) },  /* FUN_00026c66 */
-    { 0x17, 0x02, 0x02, 0x00, SM_HANDLER(0x00026c79) },  /* FUN_00026c78 */
-    { 0x18, 0x02, 0x02, 0x00, SM_HANDLER(0x0001d7ad) },  /* FUN_0001d7ac */
-    { 0x19, 0x02, 0x02, 0x00, SM_HANDLER(0x00026089) },  /* FUN_00026088 */
-    { 0x1a, 0x02, 0x02, 0x00, SM_HANDLER(0x00024d3f) },  /* FUN_00024d3e */
-    { 0x1b, 0x02, 0x02, 0x00, SM_HANDLER(0x000273e9) },  /* FUN_000273e8 */
-    { 0x1c, 0x02, 0x02, 0x00, SM_HANDLER(0x000271c7) },  /* FUN_000271c6 */
-    { 0x1d, 0x02, 0x02, 0x00, SM_HANDLER(0x000271b9) },  /* FUN_000271b8 */
-    { 0x1e, 0x02, 0x02, 0x00, SM_HANDLER(0x00026ab9) },  /* FUN_00026ab8 */
-    { 0x1f, 0x02, 0x02, 0x00, SM_HANDLER(0x00027157) },  /* FUN_00027156 */
-    { 0x20, 0x02, 0x02, 0x00, SM_HANDLER(0x000273c5) },  /* FUN_000273c4 */
-    { 0x23, 0x02, 0x02, 0x00, SM_HANDLER(0x000273b9) },  /* FUN_000273b8 */
-    { 0x24, 0x02, 0x02, 0x00, SM_HANDLER(0x00027431) },  /* FUN_00027430 */
+    { 0x01, 0x02, 0x02, 0x00, sm_handler_ev01 },  /* OEM 0x00027424 */
+    { 0x02, 0x02, 0x02, 0x00, sm_handler_ev02 },  /* OEM 0x00027164 */
+    { 0x03, 0x02, 0x02, 0x00, sm_handler_ev03 },  /* OEM 0x00027172 */
+    { 0x04, 0x02, 0x02, 0x00, sm_handler_ev04 },  /* OEM 0x00027180 */
+    { 0x05, 0x02, 0x02, 0x00, sm_handler_ev05 },  /* OEM 0x00024b0c */
+    { 0x06, 0x02, 0x02, 0x00, sm_handler_ev06 },  /* OEM 0x000261e6 */
+    { 0x0f, 0x02, 0x02, 0x00, sm_handler_ev0f },  /* OEM 0x00026200 */
+    { 0x10, 0x02, 0x02, 0x00, sm_handler_ev10 },  /* OEM 0x00024cea */
+    { 0x12, 0x02, 0x02, 0x00, sm_handler_ev12 },  /* OEM 0x00026c8a */
+    { 0x13, 0x02, 0x02, 0x00, sm_handler_ev13 },  /* OEM 0x00027400 */
+    { 0x14, 0x02, 0x02, 0x00, sm_handler_ev14 },  /* OEM 0x00025c76 */
+    { 0x15, 0x02, 0x02, 0x00, sm_handler_ev15 },  /* OEM 0x00026c9c */
+    { 0x16, 0x02, 0x02, 0x00, sm_handler_ev16 },  /* OEM 0x00026c66 */
+    { 0x17, 0x02, 0x02, 0x00, sm_handler_ev17 },  /* OEM 0x00026c78 */
+    { 0x18, 0x02, 0x02, 0x00, sm_handler_ev18 },  /* OEM 0x0001d7ac */
+    { 0x19, 0x02, 0x02, 0x00, sm_handler_ev19 },  /* OEM 0x00026088 */
+    { 0x1a, 0x02, 0x02, 0x00, sm_handler_ev1a },  /* OEM 0x00024d3e */
+    { 0x1b, 0x02, 0x02, 0x00, sm_handler_ev1b },  /* OEM 0x000273e8 */
+    { 0x1c, 0x02, 0x02, 0x00, sm_handler_ev1c },  /* OEM 0x000271c6 */
+    { 0x1d, 0x02, 0x02, 0x00, sm_handler_ev1d },  /* OEM 0x000271b8 */
+    { 0x1e, 0x02, 0x02, 0x00, sm_handler_ev1e },  /* OEM 0x00026ab8 */
+    { 0x1f, 0x02, 0x02, 0x00, sm_handler_ev1f },  /* OEM 0x00027156 */
+    { 0x20, 0x02, 0x02, 0x00, sm_handler_ev20 },  /* OEM 0x000273c4 */
+    { 0x23, 0x02, 0x02, 0x00, sm_handler_ev23 },  /* OEM 0x000273b8 */
+    { 0x24, 0x02, 0x02, 0x00, sm_handler_ev24 },  /* OEM 0x00027430 */
 };
 
 /* g_sm_state_table @ OEM flash 0x0002B228 — 2 state records.
@@ -313,6 +336,12 @@ const struct sm_state g_sm_state_table[2] = {
 };
 
 /* g_sm_context @ RAM 0x20005950 — the live state-machine context block.
- * Only context[1] (the current-state byte) is touched by the dispatcher;
- * the OEM reserves 4 bytes here. */
-volatile uint8_t g_sm_context[4];
+ * The dispatcher only touches context[1] (current-state byte), but the
+ * decoded handlers reach further into the same block: byte +2 is a
+ * "suppress re-advertise" flag (event 0x05) and words +4 / +8 / +0xc hold
+ * three TI-RTOS clock handles the handlers (re)arm. 0x10 bytes total.
+ *
+ * Defined weak so the OEM-address pin in linker_cc2642r1.ld
+ * (g_sm_context = 0x20005950) overrides it cleanly — the assignment is
+ * authoritative whether or not this section survives --gc-sections. */
+volatile uint8_t g_sm_context[0x10] __attribute__((weak));

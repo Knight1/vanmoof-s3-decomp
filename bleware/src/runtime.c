@@ -8,7 +8,12 @@
  *   memcpy          @ 0x00018654  (~180 B)
  *   memset          @ 0x0001B6B2  (~110 B)
  *   memcmp          @ 0x00025490  (~40 B)
+ *   strcpy          @ 0x00026AF4  (~16 B)
  *   monitor_strtol  @ 0x000107BC  (~180 B)
+ *
+ * (strlen is not here: the application reaches the ROM libc strlen at
+ * ROM 0x1002FDDA through the import veneer at flash 0x00028058 — see the
+ * strlen ROM alias in src/hal_stubs.S.)
  */
 
 #include <stdint.h>
@@ -170,6 +175,25 @@ int memcmp(const void *a, const void *b, unsigned int n)
         }
     }
     return 0;
+}
+
+/* ---- strcpy ----------------------------------------------------------
+ * OEM @ 0x00026AF4. Plain byte copy through and including the terminating
+ * NUL; returns the destination. Used by the monitor line editor and the
+ * tab-completion helper.
+ */
+
+char *strcpy(char *dst, const char *src)
+{
+    char *d = dst;
+    char  c;
+
+    do {
+        c = *src++;
+        *d++ = c;
+    } while (c != '\0');
+
+    return dst;
 }
 
 /* ---- strtol (monitor_strtol) ----------------------------------------

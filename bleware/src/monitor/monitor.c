@@ -19,6 +19,8 @@
  * Functions decoded:
  *   monitor_readline        @ 0x00009E84  (~456 B body)
  *   monitor_task_iteration  @ 0x00013924  (164 B body)
+ *   monitor_predict_command @ 0x0000C948  (tab-completion; ~344 B body)
+ *   monitor_match_len       @ 0x0002621A  (common-prefix helper)
  *
  * Note on discovery: `monitor_task_iteration` has NO static cross-
  * reference and is not reached by any BL or literal-pool address in the
@@ -69,19 +71,19 @@ extern uint32_t g_console_tick_divisor;     /* *0x0002BB88, == 10 */
 static const char MON_FN_TASK[]     = "monitor";
 static const char MON_FN_READLINE[] = "monitor_readline";
 
-/* ---- Cross-TU console plumbing (declared, defined elsewhere) ----------
+/* ---- Cross-TU console plumbing (the console-device driver layer) ------
  *
- * These live in the console/UART driver TU, not in monitor.c. Each is
- * tagged with its OEM address for the eventual real implementation; the
- * current build resolves them via the weak no-op stubs in hal_stubs.S. */
+ * The first four live in src/monitor/console.c (the UART/console driver
+ * glue); tagged with their OEM addresses. */
 
 /* Read up to `count` bytes into `dst`, polling the console device with a
  * per-byte `timeout_us`. Returns the number of bytes read (-1 if the
  * console is disabled). OEM @ 0x000238A8. */
 extern int  monitor_console_read(void *dst, int count, uint32_t timeout_us);
 
-/* Drain the console TX FIFO. OEM @ 0x000255D4. */
-extern void monitor_console_flush(void);
+/* Drain the console TX FIFO (returns 0, or -1 if disabled).
+ * OEM @ 0x000255D4. */
+extern int  monitor_console_flush(void);
 
 /* Post `flag_bits` to the bluetoothtask event-flag set and, when the
  * required mask is satisfied, signal the scheduler. The reader pulses it
@@ -93,10 +95,20 @@ extern void monitor_event_signal(uint32_t flag_bits);
  * down. In this image it is a constant 1. OEM @ 0x00027742. */
 extern int  monitor_console_active(void);
 
-/* Tab-completion: expand the partial command in `line` (already `len`
- * chars long) in place, returning the number of characters appended.
- * Large helper kept in its own TU. OEM @ 0x0000C948. */
-extern int  monitor_tab_complete(char *line, int len);
+/* Command-prediction / tab-completion: expand the partial command in
+ * `line` (already `typed_len` chars long) in place, listing candidates
+ * when the match is ambiguous, and return the number of characters
+ * appended. Defined at the bottom of this file (OEM @ 0x0000C948, OEM
+ * __func__ "monitor_predict_command"). `monitor_match_len` is its
+ * common-prefix helper (OEM @ 0x0002621A). */
+static int monitor_predict_command(char *line, int typed_len);
+static int monitor_match_len(const char *a, const char *b);
+
+/* The registered command table (src/monitor/dispatcher.c + table.c). */
+extern const monitor_cmd_handler_t g_monitor_commands[];
+
+/* memcmp — TI CGT runtime clone (src/runtime.c, FUN_00025490). */
+extern int memcmp(const void *a, const void *b, unsigned int n);
 
 /* Up-arrow recall buffer length / cursor (RAM 0x2000457C alias used by
  * the editor's history walk — same record as s_console, read as a raw
@@ -133,7 +145,7 @@ static const char FMT_CHAR[] = "%c";
  *   ESC '[' 'A'  up-arrow: recall the previous command from the history
  *                slot, re-echoing it character by character
  *   ESC ESC...   five bare ESCs in a row -> cmd_reset(2, "reset")
- *   '\t'         tab completion (monitor_tab_complete)
+ *   '\t'         tab completion (monitor_predict_command)
  *   '\b'         backspace: erase one char, emit "\b \b" when echoing
  *   '\r' / '\n'  line terminator: NUL-terminate and return
  *   other        append to buffer, echo via "%c"
@@ -216,7 +228,7 @@ unsigned int monitor_readline(char *buf, int max_len, int echo,
             break;
         } else if (ch == '\t') {
             esc_run = 0;   /* OEM reloads the bare-ESC counter on any non-ESC char */
-            int added = monitor_tab_complete(buf, (int)count);
+            int added = monitor_predict_command(buf, (int)count);
             out   += added;
             count += (uint32_t)added;
         } else if (ch == '\b') {
@@ -306,4 +318,107 @@ void monitor_task_iteration(void)
     }
 
     monitor_log(MON_FILE, 0x1B8, MON_FN_TASK, 8, "\r\n> ");
+}
+
+/* ----------------------------------------------------------------------
+ * monitor_match_len — length of the leading run where `a` (a NUL-
+ * terminated string) matches `b` byte-for-byte. Used to fold candidate
+ * command names down to their longest common prefix.
+ *
+ * OEM @ 0x0002621A.
+ * -------------------------------------------------------------------- */
+static int monitor_match_len(const char *a, const char *b)
+{
+    int i = 0;
+    while (a[i] != '\0' && b[i] == a[i]) {
+        i++;
+    }
+    return i;
+}
+
+/* ----------------------------------------------------------------------
+ * monitor_predict_command — tab-completion over the command table.
+ *
+ * Walks all 25 registered commands (g_monitor_commands), asking each for
+ * its name (verb MON_CMD_FILL_NAME) and keeping those whose name starts
+ * with the `typed_len` bytes already in `line`:
+ *
+ *   0 matches  -> return 0, `line` untouched.
+ *   1 match    -> append the rest of that command's name, echo it ("%s"),
+ *                 return the number of characters appended.
+ *   >1 matches -> list the candidates in columns (one "%-20s " each, with
+ *                 a newline every fourth), append the longest common
+ *                 prefix they share, re-emit the "\r\n> %s" prompt, and
+ *                 return the characters appended.
+ *
+ * The first match is not printed when found; it is emitted retroactively
+ * (alongside the second) once a second match appears — hence the listing
+ * branches keyed on the running match count.
+ *
+ * OEM @ 0x0000C948 (OEM __func__ "monitor_predict_command"). The console
+ * name buffers are 64 bytes each, matching the OEM stack frame.
+ * -------------------------------------------------------------------- */
+static const char MON_FN_PREDICT[] = "monitor_predict_command";
+
+static int monitor_predict_command(char *line, int typed_len)
+{
+    if (typed_len == 0) {
+        return 0;
+    }
+
+    char name[64];        /* candidate command name (verb FILL_NAME)      */
+    char best[64];        /* last accepted name / longest common prefix   */
+    int  matches = 0;     /* number of names matching the typed prefix     */
+    int  common  = 0;     /* common-prefix length across all matches       */
+
+    for (int i = 0; i < 25; i++) {
+        if (g_monitor_commands[i](MON_CMD_FILL_NAME, name, NULL, 0) != 0) {
+            continue;     /* empty slot */
+        }
+        if (memcmp(name, line, (unsigned int)typed_len) != 0) {
+            continue;     /* name does not start with the typed text */
+        }
+
+        if (matches == 1) {
+            /* second match: newline, then list the first (held in `best`)
+             * and this one, and seed the common prefix from the pair. */
+            monitor_log(MON_FILE, 0xDA, MON_FN_PREDICT, 8, "\r\n");
+            monitor_log(MON_FILE, 0xDB, MON_FN_PREDICT, 8, "%-20s ", best);
+            monitor_log(MON_FILE, 0xDC, MON_FN_PREDICT, 8, "%-20s ", name);
+            common = monitor_match_len(best, name);
+        } else if (matches >= 2) {
+            int n = monitor_match_len(best, name);
+            if (n < common) {
+                common = n;
+            }
+            monitor_log(MON_FILE, 0xE9, MON_FN_PREDICT, 8, "%-20s ", name);
+        }
+
+        if (matches > 0 && (matches & 3) == 0) {
+            monitor_log(MON_FILE, 0xEF, MON_FN_PREDICT, 8, "\r\n");
+        }
+
+        strcpy(best, name);
+        matches++;
+    }
+
+    int appended = 0;
+    if (matches == 1) {
+        /* unique completion: append the remainder of the command name */
+        strcpy(line + typed_len, best + typed_len);
+        appended = strlen(best + typed_len);
+        line[typed_len + appended] = '\0';
+        monitor_log(MON_FILE, 0xFE, MON_FN_PREDICT, 8, "%s", line);
+    } else if (matches >= 2) {
+        /* ambiguous: complete up to the longest common prefix */
+        best[common] = '\0';
+        strcpy(line + typed_len, best + typed_len);
+        appended = common - typed_len;
+        line[typed_len + appended] = '\0';
+        monitor_log(MON_FILE, 0x108, MON_FN_PREDICT, 8, "\r\n> %s", line);
+    } else {
+        return 0;
+    }
+
+    return appended;
 }
