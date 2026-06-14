@@ -133,7 +133,9 @@ LDFLAGS      := $(ARCH_FLAGS) \
 TEST_ELF   := $(BUILD_DIR)/$(PROJECT)_test.elf
 TEST_KEEP  := -Wl,--undefined=crc32_le -Wl,--undefined=crc16_modbus \
               -Wl,--undefined=lcg_random_u15 -Wl,--undefined=monitor_strlen \
-              -Wl,--undefined=svc_5560_char_uuid_to_index
+              -Wl,--undefined=svc_5560_char_uuid_to_index \
+              -Wl,--undefined=timekeeper_submit_epoch \
+              -Wl,--undefined=timekeeper_read_be
 
 $(TEST_ELF): $(OBJS) $(LD_SCRIPT) Makefile
 	$(LD) $(LDFLAGS) $(TEST_KEEP) $(OBJS) -o $@

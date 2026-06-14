@@ -23,9 +23,7 @@ ${SCRATCH}        0x20007000      # leaf-test data buffer, high in the 80 KB SRA
 ${STACKTOP}       0x20014000      # top of SRAM
 # LCG state lives at the very base of SRAM (data/bss): the two lock-callback
 # pointers and the 32-bit state.
-${LCG_LOCK_ENTER}    0x20000000
-${LCG_LOCK_EXIT}     0x20000004
-${LCG_STATE}         0x20000008
+${TK_STATE}          0x20007100      # scratch timekeeper state array (5 u32) for the leaf tests
 
 *** Keywords ***
 Create Boot Machine
@@ -176,16 +174,21 @@ LCG Random Produces The Expected Sequence Value
     ...                lock-enter/exit callback pointers are aimed at a 2-byte `bx lr`
     ...                stub in scratch so the critical-section wrappers just return.
     Create Leaf Machine
+    # Resolve the lock-callback pointers + state by symbol (their SRAM addresses shift
+    # between builds, so never hard-code them).
+    ${enter}=    Resolve Symbol    g_lcg_lock_enter
+    ${exit}=     Resolve Symbol    g_lcg_lock_exit
+    ${state}=    Resolve Symbol    g_lcg_state
     # `bx lr` (Thumb 0x4770) stub for the lock callbacks.
     Execute Command    sysbus WriteWord ${SCRATCH} 0x4770
     ${stub}=    Evaluate    ${SCRATCH} | 1
-    Execute Command    sysbus WriteDoubleWord ${LCG_LOCK_ENTER} ${stub}
-    Execute Command    sysbus WriteDoubleWord ${LCG_LOCK_EXIT} ${stub}
-    Execute Command    sysbus WriteDoubleWord ${LCG_STATE} 0x00000001
+    Execute Command    sysbus WriteDoubleWord ${enter} ${stub}
+    Execute Command    sysbus WriteDoubleWord ${exit} ${stub}
+    Execute Command    sysbus WriteDoubleWord ${state} 0x00000001
     ${r}=    Call Leaf Function    lcg_random_u15
     Should Be Equal As Integers    ${r}    0x41C6
     # The state advanced to the full 32-bit LCG output.
-    ${st}=    Execute Command    sysbus ReadDoubleWord ${LCG_STATE}
+    ${st}=    Execute Command    sysbus ReadDoubleWord ${state}
     ${st}=    Strip String       ${st}
     Should Be Equal As Integers    ${st}    0x41C67EA6
 
@@ -270,3 +273,77 @@ GATT UUID Matcher Unwinds Past A CCCD Descriptor
     Execute Command    cpu SetRegister 0 ${cccd}
     ${r}=    Call Leaf Function    svc_5560_char_uuid_to_index
     Should Be Equal As Integers    ${r}    2
+
+# --- OAD image header (static metadata the BIM validates) ---------------------
+# The application image carries a TI OAD core header at flash 0x00000000 — the
+# metadata bleboot's BIM reads to decide whether to launch it. This is a static
+# check of the documented fields (no execution), the BLE analogue of the vector-
+# table test.
+
+OAD Image Header Is Well Formed
+    [Documentation]    Validate the OAD core header at flash 0x00000000: the "OAD NVM1"
+    ...                marker, image type 0x07 (application), the BIM-version floor 0x03,
+    ...                the post-header program entry offset (0x90, where the vector table
+    ...                sits), the 0x2C core-header length, and the 1.4.01 software version.
+    Create Leaf Machine
+    # imgID[0..7] = "OAD NVM1" (two little-endian words).
+    ${id0}=    Execute Command    sysbus ReadDoubleWord 0x00000000
+    Should Match Regexp    ${id0}    (?i)0x0*2044414F
+    ${id1}=    Execute Command    sysbus ReadDoubleWord 0x00000004
+    Should Match Regexp    ${id1}    (?i)0x0*314D564E
+    # bimVer (+0x0C) = 0x03, imgType (+0x12) = 0x07.
+    ${bim}=    Execute Command    sysbus ReadByte 0x0000000C
+    Should Be Equal As Integers    ${bim}    0x03
+    ${typ}=    Execute Command    sysbus ReadByte 0x00000012
+    Should Be Equal As Integers    ${typ}    0x07
+    # prgEntry (+0x1C) = 0x00000090 — the program image (vector table) start.
+    ${prg}=    Execute Command    sysbus ReadDoubleWord 0x0000001C
+    Should Match Regexp    ${prg}    (?i)0x0*90
+    # hdrLen (+0x28) = 0x002C core-header length.
+    ${hl}=    Execute Command    sysbus ReadWord 0x00000028
+    Should Match Regexp    ${hl}    (?i)0x0*2C
+    # softVer (+0x20) = 00 01 04 01 -> version 1.4.01.
+    ${sv}=    Execute Command    sysbus ReadDoubleWord 0x00000020
+    Should Match Regexp    ${sv}    (?i)0x0*1040100
+
+# --- Timekeeper epoch store/load (direct leaf calls) -------------------------
+# The timekeeper keeps a wall-clock epoch + a sysclock anchor in a small RAM state
+# block (g_timekeeper_state points at it). submit_epoch latches an epoch into the
+# block; read_be reconstructs it. The sysclock anchor is hardware, so sysclock_snapshot
+# is stubbed to return (leaving the snapshot zero), making the store/load deterministic.
+
+Timekeeper Submit Latches The Epoch Into State
+    [Documentation]    timekeeper_submit_epoch(E) builds a request {0, E, 0} and apply
+    ...                writes E to state[0] (epoch) and 0 to state[1]. Point g_timekeeper_state
+    ...                at a scratch block, stub the sysclock snapshot, submit a known epoch,
+    ...                and confirm the block holds it.
+    Create Leaf Machine
+    Hook Return    sysclock_snapshot
+    ${stp}=    Resolve Symbol    g_timekeeper_state
+    Execute Command    sysbus WriteDoubleWord ${stp} ${TK_STATE}
+    Execute Command    cpu SetRegister 0 0xDEADBEEF
+    Call Leaf Function    timekeeper_submit_epoch
+    ${s0}=    Execute Command    sysbus ReadDoubleWord ${TK_STATE}
+    ${s0}=    Strip String    ${s0}
+    Should Be Equal As Integers    ${s0}    0xDEADBEEF
+    ${s1addr}=    Evaluate    ${TK_STATE} + 4
+    ${s1}=    Execute Command    sysbus ReadDoubleWord ${s1addr}
+    ${s1}=    Strip String    ${s1}
+    Should Be Equal As Integers    ${s1}    0
+
+Timekeeper Read Reconstructs The Stored Epoch
+    [Documentation]    timekeeper_read_be rebuilds the epoch from the state block: with a
+    ...                zero sysclock anchor it returns state[0] unchanged. Seed the block with
+    ...                a known epoch (rest zero), stub the snapshot, and confirm read_be
+    ...                returns it (the low word of the big-endian u64, in R0).
+    Create Leaf Machine
+    Hook Return    sysclock_snapshot
+    ${stp}=    Resolve Symbol    g_timekeeper_state
+    Execute Command    sysbus WriteDoubleWord ${stp} ${TK_STATE}
+    Execute Command    sysbus WriteDoubleWord ${TK_STATE} 0xCAFEF00D
+    FOR    ${off}    IN    4    8    12    16
+        ${a}=    Evaluate    ${TK_STATE} + ${off}
+        Execute Command    sysbus WriteDoubleWord ${a} 0
+    END
+    ${r}=    Call Leaf Function    timekeeper_read_be
+    Should Be Equal As Integers    ${r}    0xCAFEF00D
