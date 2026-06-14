@@ -140,8 +140,8 @@ void timekeeper_read_request(uint32_t scratch[3])
 
     scratch[0] = state[1];
 
-    uint32_t delta = (snapshot[2] - state[2]) + state[0];
-    uint32_t subticks = snapshot[1] + state[3];
+    uint32_t delta = (snapshot[1] - state[2]) + state[0];
+    uint32_t subticks = snapshot[2] + state[3];
 
     extern uint32_t g_tk_tick_modulus2;
     if (g_tk_tick_modulus2 - 1u < subticks) {

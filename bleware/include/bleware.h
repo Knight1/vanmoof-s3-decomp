@@ -66,7 +66,7 @@ int      module_forward_sync(uint16_t cmd, const uint8_t *payload,
                              unsigned int len);                  /* FUN_000177E8 */
 int      ble_connection_is_active(uint32_t conn_idx);            /* FUN_00023D30 */
 void     ble_connection_touch(uint32_t conn_idx);                /* FUN_00023608 */
-void     backoffice_on_success_hook(void);                       /* FUN_00022BE8 */
+void     backoffice_on_success_hook(uint32_t key_word);          /* FUN_00022BE8 */
 int      gatt_notify_channel(int channel, const void *buf);      /* FUN_0001B538 */
 uint32_t crc16_modbus(const uint8_t *buf, int len, uint32_t seed); /* FUN_0002651C */
 
@@ -301,9 +301,32 @@ void audio_clip_dump_one(uint32_t index);
 void audio_player_play(uint32_t index);
 void audio_player_stop_or_pause(int action);
 
-/* PACK filesystem stubs (src/packfs_stubs.c). */
-void *packfs_open(void *params);
-int   packfs_next(void *handle, void *entry_out);
-void  packfs_close(void *handle);
+/* PACK ("pakfs") filesystem (src/pakfs.c). Scans a PACK archive at an
+ * ext-flash slot base; entries are 0x40 B {name@0, ..., u32 size@0x3C}. */
+struct pakfs_handle;
+struct pakfs_handle *pakfs_open(uint32_t base);                  /* FUN_00015888 */
+void                *pakfs_read_next_entry(struct pakfs_handle *h); /* FUN_000185B8 */
+int                  pakfs_close(struct pakfs_handle *h);        /* FUN_00026A90 */
+
+/* State machine (src/state_machine.c). */
+void sm_run_dispatcher(uint32_t event_id, const void *payload, uint32_t len); /* FUN_00019C30 */
+void sm_dispatch_event_callback(const void *msg);                /* FUN_0002719C */
+
+/* HCI LE PHY-Update-Complete handler (src/xs3_hci.c). OEM @ 0x0001C684. */
+void hci_handle_phy_update_event(const uint8_t *evt, uint32_t a2,
+                                 uint32_t a3, uint32_t slot);
+
+/* GAP advertising (src/xs3_gap_adv.c). */
+int      gap_adv_apply_set1(void);                               /* FUN_00012EB0 */
+int      gap_adv_apply_set2(void);                               /* FUN_00016B04 */
+void     gap_adv_set_device_name(void);                          /* FUN_00017F90 */
+void     gap_adv_init_apply(void);                               /* FUN_00027024 */
+void     gap_adv_set_addr_and_restart(const uint32_t *addr);     /* FUN_0001CF14 */
+void     gap_adv_set_random_static_addr(void);                   /* FUN_00025A04 */
+uint8_t *bdaddr_get_reversed(uint8_t *out6);                     /* FUN_00024AE0 */
+
+/* Audio task (src/audiotask.c, src/xs3_app.c). */
+uint32_t audio_get_clip_duration(uint32_t index);               /* FUN_00022FE8 */
+void     audio_player_play(uint32_t index);                     /* FUN_000275B8 */
 
 #endif /* BLEWARE_BLEWARE_H */

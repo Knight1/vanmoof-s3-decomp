@@ -28,23 +28,26 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Shared attribute-struct layout (TI BLE stack internal):
- *   +0x00 u8  type  (0x10 = 128-bit UUID, 0x02 = CCCD descriptor)
- *   +0x04 u16 desc_uuid (0x2902 for CCCD)
- *   +0x04 u8  uuid[16] (when type == 0x10)
+/* Shared attribute-struct layout (TI BLE stack gattAttribute_t):
+ *   +0x00 u8  type.len (0x10 = 128-bit UUID, 0x02 = CCCD descriptor)
+ *   +0x04 u8 *type.uuid — POINTER to the UUID bytes, NOT inline data.
+ *           For a CCCD this points at the 16-bit 0x2902 descriptor UUID;
+ *           for a 128-bit characteristic it points at the 16-byte UUID.
  */
 #define ATTR_TYPE_128BIT_UUID  0x10
 #define ATTR_TYPE_CCCD         0x02
 #define CCCD_DESC_UUID         0x2902u
 
-/* Generic UUID matcher — compares the 16-byte UUID at attr+4 against
- * `count` entries in `table` (each entry is 16 bytes at stride 0x10).
- * Returns the index on match, 0xFF if no match. */
+/* Generic UUID matcher — compares the 16-byte UUID referenced by the
+ * pointer at attr+4 against `count` entries in `table` (each entry is
+ * 16 bytes at stride 0x10). Returns the index on match, 0xFF if no match.
+ * OEM @ 0x00012fc8: `ldr r0,[r5,#0x4]` loads the type.uuid POINTER, which
+ * is the memcmp source — the UUID bytes are NOT inline at attr+4. */
 static uint8_t uuid_matcher_generic(const uint8_t *attr,
                                      const uint8_t *table,
                                      uint8_t count)
 {
-    const uint8_t *uuid = attr + 4;
+    const uint8_t *uuid = *(const uint8_t * const *)(attr + 4);
 
     for (uint8_t i = 0; i < count; i++) {
         int match = 1;
@@ -65,9 +68,11 @@ static uint8_t char_uuid_to_index_core(const uint8_t *attr,
                                         const uint8_t *table,
                                         uint8_t count)
 {
-    /* unwind past CCCD descriptors */
+    /* unwind past CCCD descriptors. OEM @ 0x00012fba reads the descriptor
+     * UUID via double indirection: load the type.uuid pointer at attr+4,
+     * then read the 16-bit value it points at — not a u16 inline at attr+4. */
     while (attr[0] == ATTR_TYPE_CCCD &&
-           *(const uint16_t *)(attr + 4) == CCCD_DESC_UUID) {
+           **(const uint16_t * const *)(attr + 4) == CCCD_DESC_UUID) {
         attr -= 0x10;  /* OEM walks backward through the attr list */
     }
 

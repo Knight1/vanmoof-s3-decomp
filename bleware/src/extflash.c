@@ -364,26 +364,30 @@ int extflash_write_enable(void)
     return (rc == 0) ? 0 : -3;
 }
 
-/* Simple backoff — if retry counter is zero, sleep 2 ms and return
- * the counter; otherwise returns -1 (no more retries). OEM @ 0x00025B84. */
-int extflash_retry_backoff(int retry)
+/* Retry/backoff gate. Reads a context block via *DAT_00025BA0: byte +0
+ * is a "give up" flag, word +4 is a clock handle. If the flag is set,
+ * returns -1 (no more retries). Otherwise performs a mode-2 clock op
+ * (via FUN_000274f2(handle, 2, &out)) and returns the value it writes
+ * back. Takes no parameters. OEM @ 0x00025B84. */
+int extflash_retry_backoff(void)
 {
-    extern void FUN_000274f2(int ms);   /* clock/sleep wrapper */
-    if (retry == 0) {
-        FUN_000274f2(2);  /* sleep 2 ms */
-        return retry;
+    extern void     FUN_000274f2(uint32_t handle, int mode, int *out);
+    extern uint8_t *g_extflash_retry_ctx;   /* *DAT_00025BA0 */
+
+    if (g_extflash_retry_ctx[0] != 0) {
+        return -1;
     }
-    return -1;
+    int out;
+    FUN_000274f2(*(uint32_t *)(g_extflash_retry_ctx + 4), 2, &out);
+    return out;
 }
 
-/* Close the external flash driver — releases the SPI bus handle.
- * OEM @ 0x0002758E (6 B, thunk). */
+/* OEM @ 0x0002758E is a bare `bx lr` — an empty (no-op) function with no
+ * body and no call. The earlier "tail-calls ROM SPI_close" note was
+ * wrong (Ghidra disassembles 0x2758E as a single `bx lr`, 2 bytes).
+ * Preserved verbatim as an empty body. */
 void extflash_close(void)
 {
-    /* The OEM body is a single tail-call to a ROM SPI-closing routine.
-     * Stubbed here; the real implementation calls TI-SDK SPI_close. */
-    extern void thunk_EXT_FUN_1002d420(void);
-    thunk_EXT_FUN_1002d420();
 }
 
 /* ---- SPI TX/RX — driver wrapper calls ------------------------------- */
@@ -413,10 +417,13 @@ int extflash_spi_rx(void *buf, uint32_t len)
 {
     extern void *g_extflash_spi_handle;  /* DAT_00024444 - 0xC */
 
-    struct { uint32_t len; void *buf; uint32_t mode; } xfer;
-    xfer.buf  = buf;
-    xfer.len  = len;
-    xfer.mode = 0;
+    /* TI SPI_Transaction layout: count@0, txBuf@+4, rxBuf@+8. A receive
+     * puts the buffer in the rxBuf slot (+8) and leaves txBuf (+4) zero —
+     * the mirror image of extflash_spi_tx. OEM stores len@0, 0@+4, buf@+8. */
+    struct { uint32_t len; uint32_t tx_unused; void *buf; } xfer;
+    xfer.len       = len;
+    xfer.tx_unused = 0;
+    xfer.buf       = buf;
 
     return (FUN_000274e8(g_extflash_spi_handle, &xfer) == 0) ? -1 : 0;
 }
@@ -428,10 +435,9 @@ int extflash_sw_wp_enabled(void)
     if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
         return -1;
     }
-    if (extflash_wait_wip_clear(&status) != 0) {
-        ti_semaphore_post(g_extflash_state.bus_mutex);
-        return -1;
-    }
+    /* OEM ignores the wait_wip return value (the result register is
+     * immediately overwritten) — only the semaphore-pend failure yields -1. */
+    extflash_wait_wip_clear(&status);
     ti_semaphore_post(g_extflash_state.bus_mutex);
     return (status & 0x80u) ? 1 : 0;
 }
@@ -443,10 +449,9 @@ int extflash_block_wp_enabled(void)
     if (ti_semaphore_pend(g_extflash_state.bus_mutex, 0xFFFFFFFFu) == 0) {
         return -1;
     }
-    if (extflash_wait_wip_clear(&status) != 0) {
-        ti_semaphore_post(g_extflash_state.bus_mutex);
-        return -1;
-    }
+    /* OEM ignores the wait_wip return value — only the semaphore-pend
+     * failure yields -1. */
+    extflash_wait_wip_clear(&status);
     ti_semaphore_post(g_extflash_state.bus_mutex);
     return (status & 0x3Cu) ? 1 : 0;
 }
@@ -498,7 +503,7 @@ int extflash_sector_write(uint32_t addr, uint32_t len, const void *src)
         ok = 1;
     }
 
-    ti_semaphore_post(*(uint32_t *)0x20000000);  /* DAT_00019448 semaphore post */
+    ti_semaphore_post(*(uint32_t *)0x20001B30);  /* DAT_00019448 holds 0x20001B30 */
     return ok;
 }
 
@@ -537,6 +542,12 @@ int extflash_open(int unused)
     FUN_0001733C(pin_cfg, (void *)(uintptr_t)0x0002A45C);  /* PIN table */
     FUN_000269B4(spi_params);
 
+    /* Override the copied SPI_Params template for the slow probe open:
+     * +0x14 = 8, +0xC = 0, bitrate (+0x10) = 4 MHz, +0x00 = 0.
+     * OEM @ 0x0001531c..0x00015334. */
+    *(uint32_t *)(spi_params + 0x14) = 8u;
+    spi_params[0x0C] = 0;
+    *(uint32_t *)(spi_params + 0x10) = 0x003D0900u;  /* 4,000,000 — slow probe */
     spi_params[0] = 0;
     /* open SPI at slow bitrate (index 0) */
     spi_handle = FUN_00022630(0, spi_params);
@@ -564,7 +575,7 @@ int extflash_open(int unused)
     if (rc == 1) {
         /* reopen at production bitrate */
         FUN_000274DE(*(void **)(state + 8));
-        *(uint32_t *)(spi_params + 4) = 0x00028000;  /* production bitrate */
+        *(uint32_t *)(spi_params + 0x10) = 0x00B71B00u;  /* 12,000,000 — production bitrate */
         spi_handle = FUN_00022630(0, spi_params);
         state[0] = 1;
         *(void **)(state + 8) = spi_handle;

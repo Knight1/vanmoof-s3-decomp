@@ -64,8 +64,12 @@
 struct oad_state {
     uint16_t conn_handle;        /* +0x00; 0xFFFF == idle */
     uint16_t _pad_02;            /* +0x02 (unused in the decoded code) */
-    uint32_t lock_handle;        /* +0x04; Semaphore_t for the OAD state */
-    uint8_t  _pad_08[0x4C - 0x08]; /* +0x08..+0x4B */
+    uint32_t lock_handle;        /* +0x04; Semaphore_t the OAD-duration lock
+                                  *        (oad_state_lock) holds; HwiP guard. */
+    uint32_t session_handle;     /* +0x08; separate Semaphore_t guarding the
+                                  *        OAD session state (metadata acquire
+                                  *        + oad_session_close pend/post). */
+    uint8_t  _pad_0C[0x4C - 0x0C]; /* +0x0C..+0x4B */
     uint8_t  filetype;           /* +0x4C; 0 = bootloader, 1..0x20 = data */
     uint8_t  _pad_4D[0x50 - 0x4D];
     uint32_t filesize;           /* +0x50; total bytes expected */
@@ -91,8 +95,13 @@ extern int      module_publish_command(uint32_t cmd_id, const void *buf, /* FUN_
 extern void     monitor_log(const char *file, int line, uint32_t logger,
                             int level, const char *fmt, ...);
 
-/* TI-RTOS Semaphore_post; ROM thunk at 0x1002E9E6. */
+/* TI-RTOS Semaphore_post; ROM thunk alias (0x1002CD20). Also used for the
+ * metadata brief-release on the +0x04 handle. */
 extern void     ti_semaphore_post(uint32_t handle);
+/* TI-RTOS Semaphore_pend; ROM thunk alias (0x1002BFB0). Returns 1 on take. */
+extern int      ti_semaphore_pend(uint32_t handle, uint32_t timeout_ticks);
+/* TI-RTOS HwiP_disable; ROM thunk (0x1002E2C4). */
+extern void     thunk_FUN_1002e2c4(uint32_t handle);
 
 /* TI-RTOS tick-period in microseconds; OEM `*PTR_DAT_0000BA50`. */
 extern volatile uint32_t g_ti_tick_period_us;
@@ -120,18 +129,19 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
 
     if (char_idx == 0) {
         /* === Metadata write (0x5511) =================================
-         * Acquire the OAD lock (block up to 10 * tick_period). The
-         * exact `thunk_EXT_FUN_1002bfb0` call wires a Semaphore_pend
-         * with a counted-ticks timeout. */
+         * First acquire the SESSION semaphore (+0x08) with a DIRECT
+         * Semaphore_pend — not via oad_state_lock. The counted-ticks
+         * timeout is uxth(1000/tick_us)*10 (OEM: `lsls #1` + `add lsl #3`
+         * == *2 + *8 == *10). oad_state_lock would re-scale the ms value
+         * by (1000/tick_us) again, so the raw tick count is passed here. */
         const uint32_t tick_us  = g_ti_tick_period_us;
-        const uint32_t tick_ms  = 1000u / tick_us;
-        const uint32_t timeout  = tick_ms * 10u;
+        const uint32_t timeout  = (uint16_t)(1000u / tick_us) * 10u;
 
-        if (oad_state_lock(s->lock_handle, timeout) != 1) {
+        if (ti_semaphore_pend(s->session_handle, timeout) != 1) {
             return -1;
         }
-        oad_state_lock(s->lock_handle, 10000);   /* extend lock for the OAD duration */
-        ti_semaphore_post(s->lock_handle);       /* release the briefly-held pend */
+        oad_state_lock(s->lock_handle, 10000);   /* OAD-duration lock on +0x04 */
+        ti_semaphore_post(s->lock_handle);       /* release the +0x04 pend */
 
         s->conn_handle    = (uint16_t)conn_handle;
         s->bytes_received = 0;
@@ -326,22 +336,23 @@ void bleware_control_event_post(uint32_t status)
     task_queue_publish_envelope(0x32u, &payload, 1, g_ble_control_tag);
 }
 
-/* Tear down the OAD session: probes the semaphore (0 ms timeout),
- * disables Hwi if needed, sets conn_handle to 0xFFFF (idle), and
- * posts the semaphore. OEM @ 0x00025060. */
+/* Tear down the OAD session: probes the SESSION semaphore (+0x08, 0 ms
+ * timeout); if it was free, disables Hwi (via the +0x04 lock handle) and
+ * sets conn_handle to 0xFFFF (idle); then posts the SESSION semaphore.
+ * OEM @ 0x00025060.
+ *
+ * OEM uses TWO distinct handles: pend/post on +0x08 (session_handle),
+ * HwiP_disable on +0x04 (lock_handle). */
 void oad_session_close(void)
 {
-    extern uint16_t *g_oad_conn_handle;     /* DAT_00025084 + 0 → first field = conn_handle */
-    extern int       thunk_FUN_1002bfb0(uint32_t, uint32_t);  /* Semaphore_pend */
-    extern void      thunk_FUN_1002cd20(uint32_t);            /* Semaphore_post */
-    extern void      thunk_FUN_1002e2c4(uint32_t);            /* HwiP_disable */
-    uint16_t        *conn_ptr = g_oad_conn_handle;
-    int              rc;
+    extern struct oad_state *g_oad_conn_handle; /* DAT_00025084 → struct base */
+    struct oad_state *st = g_oad_conn_handle;
+    int               rc;
 
-    rc = thunk_FUN_1002bfb0(*(uint32_t *)(conn_ptr + 2), 0);  /* sem at +4 */
+    rc = ti_semaphore_pend(st->session_handle, 0);   /* pend sem at +0x08 */
     if (rc == 0) {
-        thunk_FUN_1002e2c4(*(uint32_t *)(conn_ptr + 2));
-        *conn_ptr = 0xFFFFu;
+        thunk_FUN_1002e2c4(st->lock_handle);         /* HwiP_disable on +0x04 */
+        st->conn_handle = 0xFFFFu;
     }
-    thunk_FUN_1002cd20(*(uint32_t *)(conn_ptr + 2));
+    ti_semaphore_post(st->session_handle);           /* post sem at +0x08 */
 }

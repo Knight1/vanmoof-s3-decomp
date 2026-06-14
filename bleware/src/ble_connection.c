@@ -13,9 +13,14 @@
  * Observed entry layout (only the fields these accessors touch):
  *
  *   +0x00 u16    indicate_seq        — next expected confirm seq num
+ *   +0x02 u16    conn_latency          — slave latency
+ *   +0x04 u16    conn_interval         — connection interval
+ *   +0x06 u16    conn_timeout          — supervision timeout
  *   +0x24 void  *sem                  — Semaphore handle (pend/post)
  *   +0x48 u16    conn_handle           — set when entry is allocated
  *   +0x50 void  *session_key           — 16-byte AES session key buf
+ *   +0x56 u8[6]  peer_addr             — peer BD address
+ *   +0x74 u32    keepalive_ticks       — last-activity tick stamp
  *
  * Functions decoded:
  *
@@ -125,21 +130,39 @@ int ble_connection_is_active(uint32_t conn)
     return (conn == stored_conn) ? 1 : 0;
 }
 
-/* Touch (keep-alive) a BLE connection entry. No-op; BLE stack
- * manages keepalive internally. OEM @ 0x00023608. */
+/* Touch (keep-alive) a BLE connection entry: stamp the per-connection
+ * last-activity timestamp (+0x74) with the ROM monotonic tick count,
+ * under the entry semaphore. OEM @ 0x00023608.
+ *
+ * The OEM always returns -1 (even on the matching path); the sole
+ * caller discards the result, so this is modelled as void. */
 void ble_connection_touch(uint32_t conn)
 {
-    (void)conn;
+    /* ROM monotonic tick source (flash thunk 0x00027E58 -> ROM
+     * 0x1002DC10); returns the current keep-alive timestamp value. */
+    extern uint32_t rom_clock_get_ticks(void);
+
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *(uint32_t *)((uint8_t *)e + 0x74) = rom_clock_get_ticks();
+    }
+    ti_semaphore_post(e->sem);
 }
 
-/* Backoffice on-success hook — zeroes M-ID record (slot 124) and
- * writes fresh CRC. OEM @ 0x00022BE8. */
-void backoffice_on_success_hook(void)
+/* Backoffice on-success hook — build and persist the M-ID record
+ * (slot 124 / 0x7C). The caller passes the keyed word that lands at
+ * record+0x10; the "M-ID" tag word is placed at record+0x18; the
+ * CRC-32/zlib over the first 28 bytes is stored at record+0x1C.
+ * OEM @ 0x00022BE8. */
+void backoffice_on_success_hook(uint32_t key_word)
 {
     extern uint32_t g_backoffice_success_tag;
     uint8_t buf[32];
 
     memset(buf, 0, 32);
+    memcpy(buf + 0x10, &key_word, 4);
     memcpy(buf + 0x18, &g_backoffice_success_tag, 4);
     uint32_t crc = crc32_le(0xFFFFFFFFu, buf, 28);
     memcpy(buf + 0x1C, &crc, 4);
@@ -233,8 +256,12 @@ int att_mtu_clamp(uint32_t conn, uint16_t *len_inout)
     return -1;
 }
 
-/* Return the count of active BLE connections (conn_handle != 0xFFFF).
- * `unused` parameter matches OEM signature. OEM @ ~0x00025F38. */
+/* Return the count of active BLE connections. OEM @ 0x00026A7C: the
+ * argument is ignored; the real OEM issues a synchronous ICall query
+ * (FUN_0001AC6C(0x10, ...) -> FUN_00025100 / FUN_0001134C with a 1000 ms
+ * timeout) and returns the (uint16) reply. The local 3-slot scan below
+ * is a behavioural approximation only — the faithful RPC body is not yet
+ * reconstructed (depends on the ICall request/reply infrastructure). */
 int ble_connection_count(int unused)
 {
     int count = 0;
@@ -247,37 +274,50 @@ int ble_connection_count(int unused)
     return count;
 }
 
-/* Check if connection slot `index` has a valid conn_handle.
- * OEM @ ~0x00025F1C. */
+/* Check if connection slot `index` has a valid conn_handle. The OEM
+ * ble_info command (FUN_00007A58) tests presence by calling
+ * ble_connection_is_active (FUN_00023D30) directly. */
 int ble_connection_present(int index)
 {
     return ble_connection_is_active((uint32_t)index);
 }
 
-/* Read the 6-byte peer BLE address for connection `index`.
- * Same template: Semaphore_pend, conn check, memcpy addr, Semaphore_post.
- * OEM @ ~0x00025E90. */
+/* Read the 6-byte peer BLE address for connection `index`. The OEM
+ * copies a 4-byte word at entry+0x56 followed by a 2-byte halfword at
+ * entry+0x5A into the caller's buffer (6 bytes total). OEM @ 0x000201E8.
+ *
+ * The OEM returns 0 on a matching conn / -1 otherwise; the sole caller
+ * discards the result, so this is modelled as void. */
 void ble_connection_addr(int index, uint8_t *dst)
 {
     struct ble_connection_state *e = &g_ble_connection_table[index];
     ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
     if (index == e->conn_handle) {
-        memcpy(dst, (uint8_t *)e + 0x4A, 6);
+        memcpy(dst, (uint8_t *)e + 0x56, 6);
     }
     ti_semaphore_post(e->sem);
 }
 
 /* Read connection parameters (interval, latency, timeout) for `index`.
- * OEM @ ~0x00025EE4. */
+ * The OEM reads interval at entry+0x04, latency at entry+0x02 and
+ * timeout at entry+0x06, and skips any output whose pointer is NULL.
+ * OEM @ 0x0001F640. (Returns 0/-1 in the OEM; the sole caller passes
+ * all three out-pointers and discards the result, so modelled void.) */
 void ble_connection_params(int index, uint16_t *interval,
                            uint16_t *latency, uint16_t *timeout)
 {
     struct ble_connection_state *e = &g_ble_connection_table[index];
     ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
     if (index == e->conn_handle) {
-        *interval = *(uint16_t *)((uint8_t *)e + 0x56);
-        *latency  = *(uint16_t *)((uint8_t *)e + 0x58);
-        *timeout  = *(uint16_t *)((uint8_t *)e + 0x5A);
+        if (interval != NULL) {
+            *interval = *(uint16_t *)((uint8_t *)e + 0x04);
+        }
+        if (latency != NULL) {
+            *latency = *(uint16_t *)((uint8_t *)e + 0x02);
+        }
+        if (timeout != NULL) {
+            *timeout = *(uint16_t *)((uint8_t *)e + 0x06);
+        }
     }
     ti_semaphore_post(e->sem);
 }
@@ -296,14 +336,15 @@ int ble_connection_is_rider_app(int index)
     return result;
 }
 
-/* Get the local device BLE address (from FCFG1 or stack).
- * `addr_type` selects public (0) or random (1) address.
- * OEM @ ~0x00025E58. */
+/* Get the local device BLE address. `addr_type` selects public (0) or
+ * random (1) address. The OEM ble_info command (FUN_00007A58) obtains
+ * this by tail-calling the ROM GAP accessor (flash thunk 0x00027FA0 ->
+ * ROM 0x100221C4), which returns a pointer to the 6-byte address. */
 uint8_t *ble_device_address(int addr_type)
 {
-    extern uint8_t g_ble_local_addr[6];  /* RAM buffer, populated at init */
-    extern void   FUN_00025BFE(void);    /* local-addr init helper */
-    (void)addr_type;
-    FUN_00025BFE();
-    return g_ble_local_addr;
+    /* ROM GAP get-device-address (flash thunk 0x00027FA0 -> ROM
+     * 0x100221C4); returns a pointer to the 6-byte BD address. */
+    extern uint8_t *rom_gap_get_dev_address(int type);
+
+    return rom_gap_get_dev_address(addr_type);
 }

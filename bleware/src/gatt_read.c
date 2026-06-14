@@ -193,14 +193,18 @@ int xs3_gatt_process_read_event(uint32_t       module_idx,
     }
 
     if (svc_uuid == 0x5560 && char_idx == 6) {
-        /* Timekeeper / RTC pair → 4 BE bytes from the upper word of an
-         * 8-byte timestamp. */
+        /* Timekeeper / RTC readout → 4 LE bytes from the LOW word of the
+         * 8-byte timestamp. OEM @ 0x000062b6: bl 0x00027448 returns r0 =
+         * the low return register, and FUN_00027448's epilogue loads
+         * r0 = [sp+4] = scratch[1] (the low half of its CONCAT44 value).
+         * The four output bytes are little-endian: out_buf[0]=word&0xFF,
+         * out_buf[1]=word>>8, out_buf[2]=word>>16, out_buf[3]=word>>24. */
         uint64_t ts = timekeeper_read_be();
-        uint32_t hi = (uint32_t)(ts >> 32);
-        out_buf[0] = (uint8_t)(hi >> 24);
-        out_buf[1] = (uint8_t)(hi >> 16);
-        out_buf[2] = (uint8_t)(hi >>  8);
-        out_buf[3] = (uint8_t)hi;
+        uint32_t word = (uint32_t)ts;
+        out_buf[0] = (uint8_t)word;
+        out_buf[1] = (uint8_t)(word >>  8);
+        out_buf[2] = (uint8_t)(word >> 16);
+        out_buf[3] = (uint8_t)(word >> 24);
         goto finalize;
     }
 
@@ -235,6 +239,12 @@ finalize:
         }
     }
 
+    /* OEM @ 0x0000639e checks the empty case FIRST: a zero computed
+     * length returns 1 ("empty") before any range check. Only a
+     * non-zero length is range-checked against [size_min, size_max]. */
+    if (value_len == 0) {
+        return 1;
+    }
     if (value_len < *(const uint16_t *)(entry + 2) ||
         value_len > *(const uint16_t *)(entry + 4)) {
         return 4;

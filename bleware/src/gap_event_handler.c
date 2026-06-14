@@ -26,9 +26,11 @@
 /* External ROM thunks — TI CC2642R1F BLE5-Stack ROM (AGAMA R1),
  * resolved by ldr.w pc, [literal] indirect jumps. */
 
-/* ROM 0x10019188 — GAP_EstablishLink handler */
-void __attribute__((noreturn))
-    rom_gap_establish_link(uint8_t opcode, const void *msg);
+/* ROM 0x10019188 — GAP_EstablishLink handler.
+ * Reached via the ldr.w pc,[lit] tail-jump thunk at 0x00027cb0; the ROM
+ * function returns normally to the caller (lr from the bl), so this is NOT
+ * a noreturn. */
+void rom_gap_establish_link(uint8_t opcode, const void *msg);
 
 /* ROM 0x10021D10 — GAP_UpdateLinkParamReq handler, returns status */
 int  rom_gap_update_link_param(uint16_t conn, uint8_t opcode, const void *msg);
@@ -79,11 +81,15 @@ uint32_t gap_event_91_3e_handler(const void *msg)
     opcode = m[2];
 
     switch (opcode) {
-    /* Opcodes 0x01 and 0x0A — establish a BLE link */
+    /* Opcodes 0x01 and 0x0A — establish a BLE link.
+     * OEM @ 0x00010b7e: bl 0x00027cb0 (GAP_EstablishLink tail-jump) then
+     * b 0x00010c5e (return r4 = 1). The ROM call returns; the handler's
+     * return value stays 1 (set before the switch). No fall-through. */
     case 1:
     case 0x0A:
         rom_gap_establish_link(opcode, msg);
-        /* not reached — the ROM function tail-calls the real handler */
+        result = 1;
+        break;
 
     /* Opcode 0x03 and 0x83 — update link parameters */
     case 3:

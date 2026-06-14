@@ -13,9 +13,9 @@
 
 static const char K_FILE[] = "source/monitor/cmd_packfs.c";
 
-extern void *packfs_open(uint32_t base);
-extern void *packfs_next(void *ctx);
-extern void  packfs_close(void *ctx);
+extern void *pakfs_open(uint32_t base);             /* src/pakfs.c */
+extern void *pakfs_read_next_entry(void *ctx);      /* src/pakfs.c */
+extern int   pakfs_close(void *ctx);                /* src/pakfs.c */
 /* format_size — declared in header */
 extern int   extflash_open(void *handle);
 extern void  extflash_close(void);
@@ -63,13 +63,13 @@ int cmd_pack_list(int verb, void *p2, void *p3, uint32_t p4)
         return 2;
     }
 
-    void *ctx = packfs_open(0x80000);
+    void *ctx = pakfs_open(0x80000);
     if (ctx != 0) {
         char size_buf[256];
         monitor_log(K_FILE, 0x66, "cmd_pack_list", LOG_LEVEL_HELP,
                     "Scanning PACK archive...");
         for (;;) {
-            uint8_t *entry = (uint8_t *)packfs_next(ctx);
+            uint8_t *entry = (uint8_t *)pakfs_read_next_entry(ctx);
             if (entry == 0) {
                 break;
             }
@@ -78,7 +78,7 @@ int cmd_pack_list(int verb, void *p2, void *p3, uint32_t p4)
             monitor_log(K_FILE, 0x68, "cmd_pack_list", LOG_LEVEL_HELP,
                         "%14s bytes %s", size, entry);
         }
-        packfs_close(ctx);
+        pakfs_close(ctx);
     }
 
     return 0;

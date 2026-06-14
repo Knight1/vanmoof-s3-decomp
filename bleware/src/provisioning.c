@@ -124,13 +124,11 @@
  *
  *     working[+0x00..+0x1F]  the live record buffer (mirrors flash slot 126)
  *
- * The OEM struct around it also holds extra bookkeeping fields at
- * working[-0x20..-0x01] (working buffer is at +0x20 from the struct
- * base). We model just the record-buffer part. */
+ * The OEM struct around it lives 0x20 bytes below this buffer; the
+ * fallback path writes the permission/CRC words via the *struct* base
+ * register (str [r5,#0x30/#0x34/#0x3c]) which — because buf == r5 + 0x20
+ * — land back inside this same record buffer at +0x10 / +0x14 / +0x1c. */
 extern uint8_t  *g_mkey_working_buffer;       /* &record[0..31] in RAM */
-extern uint32_t  g_mkey_owning_struct_field30; /* flags */
-extern uint32_t  g_mkey_owning_struct_field34; /* set to 0xFFFFFFFF */
-extern uint32_t  g_mkey_owning_struct_field3C; /* CRC mirror */
 
 /* Backoffice GATT reassembly buffer.  OEM `DAT_000041F8 = 0x2000A248`.
  * Layout:
@@ -173,7 +171,7 @@ extern int      module_forward_sync(uint16_t cmd, const uint8_t *payload, /* FUN
 /* BLE connection bookkeeping. */
 extern int      ble_connection_is_active(uint32_t conn_idx);              /* FUN_00023D30 */
 extern void     ble_connection_touch(uint32_t conn_idx);                  /* FUN_00023608 */
-extern void     backoffice_on_success_hook(void);                         /* FUN_00022BE8 */
+extern void     backoffice_on_success_hook(uint32_t key_word);            /* FUN_00022BE8 */
 
 /* GATT notify dispatch — declared in bleware.h */
 extern void     monitor_log(const char *file, int line, uint32_t logger,
@@ -208,12 +206,13 @@ uint8_t *manufacturing_key_get_or_init_default(void)
     }
 
     /* Slot 126 unreadable — synthesise the per-device fallback key:
-     *   buf[0..11]  = ASCII hex of BLE MAC, byte 5..byte 0 (i.e. the
-     *                 MAC printed in standard big-endian display order)
-     *   buf[12..15] = "MOOF"
-     *   buf[16..23] = (left untouched — assumed zero-initialised)
-     *   buf[24..27] = "MKEY"
-     *   buf[28..31] = CRC-32 over buf[0..27]
+     *   buf[0x00..0x0B] = ASCII hex of BLE MAC, byte 5..byte 0 (i.e. the
+     *                     MAC printed in standard big-endian display order)
+     *   buf[0x0C..0x0F] = "MOOF"
+     *   buf[0x10..0x13] = 0
+     *   buf[0x14..0x17] = 0xFFFFFFFF (permission word)
+     *   buf[0x18..0x1B] = "MKEY"
+     *   buf[0x1C..0x1F] = CRC-32 over buf[0x00..0x1B]
      */
     const volatile uint8_t *mac = (const volatile uint8_t *)FCFG1_MAC_BLE_BASE;
     byte_to_hex_chars(buf + 0x00, mac[5]);
@@ -226,13 +225,19 @@ uint8_t *manufacturing_key_get_or_init_default(void)
     uint32_t tag_moof = MKEY_TAG_MOOF;
     memcpy(buf + 0x0C, &tag_moof, sizeof tag_moof);
 
-    g_mkey_owning_struct_field30 = 0;
-    g_mkey_owning_struct_field34 = 0xFFFFFFFFu;
+    /* OEM stores these via the struct base (str [r5,#0x30/#0x34]); since
+     * buf == r5 + 0x20 they land at buf+0x10 / buf+0x14 inside the record,
+     * and the CRC-32 below therefore covers them. */
+    uint32_t zero = 0;
+    uint32_t perms = 0xFFFFFFFFu;
+    memcpy(buf + 0x10, &zero,  sizeof zero);
+    memcpy(buf + 0x14, &perms, sizeof perms);
 
     uint32_t tag_mkey = MKEY_TAG_MKEY;
     memcpy(buf + 0x18, &tag_mkey, sizeof tag_mkey);
 
-    g_mkey_owning_struct_field3C = crc32_le(0xFFFFFFFFu, buf, 0x1C);
+    uint32_t crc = crc32_le(0xFFFFFFFFu, buf, 0x1C);   /* over buf[0x00..0x1B] */
+    memcpy(buf + 0x1C, &crc, sizeof crc);              /* str [r5,#0x3c] */
     return buf;
 }
 
@@ -332,12 +337,23 @@ int gatt_handle_backoffice_message_data(uint32_t       conn_idx,
     switch (subcmd) {
     case 1: {
         /* Single keyed-record upsert. The record is (16 B payload @
-         * +0x17, key @ +0x27..+0x2A, tag @ +0x2B..+0x2E). The caller
-         * supplies key and tag verbatim. */
+         * +0x17, key @ +0x27..+0x2A, tag @ +0x2B..+0x2E). The OEM
+         * assembles each 4-byte word big-endian and stores it as a LE
+         * uint32, so the persisted key/tag bytes are byte-REVERSED vs
+         * source order (rec[0x10]=reasm[0x2A] ... rec[0x13]=reasm[0x27],
+         * rec[0x14]=reasm[0x2E] ... rec[0x17]=reasm[0x2B]). Preserved
+         * verbatim; note case 3 builds the same BE word but only passes
+         * it as a value, hence no byte-order asymmetry there. */
         uint8_t rec[24];
-        memcpy(rec,        reasm + 0x17, 0x10);
-        memcpy(rec + 0x10, reasm + 0x27, 0x04);   /* key  */
-        memcpy(rec + 0x14, reasm + 0x2B, 0x04);   /* tag  */
+        memcpy(rec, reasm + 0x17, 0x10);
+        rec[0x10] = reasm[0x2A];   /* key, byte-reversed */
+        rec[0x11] = reasm[0x29];
+        rec[0x12] = reasm[0x28];
+        rec[0x13] = reasm[0x27];
+        rec[0x14] = reasm[0x2E];   /* tag, byte-reversed */
+        rec[0x15] = reasm[0x2D];
+        rec[0x16] = reasm[0x2C];
+        rec[0x17] = reasm[0x2B];
         rc = secrets_upsert_keyed_record(rec);
         status = (rc == 0) ? 7 : 0;
         break;
@@ -398,9 +414,21 @@ int gatt_handle_backoffice_message_data(uint32_t       conn_idx,
             unsigned int base_key     = (i * 0x18u + 0x17u) & 0xFFFFu;
             unsigned int base_tag     = (i * 0x18u + 0x1Bu) & 0xFFFFu;
 
-            memcpy(dst,       reasm + 0x10 + base_payload, 0x10);
-            memcpy(dst + 0x10, reasm + 0x10 + base_key,    0x04);
-            memcpy(dst + 0x14, reasm + 0x10 + base_tag,    0x04);
+            const uint8_t *key_src = reasm + 0x10 + base_key;
+            const uint8_t *tag_src = reasm + 0x10 + base_tag;
+
+            memcpy(dst, reasm + 0x10 + base_payload, 0x10);
+            /* OEM assembles each 4-byte word big-endian and stores it LE,
+             * so the persisted key/tag bytes are byte-REVERSED vs source
+             * order (dst[0x10]=key_src[3] ... dst[0x13]=key_src[0]). */
+            dst[0x10] = key_src[3];   /* key, byte-reversed */
+            dst[0x11] = key_src[2];
+            dst[0x12] = key_src[1];
+            dst[0x13] = key_src[0];
+            dst[0x14] = tag_src[3];   /* tag, byte-reversed */
+            dst[0x15] = tag_src[2];
+            dst[0x16] = tag_src[1];
+            dst[0x17] = tag_src[0];
             dst += 0x20;
         }
         rc = secrets_upsert_keyed_batch(scratch, n);
@@ -464,7 +492,7 @@ build_reply: {
     reasm[8] = (uint8_t) status;
 
     if (status == 0) {
-        backoffice_on_success_hook();
+        backoffice_on_success_hook(context_be);
     }
 
     gatt_notify_channel(4, reasm);

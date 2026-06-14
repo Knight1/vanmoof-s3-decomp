@@ -2,8 +2,10 @@
  *
  * bleware uses YModem to receive firmware images, audio clips, and
  * PACK files over the debug UART. The OEM engine at 0x00008E50
- * (~400 B) is a full YModem protocol state machine with CRC-16
- * validation, 1 KB block support, and CAN abort handling.
+ * (~400 B) is a YModem protocol state machine with 1 KB block
+ * support and CAN abort handling. It validates each block ONLY by
+ * the seq/complement byte ((buf[2]^0xFF)==buf[1]); the two trailing
+ * wire bytes (the YModem CRC field) are read but never checked.
  *
  * Called by:
  *   cmd_audio_upload   — receives audio clips to ext-flash
@@ -42,24 +44,6 @@ typedef int  (*ym_read_fn_t)(uint8_t *buf, int count, int timeout_ms);
 typedef void (*ym_putc_fn_t)(uint8_t c);
 typedef int  (*ym_open_cb_t)(int is_data, void *arg);
 
-/* ---- CRC-16/Modbus (same poly as crc16_modbus in crc32.c) ----------- */
-
-static uint16_t ymodem_crc16(const uint8_t *buf, int len)
-{
-    uint16_t crc = 0;
-    while (len--) {
-        crc ^= (uint16_t)*buf++ << 8;
-        for (int i = 0; i < 8; i++) {
-            if (crc & 0x8000u) {
-                crc = (uint16_t)((crc << 1) ^ 0x1021u);
-            } else {
-                crc = (uint16_t)(crc << 1);
-            }
-        }
-    }
-    return crc;
-}
-
 /* ---- Engine --------------------------------------------------------- */
 
 enum {
@@ -77,147 +61,170 @@ int ymodem_engine_receive(ym_read_fn_t  read_fn,
                            uint8_t      *scratch)
 {
     uint8_t *buf;
-    int      blk_seq = 0;
-    int      started = 0;
-    int      retries;
-    int      blk_size;
-    int      header;
+    int      blk_seq = 0;    /* OEM r5  — expected/next sequence number */
+    int      started = 0;    /* OEM sp+0x18 — set once first block dispatched */
+    int      retries = 0;    /* OEM r8  — only counted while started */
+    int      blk_state;      /* OEM *DAT_00009060 — per-block size relay
+                              *  (0 = EOT, 0x80/0x400 = data, -1 = CAN-CAN) */
+    int      blk_size;       /* OEM r6  — current block payload size */
+    uint8_t  hdr;
     int      rd;
     int      rc;
+
+    (void)scratch;
 
     buf = (uint8_t *)monitor_alloc(0x406);
     if (buf == NULL) {
         return YM_NOMEM;
     }
 
+    /* OEM @ 0x00008e78: disable the byte-count accumulator if state[0] != 0. */
+    if (state != NULL && state->dst_offset != 0) {
+        state = NULL;
+    }
+
     putc_fn('C');
 
+    /* OEM is a single dispatch loop (0x00008fa8). It reads one header byte,
+     * classifies it, and — for SOH/STX (and a lone CAN) — reads the block
+     * body and falls into the shared completion handler at 0x00008ec8.
+     * EOT, CAN-CAN, ESC and timeouts are handled inline. There is no
+     * per-block CRC: a block is accepted on the seq/complement byte alone. */
     for (;;) {
-        retries  = 0;
-        blk_size = 0;
-
-        /* wait for a block header (SOH/STX/EOT/CAN/ESC) */
-        for (;;) {
-            rd = read_fn(buf, 1, 1000);
-            if (rd < 1) {
-                /* timeout */
-                if (started && retries > 0 && (retries % 20) == 0) {
-                    putc_fn(NAK);
-                    putc_fn('C');
-                }
-                if (retries >= MAX_RETRIES) {
-                    monitor_free(buf);
-                    return YM_TIMEOUT;
-                }
-                retries++;
-                if (blk_size == 0) {
-                    putc_fn('C');
-                }
-                continue;
+        blk_state = 0;       /* OEM @ 0x00008fb4: *DAT_00009060 = 0 */
+        rd = read_fn(buf, 1, 1000);
+        if (rd > 0) {
+            hdr = buf[0];
+            if (hdr == SOH || hdr == STX) {
+                blk_size = (hdr == SOH) ? (int)BLOCK_SMALL : (int)BLOCK_LARGE;
+                goto read_block;            /* OEM 0x00008fe8 */
             }
-
-            header = buf[0];
-
-            if (header == SOH) {
-                blk_size = BLOCK_SMALL;
-                break;
+            if (hdr == EOT) {
+                goto completion;            /* OEM EOT -> 0x00008ec8 (state 0) */
             }
-            if (header == STX) {
-                blk_size = BLOCK_LARGE;
-                break;
-            }
-            if (header == EOT) {
-                /* sender wants to end — ACK and return */
+            if (hdr == CAN) {
+                /* OEM @ 0x00008e9e: read a second byte. */
                 rd = read_fn(buf, 1, 1000);
-                if (rd == 1 && buf[0] == EOT) {
-                    putc_fn(ACK);
-                    /* second EOT ack */
+                if (rd == 1) {
+                    if (buf[0] != CAN) {
+                        /* lone CAN: treat the byte stream as a 0-size data
+                         * block (OEM sets r6=0, b 0x00008fe8). */
+                        blk_size = 0;
+                        goto read_block;
+                    }
+                    /* CAN-CAN: sentinel = -1, into completion -> return -4. */
+                    blk_state = -1;
+                    goto completion;
                 }
-                putc_fn(ACK);
-                monitor_free(buf);
-                return YM_OK;
+                /* read failed -> timeout/retry path */
+            } else if (hdr == 0x1B) {
+                goto exhausted;             /* OEM ESC -> 0x0000903c */
             }
-            if (header == CAN) {
-                /* sender cancelled — read second CAN if present */
-                rd = read_fn(buf, 1, 1000);
-                if (rd == 1 && buf[0] == CAN) {
-                    /* confirmed cancel */
-                }
-                putc_fn(ACK);
-                monitor_free(buf);
-                return YM_CANCEL;
-            }
-            if (header == 0x1B) {
-                /* ESC — abort */
-                putc_fn(CAN);
-                monitor_free(buf);
-                return YM_CANCEL;
-            }
-            /* unknown byte — ignore */
+            /* fall through: unrecognised byte -> timeout/retry path */
         }
+        goto timeout_retry;             /* OEM 0x0000900e */
 
-        /* read block number, complement, data, CRC */
-        int total = blk_size + 4; /* seq + seq_cmp + data + 2-byte CRC */
-        buf[0] = (uint8_t)header;
-        rd = read_fn(buf + 1, total, 5000);
-
-        if (rd < total || buf[2] != (uint8_t)(buf[1] ^ 0xFFu)) {
-            /* bad block — NAK and retry */
-            putc_fn(NAK);
-            blk_size = -1;
-            continue;
+    read_block:
+        /* OEM @ 0x00008fe8: read seq + seq_cmp + data + 2 trailing (CRC) bytes.
+         * The block is validated ONLY by the seq/complement byte; the two
+         * trailing wire bytes are read but never checked. */
+        buf[0] = hdr;
+        rd = read_fn(buf + 1, blk_size + 4, 5000);
+        if (rd > 0 && buf[2] == (uint8_t)(buf[1] ^ 0xFFu)) {
+            blk_state = blk_size;           /* OEM *DAT_00009060 = r6 */
+            goto completion;
         }
+        /* bad read -> timeout/retry path */
+        goto timeout_retry;
 
-        if (buf[1] == (uint8_t)blk_seq) {
-            /* duplicate of the last block — ACK and skip */
+    completion:
+        /* OEM @ 0x00008ec8 — shared completion handler. */
+        retries = 0;                        /* OEM @ 0x00008ecc: r8 = 0 */
+        if (blk_state == -1) {
+            /* CAN-CAN abort: ACK then return -4 (OEM 0x00008f02). */
             putc_fn(ACK);
-            continue;
+            monitor_free(buf);
+            return YM_NOMEM;
         }
-
-        if (buf[1] != (uint8_t)((blk_seq + 1) & 0xFF)) {
-            /* out-of-sequence block — ACK and ignore */
+        if (blk_state == 0) {
+            /* EOT: single ACK, reset sequence, loop (OEM 0x00008f92). */
             putc_fn(ACK);
+            blk_seq = 0;
             continue;
         }
 
-        /* verify CRC */
-        uint16_t crc_calc = ymodem_crc16(buf + 3, blk_size);
-        uint16_t crc_rcvd = (uint16_t)(buf[3 + blk_size] << 8)
-                          | (uint16_t)(buf[3 + blk_size + 1]);
-        if (crc_calc != crc_rcvd) {
-            putc_fn(NAK);
+        if ((uint8_t)blk_seq != buf[1]) {
+            /* sequence mismatch (OEM 0x00008f76) */
+            if (buf[1] == 0 && (uint8_t)blk_seq == 0) {
+                putc_fn(ACK);               /* restart from block 0 */
+            }
+            if (buf[1] != 0) {
+                putc_fn(ACK);
+            }
             continue;
         }
 
-        /* good block — dispatch */
         if (blk_seq == 0) {
-            /* block 0: filename + size */
+            /* block 0: filename + size (OEM 0x00008ef6) */
             const uint8_t *fn = buf + 3;
             if (fn[0] == 0) {
-                /* empty filename — end of batch */
+                /* empty filename — end of batch (OEM 0x00008efa: ACK, ret 0) */
                 putc_fn(ACK);
                 monitor_free(buf);
                 return YM_OK;
             }
             rc = open_cb(0, (void *)(uintptr_t)fn);
             if (rc != 0) {
-                putc_fn(CAN);
-                monitor_free(buf);
-                return YM_ERROR;
+                goto cancelled;             /* OEM 0x00008f52: ret -2 */
             }
+            putc_fn(ACK);
+            putc_fn('C');                   /* OEM 0x00008f34: next 'C' */
         } else {
-            /* data block */
+            /* data block (OEM 0x00008f3e) */
             rc = open_cb(1, (void *)(uintptr_t)(buf + 3));
             if (rc != 0) {
-                putc_fn(CAN);
-                monitor_free(buf);
-                return YM_ERROR;
+                goto cancelled;
             }
+            /* OEM @ 0x00008f58: when the accumulator is live it advances the
+             * (int*) state cursor by blk_state words (param_3 += *sentinel).
+             * The reconstructed struct signature does not model that cursor;
+             * the live/disabled gate is preserved via the state[0] check above. */
+            putc_fn(ACK);
         }
-
-        putc_fn(ACK);
         blk_seq++;
         started = 1;
+        continue;
+
+    timeout_retry:
+        /* OEM @ 0x0000900e — timeout, bad read, or unrecognised byte. */
+        if (started) {
+            retries++;
+            if ((retries % 20) == 0) {
+                putc_fn(NAK);
+                putc_fn('C');
+            }
+        }
+        if (retries > MAX_RETRIES) {
+            goto exhausted;
+        }
+        if (blk_seq == 0) {
+            putc_fn('C');
+        }
+        continue;
+
+    cancelled:
+        /* open callback rejected the block (OEM 0x00008f40/0x00009040). */
+        putc_fn(CAN);
+        putc_fn(CAN);
+        monitor_free(buf);
+        return YM_CANCEL;
+
+    exhausted:
+        /* retry budget gone or ESC abort: ret -3, two CAN bytes, free. */
+        putc_fn(CAN);
+        putc_fn(CAN);
+        monitor_free(buf);
+        return YM_ERROR;
     }
 }
 

@@ -393,6 +393,16 @@ g_extflash_wren_cmd:
 g_extflash_spi_handle:
     .skip    4
 
+/* Retry/backoff context pointer — OEM `*DAT_00025BA0`, a pointer in RAM
+ * to a {u8 give_up_flag @0, u32 clock_handle @4} block read by
+ * extflash_retry_backoff. */
+    .section .bss.g_extflash_retry_ctx, "aw", %nobits
+    .weak    g_extflash_retry_ctx
+    .type    g_extflash_retry_ctx, %object
+    .size    g_extflash_retry_ctx, 4
+g_extflash_retry_ctx:
+    .skip    4
+
 /* YModem target-offset pointer — OEM `*DAT_0000CC70`, a u32 in RAM
  * that cmd_audio_upload writes into before invoking ymodem_receive. */
     .section .bss.g_ymodem_target_offset, "aw", %nobits
@@ -581,6 +591,27 @@ alias: ; b.w thunk_name ; .size alias, .-alias
 
 /* BLE GAP terminate link (ROM) */
     ROM_ALIAS0(ble_gap_terminate_link, thunk_EXT_FUN_1002df44)
+
+/* Clock_getTicks-style monotonic counter = ROM 0x1002DC10 (used by
+ * ble_connection_touch to stamp a per-connection keep-alive timestamp). */
+    ROM_ALIAS0(rom_clock_get_ticks, thunk_EXT_FUN_1002dc10)
+
+/* GAP_GetDevAddress = ROM 0x100221C4 (used by ble_device_address). */
+    ROM_ALIAS1(rom_gap_get_dev_address, thunk_EXT_FUN_100221c4)
+
+/* Semaphore_construct / _destruct / Params_init = ROM 0x1002DDC0 /
+ * 0x1002E6FC / 0x1002EBE4 (used by module_forward_sync's per-call
+ * local reply semaphore). */
+    ROM_ALIAS2(ti_semaphore_construct,   thunk_EXT_FUN_1002ddc0)
+    ROM_ALIAS0(ti_semaphore_destruct,    thunk_EXT_FUN_1002e6fc)
+    ROM_ALIAS2(ti_semaphore_params_init, thunk_EXT_FUN_1002ebe4)
+
+/* SSP internal flash helpers (this binary, not ROM) used by
+ * module_forward_sync — weak no-ops until decoded:
+ *   ssp_sync_reply_route     OEM 0x00027054 (reply-callback pointer)
+ *   ssp_dequeue_frame_by_seq OEM 0x00021ABA (removes a frame by sequence) */
+    WEAK_NOOP(ssp_sync_reply_route)
+    WEAK_NOOP(ssp_dequeue_frame_by_seq)
 
 /* `ble_connection_set_session_key`, `indicate_seq_peek`,
  * `indicate_seq_advance`, and `ble_connection_get_session_key` are
@@ -867,4 +898,98 @@ s_dest_service_id:
     .size    g_oad_header_magic, 8
 g_oad_header_magic:
     .ascii  "OAD NVM1"
+
+/* ===== Newly-decoded module externs (xs3_app/statemachine/hci/gap_adv/
+ * bond/buttonpress/util/audiotask) =====
+ *
+ * Weak fallbacks for callees and globals these TUs reference that are
+ * not themselves decoded yet. Each is overridden by the real body/SDK
+ * once it lands; in the stub build they are --gc-sections'd away. */
+
+/* xs3_app.c: audiotask trigger — OEM FUN_000237C8. */
+    WEAK_NOOP(audiotask_kick)
+
+/* xs3_hci.c: per-connection PHY accessors (belong with ble_connection.c
+ * once that record API is fully decoded) — OEM 0x22870 / 0x228F0 / 0x22050. */
+    WEAK_NOOP(conn_phy_get_current)
+    WEAK_NOOP(conn_phy_set_requested)
+    WEAK_NOOP(conn_phy_reapply)
+
+/* xs3_gap_adv.c helpers — OEM FUN_00022A30 / 0x00024FE8 / 0x00025010. */
+    WEAK_NOOP(bleware_snprintf)
+    WEAK_NOOP(gap_adv_disable_set1)
+    WEAK_NOOP(gap_adv_disable_set2)
+
+/* xs3_bond.c: all-bytes-equal predicate — OEM FUN_00025BFE (distinct from
+ * secrets.c's static byte_range_all_equal @ 0x00026564). */
+    WEAK_NOOP(bytes_all_equal)
+
+/* State-machine table (flash @ 0x2B228) + context (RAM @ 0x20005950). The
+ * table is real .rodata in the OEM image; weak placeholder until it is
+ * materialized as a pinned C table. */
+    .section .rodata.g_sm_state_table, "a", %progbits
+    .weak    g_sm_state_table
+    .type    g_sm_state_table, %object
+    .size    g_sm_state_table, 0x40
+g_sm_state_table:
+    .skip    0x40
+
+    .section .bss.g_sm_context, "aw", %nobits
+    .weak    g_sm_context
+    .type    g_sm_context, %object
+    .size    g_sm_context, 4
+g_sm_context:
+    .skip    4
+
+/* xs3_gap_adv.c globals: adv-config struct (RAM 0x20005290) + random-
+ * address command buffer (RAM 0x20005AF8). */
+    .section .bss.g_gap_adv_cfg, "aw", %nobits
+    .weak    g_gap_adv_cfg
+    .type    g_gap_adv_cfg, %object
+    .size    g_gap_adv_cfg, 0x60
+g_gap_adv_cfg:
+    .skip    0x60
+
+    .section .bss.g_gap_adv_rand_addr, "aw", %nobits
+    .weak    g_gap_adv_rand_addr
+    .type    g_gap_adv_rand_addr, %object
+    .size    g_gap_adv_rand_addr, 6
+g_gap_adv_rand_addr:
+    .skip    6
+
+/* xs3_bond.c globals: address-mode label table (RAM 0x200058E0, 4 ptrs)
+ * + last-bond-state latch (RAM 0x200058DC, 1 byte). */
+    .section .bss.g_bond_addr_mode_strings, "aw", %nobits
+    .weak    g_bond_addr_mode_strings
+    .type    g_bond_addr_mode_strings, %object
+    .size    g_bond_addr_mode_strings, 16
+g_bond_addr_mode_strings:
+    .skip    16
+
+    .section .bss.g_bond_last_state, "aw", %nobits
+    .weak    g_bond_last_state
+    .type    g_bond_last_state, %object
+    .size    g_bond_last_state, 1
+g_bond_last_state:
+    .skip    1
+
+/* xs3_buttonpress.c: log-enable gate byte (RAM 0x20005670 — shares the
+ * app-state block xs3_app.c addresses by literal; byte 0 here, audio
+ * fields at +4/+0x14 there). */
+    .section .bss.g_buttonpress_log_enabled, "aw", %nobits
+    .weak    g_buttonpress_log_enabled
+    .type    g_buttonpress_log_enabled, %object
+    .size    g_buttonpress_log_enabled, 1
+g_buttonpress_log_enabled:
+    .skip    1
+
+/* util.c: C-runtime ctype table — OEM TI-CGT _ctype @ flash 0x00029B2C
+ * (257 bytes: EOF slot + 256 per-char class bytes). Weak placeholder;
+ * the real table is .rodata in the OEM image. */
+    .section .rodata.g_ctype_table, "a", %progbits
+    .weak    g_ctype_table
+    .type    g_ctype_table, %object
+    .size    g_ctype_table, 257
+g_ctype_table:
+    .skip    257
 

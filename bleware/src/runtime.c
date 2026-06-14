@@ -187,20 +187,21 @@ static const uint8_t s_ctype[256] = {
     ['0']  = 0x44, ['1'] = 0x44, ['2'] = 0x44, ['3'] = 0x44,
     ['4']  = 0x44, ['5'] = 0x44, ['6'] = 0x44, ['7'] = 0x44,
     ['8']  = 0x44, ['9'] = 0x44,
-    ['A']  = 0x42, ['B'] = 0x42, ['C'] = 0x42, ['D'] = 0x42,
-    ['E']  = 0x42, ['F'] = 0x42,
-    ['a']  = 0x41, ['b'] = 0x41, ['c'] = 0x41, ['d'] = 0x41,
-    ['e']  = 0x41, ['f'] = 0x41,
+    ['A']  = 0x41, ['B'] = 0x41, ['C'] = 0x41, ['D'] = 0x41,
+    ['E']  = 0x41, ['F'] = 0x41,
+    ['a']  = 0x42, ['b'] = 0x42, ['c'] = 0x42, ['d'] = 0x42,
+    ['e']  = 0x42, ['f'] = 0x42,
     ['x']  = 0x00, ['X']  = 0x80,  /* x: just space, X: hex marker */
 };
-/* bit 2 = is digit, bit 6 = is hex digit (uppercase), bit 1 = is hex digit (lowercase)
- * bit 3 = is whitespace */
+/* OEM ctype bits (table at flash 0x00029B2D): bit0 = hex A-F, bit1 = hex
+ * a-f, bit2 = decimal digit, bit3 = whitespace, bit6 = any hex digit.
+ * All hex chars (0x44/0x41/0x42) carry bit6, so it marks "is hex". */
 
 static int s_isspace(uint8_t c)  { return (s_ctype[c] >> 3) & 1; }
 static int s_isdigit(uint8_t c)  { return (s_ctype[c] >> 2) & 1; }
-static int s_ishex_low(uint8_t c) { return (s_ctype[c] >> 1) & 1; }
-static int s_ishex_up(uint8_t c)  { return (s_ctype[c] >> 6) & 1; }
-static int s_ishex(uint8_t c)     { return s_ishex_low(c) || s_ishex_up(c); }
+static int s_ishex_low(uint8_t c) { return (s_ctype[c] >> 1) & 1; }   /* bit1 = a-f */
+static int s_ishex_up(uint8_t c)  { return  s_ctype[c]       & 1; }   /* bit0 = A-F */
+static int s_ishex(uint8_t c)     { return (s_ctype[c] >> 6) & 1; }   /* bit6 = any hex */
 
 unsigned int monitor_strtol(const uint8_t *nptr, uint8_t **endptr, int base)
 {
@@ -232,9 +233,14 @@ unsigned int monitor_strtol(const uint8_t *nptr, uint8_t **endptr, int base)
         }
     }
 
-    /* digit accumulation with overflow detection */
-    unsigned int cutoff = 0x7FFFFFFFu / (unsigned int)base;
-    unsigned int cutlim = 0x7FFFFFFFu % (unsigned int)base;
+    /* digit accumulation with overflow detection.
+     * OEM @ 0x00010858: the accumulation limit is (neg + 0x7FFFFFFF), so a
+     * negative input may reach magnitude 0x80000000 (LONG_MIN) while a
+     * positive input is capped at 0x7FFFFFFF (LONG_MAX). Preserve the
+     * sign-dependent threshold verbatim. */
+    unsigned int limit  = 0x7FFFFFFFu + (unsigned int)neg;
+    unsigned int cutoff = limit / (unsigned int)base;
+    unsigned int cutlim = limit % (unsigned int)base;
 
     while (1) {
         unsigned int digit;

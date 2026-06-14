@@ -252,11 +252,11 @@ int log_gatt_notify_channel(int channel, const void *buf, uint32_t len)
     int      conn_handle;
 
     if (channel == 0) {
-        chan_buf    = (void *)0x2000AB00;   /* DAT_0001BA60 */
+        chan_buf    = (void *)0x2000ABC0;   /* DAT_0001BA60 */
         conn_handle = (int)g_log_notify_state[2];  /* +8 */
         copy_len    = 16;
     } else if (channel == 1) {
-        chan_buf    = (void *)0x2000AB10;   /* DAT_0001BA5C */
+        chan_buf    = (void *)0x2000ABD0;   /* DAT_0001BA5C */
         conn_handle = (int)g_log_notify_state[1];  /* +4 */
         copy_len    = 16;
     } else if (channel == 2) {
@@ -279,9 +279,11 @@ int log_gatt_notify_channel(int channel, const void *buf, uint32_t len)
 
     if (conn_handle != 0) {
         uint8_t tag = g_log_notify_chan_tag;
+        /* OEM passes the fixed length 0xA as the 5th arg (not copy_len);
+         * copy_len is used only for the memcpy and the +2 length store. */
         FUN_00016D1C(conn_handle, chan_buf, 0,
                      (void *)g_log_notify_state[4],
-                     copy_len, tag, *(uint32_t *)((uint8_t *)&g_log_notify_state[4] + 4));
+                     0xAu, tag, *(uint32_t *)((uint8_t *)&g_log_notify_state[4] + 4));
     }
     return 0;
 }

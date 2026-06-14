@@ -129,6 +129,15 @@ struct gatt_write_event {
 
 #define ATT_OP_WRITE_REQ 0x14   /* used by auth handshake gate */
 
+/* Fixed RAM scratch buffer used as the per-block decrypt destination for
+ * both the stream-decrypt (crypto bit 2) and ECB-decrypt (crypto bit 1)
+ * paths. OEM loads this address from the flash literal DAT_00005144
+ * (= 0x200048C6) into r10 and uses it as the decrypt sink and as the
+ * source of the memcpy back over the value buffer. This is NOT the
+ * per-characteristic local store (entry +0x08); only the final default
+ * copy uses entry +0x08. */
+#define GATT_DECRYPT_SCRATCH  ((uint8_t *)0x200048C6u)
+
 int xs3_gatt_process_write_event(struct gatt_write_event *evt)
 {
     const uint8_t *entry;
@@ -213,26 +222,26 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
     }
 
     /* Stream-decrypt path (16-byte blocks chained through the BLE
-     * dispatch queue, finally memcpy'd into the local backing store). */
+     * dispatch queue into the fixed RAM scratch buffer, then memcpy'd
+     * back over the value buffer). Both the per-block source and the
+     * destination advance by 16 bytes per block. */
     if (crypto_flags & 0x04) {
         if (ble_connection_get_session_key(conn) == 0) {
             return -1;
         }
-        uint8_t *local_storage = *(uint8_t * const *)(entry + 8);
         for (uint16_t i = 0; i < (value_len >> 4); i++) {
             block_dispatch_queue_post(session_key, 0x10,
-                                      value_data + i * 8,
-                                      local_storage + i * 0x10);
+                                      value_data + i * 0x10,
+                                      GATT_DECRYPT_SCRATCH + i * 0x10);
         }
-        memcpy(value_data, local_storage, value_len & 0xfff0);
+        memcpy(value_data, GATT_DECRYPT_SCRATCH, value_len & 0xfff0);
     }
 
-    /* ECB-decrypt with the manufacturing key, then copy plain bytes
-     * back over the value buffer. */
+    /* ECB-decrypt with the manufacturing key into the fixed RAM scratch
+     * buffer, then copy plain bytes back over the value buffer. */
     if (crypto_flags & 0x02) {
-        uint8_t *local_storage = *(uint8_t * const *)(entry + 8);
-        mfg_key_ecb_decrypt_chunks(local_storage, value_data, value_len);
-        memcpy(value_data, local_storage, value_len & 0xfff0);
+        mfg_key_ecb_decrypt_chunks(GATT_DECRYPT_SCRATCH, value_data, value_len);
+        memcpy(value_data, GATT_DECRYPT_SCRATCH, value_len & 0xfff0);
     }
 
     /* Indicate-confirm: first u16 of payload is the seq num. Must
@@ -321,9 +330,10 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
         if (char_idx != 0 && (uint8_t)(char_idx - 2) > 1) {
             return -1;
         }
-        relay_val16 = value_len;
-        cmd_id      = (uint16_t)(char_idx + 0x5520 + 1);
-        module_publish_command(cmd_id, value_data, relay_val16);
+        /* OEM forwards a single byte (value_data[0]) via module_forward_async
+         * and discards the callee result, returning 0. */
+        cmd_id = (uint16_t)(char_idx + 0x5520 + 1);
+        module_forward_async(cmd_id, value_data[0]);
         return 0;
 
     case 0x5530:
@@ -332,9 +342,10 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
         case 4:
         case 5:
         case 7:
-            relay_val16 = value_len;
-            cmd_id      = (uint16_t)(char_idx + 0x5530 + 1);
-            module_publish_command(cmd_id, value_data, relay_val16);
+            /* OEM forwards a single byte via module_forward_async,
+             * discards the result, returns 0. */
+            cmd_id = (uint16_t)(char_idx + 0x5530 + 1);
+            module_forward_async(cmd_id, value_data[0]);
             return 0;
         case 3:
             cmd_id      = 0x5534;
@@ -352,9 +363,10 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
 
     case 0x5560:    /* timekeeper / RTC service */
         if (char_idx == 1 || (uint8_t)(char_idx - 3) <= 2) {
-            relay_val16 = value_len;
-            cmd_id      = (uint16_t)(char_idx + 0x5560 + 1);
-            module_publish_command(cmd_id, value_data, relay_val16);
+            /* OEM forwards a single byte via module_forward_async,
+             * discards the result, returns 0. */
+            cmd_id = (uint16_t)(char_idx + 0x5560 + 1);
+            module_forward_async(cmd_id, value_data[0]);
             return 0;
         }
         if (char_idx == 6) {
@@ -373,7 +385,11 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
         switch (char_idx) {
         case 0:
         case 3:
-            return module_forward_async(0x5570 + char_idx + 1, value_data[0]);
+            /* OEM forwards a single byte but discards the result and
+             * returns 0 (the relay paths never propagate the callee
+             * status; only the OAD path and the default set r11). */
+            module_forward_async(0x5570 + char_idx + 1, value_data[0]);
+            return 0;
         case 1:
             cmd_id      = 0x5572;
             relay_val16 = 0x0C;
@@ -386,7 +402,10 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
     case 0x5580:
         switch (char_idx) {
         case 0x00:
-            return module_forward_async(0x5580 + 0 + 1, value_data[0]);
+            /* OEM forwards a single byte but discards the result and
+             * returns 0. */
+            module_forward_async(0x5580 + 0 + 1, value_data[0]);
+            return 0;
         case 0x01:
             cmd_id      = 0x5582;
             relay_val16 = 3;
@@ -406,7 +425,12 @@ int xs3_gatt_process_write_event(struct gatt_write_event *evt)
         if (char_idx > 1) {
             return 0;
         }
-        return module_forward_async(0x5590 + char_idx + 1, value_data[0]);
+        /* OEM publishes the whole value_len-byte buffer via
+         * module_publish_command and returns 0. */
+        relay_val16 = value_len;
+        cmd_id      = (uint16_t)(char_idx + 0x5590 + 1);
+        module_publish_command(cmd_id, value_data, relay_val16);
+        return 0;
 
     case 0x55A0:
         if (char_idx > 3) {

@@ -57,7 +57,7 @@ int gatt_notify_channel(int channel, const void *buf)
         break;
     case 3:
         chan_buf    = CH3_BUF;
-        conn_handle = 0;
+        conn_handle = (int)g_gatt_notify_state[2];  /* +8 (same handle as ch0) */
         copy_len    = 16;
         break;
     case 4:
@@ -73,10 +73,12 @@ int gatt_notify_channel(int channel, const void *buf)
 
     if (do_notify && conn_handle != 0) {
         uint8_t tag = g_gatt_notify_chan_tag;
+        /* OEM passes: 4th = ADDRESS of the +0x10 param block; 5th = fixed
+         * length 0xE (not copy_len); 7th = fixed literal 0x0001E181. */
         FUN_00016D1C(conn_handle, chan_buf, 0,
-                     (void *)g_gatt_notify_state[4],  /* +16 param block */
-                     copy_len, tag,
-                     *(uint32_t *)((uint8_t *)&g_gatt_notify_state[4] + 4));
+                     (void *)&g_gatt_notify_state[4],  /* +0x10 param block, by address */
+                     0xEu, tag,
+                     0x0001E181u);
     }
     return 0;
 }

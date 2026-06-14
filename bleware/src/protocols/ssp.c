@@ -200,6 +200,8 @@ int module_publish_command(uint16_t cmd, const uint8_t *payload, unsigned int le
  *
  * OEM @ 0x0001EEF4.
  */
+void ssp_signal_fetch(uint16_t cmd_id);   /* defined below */
+
 int module_publish_sync_with_timeout(uint32_t module_idx,
                                      uint16_t cmd_id,
                                      uint32_t timeout_ms)
@@ -307,31 +309,81 @@ int module_bus_is_idle(void)
     return (*g_ssp_bus_pending_cmd_ptr == 0xFFFFu) ? 0 : 1;
 }
 
-/* Synchronous forward — publish a command payload and block on the
- * per-module reply semaphore. Used by the backoffice handler for
- * sub-command 8 (module-forward-sync). Returns 0 on reply received,
- * -1 on timeout. OEM @ 0x000177E8 (72 B). */
+/* Synchronous forward — publish a command payload and block until the
+ * reply comes back. Used by the backoffice handler for sub-command 8
+ * (module-forward-sync). Returns 0 on reply received, -1 on timeout.
+ * OEM @ 0x000177E8 (72 B).
+ *
+ * The OEM does NOT wait on the global per-module record semaphore.
+ * Instead it constructs a LOCAL TI-RTOS Semaphore on the stack and
+ * threads its address into the publish frame's context words so the
+ * reply path posts exactly THIS call's semaphore:
+ *
+ *   ctx1 (+0x0C) = reply-callback pointer (flash 0x00027054, Thumb).
+ *                  On reply it does: handle = ctx2[0]; ctx2[4] = status;
+ *                  if (handle) Semaphore_post(handle).
+ *   ctx2 (+0x10) = &reply_ctx — { sem_handle; status_byte }.
+ *   seq_out      = &seq — frame sequence number, used to dequeue the
+ *                  stale frame on timeout.
+ *
+ * The reply callback overwrites reply_ctx.status (pre-seeded to -4) with
+ * the slave's status byte; that byte is the call's return value on a
+ * successful pend. On timeout the queued frame is removed by sequence
+ * number and the call returns -1. */
 int module_forward_sync(uint16_t cmd_id, const uint8_t *payload,
                         unsigned int len)
 {
-    extern uint8_t  g_ssp_modules[];   /* RAM 0x20004158 */
-    uint8_t        *rec;
-    uint32_t        sem_handle;
-    int             rc;
+    /* TI-RTOS Semaphore lifecycle (ROM thunks). */
+    extern void  ti_semaphore_params_init(void *params, uint32_t a1,
+                                          uint32_t size, uint32_t a3);
+    extern void  ti_semaphore_construct(void *obj, uint32_t count,
+                                        const void *params);
+    extern void  ti_semaphore_destruct(void *obj);
+    /* Remove the queued (but never-acked) frame by sequence number on
+     * timeout. OEM FUN_00021aba. */
+    extern void  ssp_dequeue_frame_by_seq(struct ssp_master_state *master,
+                                          uint8_t seq);
+    /* Internal SSP reply router at flash 0x00027054 — carried as ctx1
+     * so the slave's reply posts our local semaphore. */
+    extern void  ssp_sync_reply_route(void);
+    /* TI-RTOS tick period in µs (10). OEM `*DAT_00017888` = *0x0002BB88. */
+    extern uint32_t *g_tick_period_ptr;
 
-    /* Build and send the publish frame. module_idx is always 0 for
-     * backoffice-initiated sync forwards — the reply comes back on
-     * the main bus semaphore. */
-    rc = ssp_queue_publish_frame(&g_ssp_master, cmd_id, payload, len, 0, 0, NULL);
-    if (rc != 0) {
-        return -1;
+    /* Stack-resident Semaphore object + params, matching the OEM frame
+     * (params 0x24 bytes, object 0x1C bytes). The constructed object's
+     * own address is the handle the reply path posts. */
+    uint8_t   sem_params[0x24];
+    uint8_t   sem_obj[0x1C];
+    struct { void *sem; signed char status; } reply_ctx;
+    uint8_t   seq = 0;
+    int       rc;
+    int       result;
+
+    ti_semaphore_params_init(sem_params, 0, 0x24, 8);
+    sem_params[0x18] = 1;   /* OEM `local_40 = 1` (mode/event field) */
+    ti_semaphore_construct(sem_obj, 0, sem_params);
+
+    reply_ctx.sem    = sem_obj;
+    reply_ctx.status = -4;   /* sentinel; overwritten by the reply route */
+
+    if (ble_authenticated_connection_count() != 0) {
+        ble_activity_led_pulse();
     }
 
-    /* Wait on the module-0 reply semaphore with ~2.5 s timeout.
-     * SSP_MODULE_REC_STRIDE = 0x7C, SSP_MODULE_REC_REPLY_SEM = 0x44 */
-    rec        = g_ssp_modules + 0 * SSP_MODULE_REC_STRIDE;
-    sem_handle = *(uint32_t *)(rec + SSP_MODULE_REC_REPLY_SEM);
+    ssp_queue_publish_frame(&g_ssp_master, cmd_id, payload, len,
+                            (uint32_t)(uintptr_t)ssp_sync_reply_route,
+                            (uint32_t)(uintptr_t)&reply_ctx, &seq);
 
-    rc = ti_semaphore_pend(sem_handle, 2500u * 10u);  /* ~2.5s at 10µs/tick */
-    return (rc != 0) ? 0 : -1;
+    /* OEM timeout = (1000 / tick_us) * 2500 ticks (=250000 at 10µs). */
+    rc = ti_semaphore_pend((uint32_t)(uintptr_t)reply_ctx.sem,
+                           (1000u / *g_tick_period_ptr) * 2500u);
+    if (rc == 1) {
+        result = reply_ctx.status;
+    } else {
+        ssp_dequeue_frame_by_seq(&g_ssp_master, seq);
+        result = -1;
+    }
+
+    ti_semaphore_destruct(sem_obj);
+    return result;
 }

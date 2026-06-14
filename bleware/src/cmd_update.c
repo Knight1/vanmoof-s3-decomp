@@ -46,10 +46,10 @@ int firmware_update_start(void *params)
      *    expected CRC field. FUN_00016E7C computes the CRC over
      *    the image bytes; FUN_0000D750 likely returns the stored
      *    expected CRC from the header. */
-    extern int      FUN_00016E7C(int mode, uint32_t length, int unused);
-    extern uint32_t g_expected_image_crc;  /* at local_24 - 0xC */
-    uint32_t        expected = 0;  /* loaded from header by the OEM */
-    uint32_t        computed = FUN_00016E7C(0xC, 0, 1);
+    extern int FUN_00016E7C(int start_off, uint32_t length, int unused);
+    uint32_t   header_len = *(uint32_t *)(header + 0x18);          /* OEM sp+0x24 */
+    uint32_t   expected   = *(uint32_t *)(header + 0x08);          /* header.crc32, OEM sp+0x14 */
+    uint32_t   computed   = FUN_00016E7C(0xC, header_len - 0xC, 1);
 
     if (expected != computed) {
         monitor_log(k_src_file, 0xFC, NULL, 2,
@@ -58,13 +58,19 @@ int firmware_update_start(void *params)
         return -1;
     }
 
-    /* 5. Success — mark pending and reset. */
+    /* 5. Success — delay, mark the OAD image pending-commit, then reset. */
+    extern void FUN_00027542(int units);     /* delay */
+    extern void FUN_0001BF04(int img_cp_stat);   /* set OAD imgCpStat */
+
+    FUN_00027542(500);
     monitor_log(k_src_file, 0x101, NULL, 8,
                 "Firmware upload successful. Preparing software update.");
 
-    /* OEM: FUN_00027478() — yield */
-    /* OEM: FUN_0001BF04(0xFE) — set the OAD image's imgCpStat to
-     *   0xFE ("pending commit") so the BIM picks it up on next boot. */
+    /* Set the OAD image's imgCpStat to 0xFE ("pending commit") so the BIM
+     * promotes it on the next boot. Load-bearing — without this call the
+     * received image is never applied. OEM @ 0x0000D4B8: movs r0,#0xfe;
+     * bl 0x0001BF04. */
+    FUN_0001BF04(0xFE);
 
     monitor_log(k_src_file, 0x106, NULL, 0,
                 "Trigger software update");

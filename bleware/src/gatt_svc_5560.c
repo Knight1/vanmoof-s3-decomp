@@ -47,11 +47,10 @@
  *   +0x00 u8       type-tag (0x02 = CCCD descriptor, 0x10 = char value)
  *   +0x01..+0x03   pad / handle
  *   +0x04 uint8_t *uuid          (16-byte UUID pointer)
- *   +0x06 (re-aliased as) uint32_t *backing_storage_ptr
- *                  — for char-value attrs, this is a pointer-to-pointer
- *                  to the RAM shadow that the read dispatcher copies
- *                  out of when no producer overrides the value.
- *   +0x0C uint32_t *cccd_slot    (set on CCCD-descriptor attrs only)
+ *   +0x0C uint32_t backing_storage_ptr
+ *                  — for char-value attrs, this is the RAM shadow that
+ *                  the read dispatcher copies out of when no producer
+ *                  overrides the value.
  */
 
 /* The central-dispatch vtable at RAM 0x20003F84. */
@@ -64,8 +63,7 @@ struct gatt_dispatch_vtable {
                       uint16_t offset);
     int (*read_attr)(void *attr, uint32_t conn, uint16_t svc,
                      uint8_t idx, uint32_t value_storage,
-                     uint8_t *out_buf, uint8_t op_byte,
-                     uint16_t *out_len);
+                     uint16_t *out_len, uint8_t op_byte);
 };
 
 extern struct gatt_dispatch_vtable *g_gatt_dispatch;   /* *DAT_0001E370 */
@@ -105,15 +103,14 @@ uint8_t svc_5560_read_attr_cb(uint32_t  conn,
     uint8_t rc  = 1;
 
     if (g_gatt_dispatch->read_attr != NULL && idx != 0xFF) {
-        /* Pull the attribute's backing-storage pointer (at attr+0x06)
+        /* Pull the attribute's backing-storage pointer (at attr+0x0C)
          * and pass it along with the requested read-offset. The
          * central read dispatcher uses it as the "Modbus shadow"
          * source for chars that don't have a bespoke producer. */
-        uint32_t shadow_ptr = *(uint32_t *)((uint8_t *)attr + 6) + offset;
+        uint32_t shadow_ptr = *(uint32_t *)((uint8_t *)attr + 0xC) + offset;
 
         rc = g_gatt_dispatch->read_attr(attr, conn, 0x5560, idx,
-                                        shadow_ptr, out_buf, op_byte,
-                                        out_len);
+                                        shadow_ptr, out_len, op_byte);
         if (rc == 0) {
             /* On success the dispatcher writes the canonical value
              * into the shadow at `shadow_ptr`; copy it back into
@@ -146,7 +143,10 @@ uint8_t svc_5560_write_attr_cb(uint32_t  conn,
     struct gatt_dispatch_vtable   *vt         = g_gatt_dispatch;
 
     if (attr_bytes[0] == ATT_TYPE_CCCD) {
-        uint16_t descriptor_uuid = *(uint16_t *)(attr_bytes + 4);
+        /* attr+0x04 holds a pointer to the UUID; the descriptor UUID is
+         * the u16 at the address it points to (not inline at attr+4). */
+        uint16_t descriptor_uuid =
+            **(uint16_t * const *)(attr_bytes + 4);
         if (descriptor_uuid == UUID16_CCCD) {
             uint8_t idx = svc_5560_char_uuid_to_index(attr_bytes);
             uint8_t rc  = vt->write_cccd(attr, conn, 0x5560, idx,

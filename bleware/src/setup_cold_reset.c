@@ -51,7 +51,7 @@
 
 /* FCFG1.MISC_TRIM_AON (offset 0x40C in FCFG1 base 0x50001000).
  * cfg1 reads it once and slices three fields out: the ADI3 byte,
- * a bit-9 dispatch selecting one of two AON-shadow byte writes,
+ * a bit-8 dispatch selecting one of two AON-shadow byte writes,
  * and the ADI3 halfword. */
 #define FCFG1_MISC_TRIM    (*(volatile uint32_t *)0x5000140Cu)
 
@@ -60,8 +60,8 @@
  * byte writes sharing one literal pool word. Field offsets:
  *
  *   +0x00 (0x40086209): byte = 2     if r5 bit 24 set & bit 25 clear
- *   +0x13 (0x4008621C): byte = 0x40  if FCFG1.MISC_TRIM bit 9 set
- *   +0x23 (0x4008622C): byte = 0x40  if FCFG1.MISC_TRIM bit 9 clear
+ *   +0x13 (0x4008621C): byte = 0x40  if FCFG1.MISC_TRIM bit 8 set
+ *   +0x23 (0x4008622C): byte = 0x40  if FCFG1.MISC_TRIM bit 8 clear
  *   +0x4D (0x40086256): byte = (FCFG2_TRIM_WORD0 >> 16) | 0xF0
  */
 #define AON_TRIM_SHADOW_BASE  ((volatile uint8_t *)0x40086209u)
@@ -104,7 +104,11 @@ void bim_setup_after_cold_reset_cfg1(uint32_t fcfg1_rev)
     uint32_t misc = FCFG1_MISC_TRIM;
     ADI3_TRIM_BYTE = (uint8_t)((misc >> 12) & 0x3Fu);
 
-    if ((misc & (1u << 9)) == 0u) {
+    /* OEM @ 0x17448: `lsrs r1,r0,#0x9` shifts bit[8] into the carry flag
+     * (LSR #N -> carry = source bit[N-1]); the cc/cs branch keys off
+     * FCFG1.MISC_TRIM bit 8, NOT bit 9. Ghidra renders this as
+     * `if ((uVar4 >> 8 & 1) == 0)`. */
+    if ((misc & (1u << 8)) == 0u) {
         AON_TRIM_SHADOW_BASE[0x23u] = 0x40u;
     } else {
         AON_TRIM_SHADOW_BASE[0x13u] = 0x40u;

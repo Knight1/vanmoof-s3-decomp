@@ -17,54 +17,81 @@
 
 #include "bleware.h"
 
-/* ROM thunk for Semaphore_pend / Semaphore_post. */
-extern int  ti_semaphore_pend(uint32_t handle, uint32_t timeout);
-extern void ti_semaphore_post(uint32_t handle);
-
-/* Connection-lookup helper — returns a pointer to the per-connection
- * CCCD storage area, or NULL. OEM FUN_00025A24. */
-extern void *FUN_00025A24(uint16_t conn);
+/* Per-record lookup helper. Scans the CCCD record array (param_2) for an
+ * entry whose 16-bit key at +0 matches `conn`; returns a pointer to that
+ * record, or NULL if no match. Passing conn == 0xFFFF finds the first
+ * free slot. OEM FUN_00025A24(conn, array_ptr). */
+extern void *FUN_00025A24(uint16_t conn, void *array_ptr);
 
 /* Forward declares. */
-uint16_t cccd_read(uint16_t conn);
-void     cccd_write_store(uint16_t conn, uint16_t cccd);
+uint8_t cccd_read(uint16_t conn, void *array_ptr);
+uint8_t cccd_write_store(uint16_t conn, void *array_ptr, uint8_t cccd);
 
-/* Validate a CCCD write value. Only bits 0 (notification) and 1
- * (indication) are supported. Any other set bit returns 0x80.
- * If the value has changed from the stored state, commits it via
- * cccd_write_store. OEM @ 0x0001F9AE (60 B). */
-int cccd_write_validate(uint16_t conn, const uint8_t *value, uint16_t len)
+/* Validate a CCCD write value. Takes the full TI write-callback argument
+ * set: (conn, attr, value, len, offset, supported_mask). The supported
+ * notify/indicate mask is supplied by the caller (it is per-characteristic),
+ * NOT hardcoded. The record array used by the read/store helpers lives at
+ * **(uint32_t **)((uint8_t *)attr + 0xc).
+ *
+ * OEM @ 0x0001F9AE (~80 B):
+ *   - offset != 0           -> return 0x0b
+ *   - len    != 2           -> return 0x0d (ATT_ERR_INVALID_ATTR_LEN)
+ *   - value has bits outside supported_mask -> return 0x80
+ *   - else, if changed, commit via cccd_write_store and return its status;
+ *     if unchanged, return 0.
+ */
+int cccd_write_validate(uint32_t conn, void *attr, const uint8_t *value,
+                        uint16_t len, uint16_t offset, uint16_t supported_mask)
 {
-    if (len < 2) return 0x80;
+    if (offset != 0) {
+        return 0x0b;
+    }
+    if (len != 2) {
+        return 0x0d;
+    }
 
-    uint16_t new_cccd = *(const uint16_t *)value;
+    uint16_t new_cccd = (uint16_t)((uint16_t)value[0] +
+                                   (uint16_t)((uint16_t)value[1] << 8));
 
-    /* reject unsupported bits */
-    if (new_cccd & ~3u) {
+    /* reject bits outside the per-characteristic supported mask */
+    if ((new_cccd & (uint16_t)~supported_mask) != 0) {
         return 0x80;
     }
 
-    uint16_t stored = (uint16_t)cccd_read(conn);
+    void *array_ptr = *(void **)(*(uint8_t **)((uint8_t *)attr + 0xc));
+    uint16_t stored = cccd_read((uint16_t)conn, array_ptr);
     if (new_cccd != stored) {
-        cccd_write_store(conn, new_cccd);
+        return cccd_write_store((uint16_t)conn, array_ptr, (uint8_t)new_cccd);
     }
     return 0;
 }
 
-/* Store a CCCD value for a connection. The OEM acquires the per-record
- * semaphore, stores the 2-byte CCCD, and posts. OEM @ 0x00024D90 (40 B). */
-void cccd_write_store(uint16_t conn, uint16_t cccd)
+/* Store a CCCD value into the per-connection record array. Looks up the
+ * record for `conn`; if absent, allocates a free slot (lookup with 0xFFFF)
+ * and writes `conn` as the 16-bit key at +0. The CCCD itself is a single
+ * byte stored at +2 on both paths. Returns 0 on success, 0x11 if no free
+ * slot was available. OEM @ 0x00024D90 (~40 B). */
+uint8_t cccd_write_store(uint16_t conn, void *array_ptr, uint8_t cccd)
 {
-    void *rec = FUN_00025A24(conn);
-    if (rec == NULL) return;
-
-    *(uint16_t *)((uint8_t *)rec + 0) = conn;
-    *(uint16_t *)((uint8_t *)rec + 2) = cccd;
+    uint8_t *rec = FUN_00025A24(conn, array_ptr);
+    if (rec == NULL) {
+        rec = FUN_00025A24(0xFFFF, array_ptr);
+        if (rec == NULL) {
+            return 0x11;
+        }
+        *(uint16_t *)(rec + 0) = conn;
+    }
+    rec[2] = cccd;
+    return 0;
 }
 
-uint16_t cccd_read(uint16_t conn)
+/* Read the stored CCCD byte for `conn`, or 0 if no record exists.
+ * The CCCD is a single byte at record offset +2. OEM @ 0x00026D94 (~20 B). */
+uint8_t cccd_read(uint16_t conn, void *array_ptr)
 {
-    void *rec = FUN_00025A24(conn);
-    if (rec == NULL) return 0;
-    return *(uint16_t *)((uint8_t *)rec + 2);
+    uint8_t *rec = FUN_00025A24(conn, array_ptr);
+    if (rec == NULL) {
+        return 0;
+    }
+    return rec[2];
 }

@@ -4,15 +4,17 @@
  * the `.isr_vector` section right after the OAD header).
  *
  * Slot 0 = initial MSP = 0x20013A00 (matches the OEM's pool word that
- * Reset_Handler reads to seed SP). Slot 1 = Reset_Handler. Slots 2..14
- * default to TI's SimpleLink ROM handlers at 0x1002FB38 (general trap)
- * and 0x1002FB10 (PendSV ROM stub). Slot 15 = SysTick = 0xFFFFFFFF
- * (unused — bleware 1.4.01 doesn't enable SysTick from the application
- * side; TI-RTOS's clock module owns timing).
+ * Reset_Handler reads to seed SP). Slot 1 = Reset_Handler. Slots 2..13
+ * default to TI's SimpleLink ROM general-trap handler at 0x1002FB38.
+ * Slot 14 = PendSV = 0x1002FB10 (PendSV ROM stub). Slot 15 = SysTick =
+ * 0xFFFFFFFF (unused — bleware 1.4.01 doesn't enable SysTick from the
+ * application side; TI-RTOS's clock module owns timing).
  *
- * Slots 16..47 = peripheral IRQs. As decomp progresses we'll replace
- * the ROM-default entries with the per-driver handlers actually
- * installed in the OEM image. */
+ * The OEM flash table is exactly 16 system words (0x90..0xCF, 64 bytes):
+ * the very next bytes at 0xD0 are application code (FUN_000000d0,
+ * 0xD0-0xBB9), not 32 IRQ vector words. On CC2642 the application IRQ
+ * vectors live in a relocated (VTOR/RAM) table, so the flash table here
+ * carries only the 16 ARM system exceptions. */
 
 #include <stdint.h>
 
@@ -31,8 +33,12 @@ extern void Reset_Handler(void);
 /* Initial MSP from the OEM vector table (vec[0]). */
 #define INITIAL_MSP             ((void (*)(void))0x20013A00u)
 
+/* OEM flash table = 16 system words only (verified at flash 0x90: the
+ * bytes at 0xD0 are code, not vectors). Words 2..13 are all the ROM
+ * general-trap handler (0x1002FB39); word 14 = PendSV ROM stub; word 15
+ * = 0xFFFFFFFF. */
 __attribute__((section(".isr_vector"), used))
-void (*const g_vectors[48])(void) = {
+void (*const g_vectors[16])(void) = {
     /* 0  */ INITIAL_MSP,              /* initial MSP */
     /* 1  */ Reset_Handler,            /* Reset */
     /* 2  */ ROM_TRAP_HANDLER,         /* NMI */
@@ -49,40 +55,4 @@ void (*const g_vectors[48])(void) = {
     /* 13 */ ROM_TRAP_HANDLER,         /* reserved */
     /* 14 */ ROM_PENDSV_HANDLER,       /* PendSV (TI-RTOS owns this) */
     /* 15 */ VECTOR_UNUSED,            /* SysTick (unused) */
-
-    /* IRQ 0..31 — peripheral interrupts. All currently default to the
-     * ROM trap handler; per-driver entries land as the decomp identifies
-     * each one. */
-    /* 16 */ ROM_TRAP_HANDLER, /* IRQ 0  */
-    /* 17 */ ROM_TRAP_HANDLER, /* IRQ 1  */
-    /* 18 */ ROM_TRAP_HANDLER, /* IRQ 2  */
-    /* 19 */ ROM_TRAP_HANDLER, /* IRQ 3  */
-    /* 20 */ ROM_TRAP_HANDLER, /* IRQ 4  */
-    /* 21 */ ROM_TRAP_HANDLER, /* IRQ 5  */
-    /* 22 */ ROM_TRAP_HANDLER, /* IRQ 6  */
-    /* 23 */ ROM_TRAP_HANDLER, /* IRQ 7  */
-    /* 24 */ ROM_TRAP_HANDLER, /* IRQ 8  */
-    /* 25 */ ROM_TRAP_HANDLER, /* IRQ 9  */
-    /* 26 */ ROM_TRAP_HANDLER, /* IRQ 10 */
-    /* 27 */ ROM_TRAP_HANDLER, /* IRQ 11 */
-    /* 28 */ ROM_TRAP_HANDLER, /* IRQ 12 */
-    /* 29 */ ROM_TRAP_HANDLER, /* IRQ 13 */
-    /* 30 */ ROM_TRAP_HANDLER, /* IRQ 14 */
-    /* 31 */ ROM_TRAP_HANDLER, /* IRQ 15 */
-    /* 32 */ ROM_TRAP_HANDLER, /* IRQ 16 */
-    /* 33 */ ROM_TRAP_HANDLER, /* IRQ 17 */
-    /* 34 */ ROM_TRAP_HANDLER, /* IRQ 18 */
-    /* 35 */ ROM_TRAP_HANDLER, /* IRQ 19 */
-    /* 36 */ ROM_TRAP_HANDLER, /* IRQ 20 */
-    /* 37 */ ROM_TRAP_HANDLER, /* IRQ 21 */
-    /* 38 */ ROM_TRAP_HANDLER, /* IRQ 22 */
-    /* 39 */ ROM_TRAP_HANDLER, /* IRQ 23 */
-    /* 40 */ ROM_TRAP_HANDLER, /* IRQ 24 */
-    /* 41 */ ROM_TRAP_HANDLER, /* IRQ 25 */
-    /* 42 */ ROM_TRAP_HANDLER, /* IRQ 26 */
-    /* 43 */ ROM_TRAP_HANDLER, /* IRQ 27 */
-    /* 44 */ ROM_TRAP_HANDLER, /* IRQ 28 */
-    /* 45 */ ROM_TRAP_HANDLER, /* IRQ 29 */
-    /* 46 */ ROM_TRAP_HANDLER, /* IRQ 30 */
-    /* 47 */ ROM_TRAP_HANDLER, /* IRQ 31 */
 };
