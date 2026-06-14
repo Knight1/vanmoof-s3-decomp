@@ -54,7 +54,7 @@ LDFLAGS      := $(ARCH_FLAGS) \
 LDLIBS       := -lgcc
 
 # --- targets -----------------------------------------------------------------
-.PHONY: all clean compare size disasm flash help
+.PHONY: all clean compare size disasm flash help renode-test
 .DEFAULT_GOAL := all
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
@@ -99,6 +99,13 @@ compare: $(BUILD_DIR)/$(PROJECT).bin
 	echo "differing bytes: $$diff_bytes"
 	@cmp $(OEM_IMAGE) $(BUILD_DIR)/$(PROJECT).bin && echo "BYTE-EQUIVALENT" || true
 
+# Renode emulation smoke tests. Runs from the repo root so the suite's
+# @shifterware/... paths resolve. Requires `renode-test` on PATH.
+renode-test: $(BUILD_DIR)/$(PROJECT).elf
+	@command -v renode-test >/dev/null 2>&1 || { \
+		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
+	cd .. && renode-test shifterware/tests/$(PROJECT).robot
+
 clean:
 	rm -rf $(BUILD_DIR)
 
@@ -108,6 +115,7 @@ help:
 	@echo "  size    — show flash/SRAM usage"
 	@echo "  disasm  — emit interleaved C+asm listing"
 	@echo "  compare — diff our build against OEM_IMAGE"
+	@echo "  renode-test — run the Renode smoke-test suite"
 	@echo "  clean   — remove build/"
 	@echo "Variables:"
 	@echo "  OEM_IMAGE=$(OEM_IMAGE)"

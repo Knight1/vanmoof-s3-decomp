@@ -1,0 +1,44 @@
+// MM32F031F6U6 — minimal Renode platform for the VanMoof shifterware
+// (eShifter, rear-hub PCB) application image.
+//
+// The application is linked at 0x08003000 (the first 12 KB of flash belongs
+// to shifterboot). Only what the firmware needs to reach main() and to drive
+// the USART1 Modbus RX→dispatch→TX cascade is modelled here. The clock/flash
+// *status* registers the firmware polls during bring-up (RCC 0x40021000,
+// FLASH 0x40022000, the hardware CRC at 0x40023000, TIM2 0x40000000) are left
+// unmodelled — Renode reads them back as 0 and warns, never faults. The
+// Modbus and leaf tests call the routines directly without running the clock
+// init path, and the TX leaf (uart1_send_byte) is neutralised with a hook in
+// the suite, so this description stays small and loads on any recent Renode.
+//
+// This part is Cortex-M0 (no architectural VTOR): shifterboot relocates the
+// vector table by remapping memory; in the test we point cpu.VectorTableOffset
+// at the app's table at flash 0x08003028 instead.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 48000000
+    IRQ -> cpu@0
+
+// Whole 32 KB flash bank: shifterboot (0x08000000) + shifterware application
+// (0x08003000) + the OTA staging slot (0x08001800) + the settings page
+// (0x08007800). The app image header + vector table sit at 0x08003000 /
+// 0x08003028.
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x8000
+
+// 4 KB SRAM (stack top _estack = 0x20001000). Holds both the firmware's
+// hard-coded globals (modbus scratch, OTA staging, tick counters, ...) and
+// the suite's leaf-call scratch buffer.
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+
+// GPIOA (0x48000000) + GPIOB (0x48000400) modelled as plain memory so the
+// suite can seed GPIOA->IDR (offset 0x08) to drive the PA0/PA1 position-sensor
+// inputs read by input_pa0 / input_pa1, and so the boot-time pin-config writes
+// (BSRR/BRR/CRL/CRH/AFR) land somewhere instead of warning.
+gpio: Memory.MappedMemory @ sysbus 0x48000000
+    size: 0x1000
