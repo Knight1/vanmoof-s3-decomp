@@ -34,6 +34,68 @@ _stack_size = 0x600;            /* 1.5 KB, matches Reset_Handler's MSP computati
 _Min_Stack_Size = _stack_size;
 _Min_Heap_Size  = 0x0;
 
+/* ====================================================================
+ * OEM global address pins (byte-exact scaffolding)
+ * ====================================================================
+ *
+ * These assignments place each decoded global at the exact SRAM (or, for
+ * the two flash constants noted below, flash) address the OEM image uses,
+ * so that every PC-relative literal that references one of them resolves
+ * to the same value the OEM stored. A linker-script assignment overrides
+ * the weak placeholder definitions in src/hal_stubs.S without allocating
+ * storage (SRAM is omitted from the raw .bin), and overlays the real OEM
+ * memory map.
+ *
+ * This is a PREREQUISITE for, not a guarantee of, a byte-exact image:
+ * full byte-exactness additionally needs every function placed at its OEM
+ * flash address (which in turn needs the TI SimpleLink SDK to materialise
+ * the ~85% of the image that is vendor ROM/stack). With --gc-sections the
+ * stub build drops everything that references these symbols, so the pins
+ * have no effect on the current 900-byte .bin — they are carried so the
+ * addresses are correct the moment the code is rooted at OEM offsets.
+ *
+ * Globals whose OEM SRAM address is not yet known stay as weak BSS in
+ * hal_stubs.S (unpinned) and are listed in docs/progress.md.
+ * -------------------------------------------------------------------- */
+
+/* Connection / SSP / GATT-dispatch state */
+g_ble_connection_table_storage    = 0x20004158;
+g_ssp_master                      = 0x20003104;
+g_gatt_dispatch                   = 0x20003F84;
+
+/* External-flash SPI driver */
+g_extflash_gpio_ctx               = 0x20001B34;
+g_extflash_spi_handle             = 0x20001B28;
+g_gpio_max_pin                    = 0x20005A78;
+
+/* RTOS heap / message-queue / ICall-entity bases */
+g_heap_state_storage              = 0x20004E0C;
+g_bluetoothtask_msg_queue_storage = 0x200057C8;
+g_icall_entities_storage          = 0x20004E78;
+
+/* Backoffice / GATT notify / log notify */
+g_backoffice_reassembly           = 0x2000A248;
+g_gatt_notify_state               = 0x200049CC;
+g_log_notify_state                = 0x20004A00;
+s_dest_service_id                 = 0x2000566C;
+
+/* Advertising / bonding / button-press / state-machine */
+g_gap_adv_cfg                     = 0x20005290;
+g_gap_adv_rand_addr               = 0x20005AF8;
+g_bond_addr_mode_strings          = 0x200058E0;
+g_bond_last_state                 = 0x200058DC;
+g_buttonpress_log_enabled         = 0x20005670;
+g_sm_context                      = 0x20005950;
+
+/* Monitor console */
+g_monitor_history_word            = 0x2000457C;
+g_console_disabled                = 0x2000AE04;
+g_console_event                   = 0x20005770;
+
+/* Flash constant (value 10), reached as *(0x0002BB88) — pin the symbol at
+ * its flash literal so 1000 / g_console_tick_divisor reads the OEM word. */
+g_console_tick_divisor            = 0x0002BB88;
+
 SECTIONS
 {
     /* The OAD-NVM1 image header lives at flash 0x0..0x8F. Provided

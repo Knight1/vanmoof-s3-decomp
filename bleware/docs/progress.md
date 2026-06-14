@@ -30,11 +30,219 @@ peripheral wiring, anything that's specific to VanMoof.
 
 | Count | Status |
 | --- | --- |
-| 159 | decomp (asm or c) |
-| 0 | vendor-stock (recognised; no decomp needed) |
+| ~179 | decomp (C in `src/`) — VanMoof-custom application code |
+| — | vendor-stock TI SDK (recognised; out of scope, no decomp) |
 | 0 | in-progress |
-| 143 | decomp (asm or c) |
-| 0 | named (rename in Ghidra, no source yet) |
+| 60/61 | validation findings fixed (see `docs/validation_findings.md`) |
+| 38 | functions decoded in the 2026-06 missing-module + open-items passes (+2 flash tables) |
+
+## Validation pass (2026-06)
+
+A behavioral-faithfulness audit compared every decoded function in `src/`
+against its per-address disassembly/decompilation of `bleware_1.4.01.bin`.
+**184 OEM functions** were checked across 16 subsystem units; **61
+confirmed behavioral divergences** were recorded (38 high, 20 medium,
+3 low) — see **`docs/validation_findings.md`** for the full per-function
+list with C-vs-OEM evidence. Codegen-only differences (GCC vs the OEM
+CGT/armcc toolchain) are excluded; only divergences that change observable
+behavior are counted.
+
+**60 of 61 findings fixed and rebuilt clean** (two passes). The one
+remaining open item is `ble_connection_count` (`FUN_00026A7C`), which
+issues a synchronous ICall connection-count query that can't be faithfully
+reconstructed until that ICall request/reply path is decoded.
+
+The first pass fixed 17 mechanical bugs:
+
+- `extflash.c` (8): `extflash_spi_rx` RX buffer moved to SPI_Transaction
+  rxBuf slot (+8, was +4 → no data received); `extflash_open` production
+  bitrate corrected to `0x00B71B00` (12 MHz) at params+0x10 and slow-probe
+  params (+0x14=8, +0x10=`0x003D0900`) initialised before the first open;
+  `extflash_sector_write` final semaphore-post target fixed to the global
+  held at `DAT_00019448` (`0x20001B30`, was a hardcoded `0x20000000`);
+  `extflash_retry_backoff` signature corrected to `(void)` (matching its
+  sole caller) with the real flag/handle logic; `extflash_sw_wp_enabled`
+  and `_block_wp_enabled` OEM-absent error branch removed; `extflash_close`
+  reduced to the empty body the OEM has at `0x0002758E`.
+- `gatt_notify.c` (4): channel-3 conn handle taken from state +8 (was 0 →
+  notifications dropped); the shared `FUN_00016D1C` call corrected to pass
+  the param-block **address** (4th arg), the fixed length `0xE` (5th arg),
+  and the literal `0x0001E181` (7th arg).
+- `log_gatt.c` (2): channel-0/1 notify buffers corrected to `0x2000ABC0` /
+  `0x2000ABD0` (were `0x2000AB00`/`0x2000AB10`); `FUN_00016D1C` 5th arg
+  fixed to the constant `0xA`. (The 4th/7th args mirror the `gatt_notify`
+  issue and remain open pending a Ghidra re-check of the literal value.)
+- `cmd_update.c` (2): `firmware_update_start` CRC validation made
+  functional — it now CRCs `header.len - 0xC` bytes (header.len at +0x18)
+  and compares against `header.crc32` (+0x08), instead of CRC-ing 0 bytes
+  against 0; the load-bearing `imgCpStat = 0xFE` pending-commit write
+  (`FUN_0001BF04(0xFE)`) and the 500-unit settle delay (`FUN_00027542`)
+  were added — without the former the BIM never promotes the new image.
+- `runtime.c` (1): `monitor_strtol` ctype table A-F/a-f bits un-swapped
+  (bit0 = A-F, bit1 = a-f, bit2 = digit, bit6 = any-hex) and `s_ishex_up`
+  re-pointed at bit0 — previously every base-16 parse containing letters
+  decoded to garbage.
+
+The second pass re-derived and fixed the remaining 43, each verified
+against Ghidra before editing. Notable corrections: `gatt_write.c` — 5 of
+the 6 svc relays use `module_forward_async` (single byte) not
+`module_publish_command`, and the stream/ECB decrypt scratch buffer is
+`0x200048C6` with a 16-byte stride; `gatt_cccd.c` — the three CCCD
+callbacks take the TI 6-arg ABI and return ATT error codes
+(`0x0B`/`0x0D`), and the stored CCCD is a single byte; the GATT UUID
+matchers and svc-5560 read shim dereference the `type.uuid` **pointer** at
+`attr+4` (double-indirection), and the read shim's storage pointer is at
+`attr+0xC`; `ble_connection.c` — `_addr`/`_params`/`_device_address` were
+pointing at the **wrong OEM functions** (real ones: `0x000201E8`,
+`0x0001F640`, ROM `0x100221C4`) with wrong field offsets; `ssp.c` —
+`module_forward_sync` now builds a per-call local semaphore and routes the
+reply through the frame context (ctx1 = `0x00027055`); `ymodem.c` — the
+fabricated CRC-16 block check was removed (the OEM validates only the
+seq/complement byte), and the retry/EOT handling matches the OEM;
+`provisioning.c` / `cmd_update.c` byte-order and pending-commit fixes.
+
+Central scaffolding added for these: ROM thunk aliases in `hal_stubs.S`
+(`rom_clock_get_ticks`, `rom_gap_get_dev_address`, `ti_semaphore_construct`/
+`_destruct`/`_params_init`) and weak stubs for the two not-yet-decoded SSP
+flash helpers (`ssp_sync_reply_route` @ `0x00027054`,
+`ssp_dequeue_frame_by_seq` @ `0x00021ABA`); `backoffice_on_success_hook`
+gained its `uint32_t key_word` parameter (header + call site updated).
+
+Every finding's instruction-level OEM evidence is in
+`docs/validation_findings.md`.
+
+## Remaining VanMoof-custom modules — decoded (2026-06)
+
+A Ghidra call-graph + string-ref enumeration over the 27 embedded
+source-path strings found that the previously-"missing" files were in
+fact almost entirely decoded already — only **23 VanMoof-custom functions
+(~2.6 KB)** remained across them (the rest of each file was in the decoded
+set; the bulk of the binary is TI SDK vendor-stock). All 23 were decoded
+this pass and the tree builds clean:
+
+| New/extended source file | Functions | OEM file |
+| --- | --- | --- |
+| `src/xs3_app.c` (new) | `audio_player_play` (veneer 0x275B8) + `play_sound_repeatedly` (0x1BA6C) | `xs3_app.c` |
+| `src/state_machine.c` (extended) | `sm_run_dispatcher` (0x19C30), `sm_dispatch_event_callback` (0x2719C) | `xs3_statemachine.c` |
+| `src/xs3_hci.c` (new) | `hci_handle_phy_update_event` (0x1C684) | `xs3_hci.c` |
+| `src/xs3_gap_adv.c` (new) | 7 fns: `gap_adv_apply_set1/2`, `gap_adv_set_device_name`, `gap_adv_init_apply`, `gap_adv_set_addr_and_restart`, `gap_adv_set_random_static_addr`, `bdaddr_get_reversed` | `xs3_gap_adv.c` |
+| `src/xs3_bond.c` (new) | `bond_store_dump_log` (0xA07C), `bond_save_event_cb` (0x14E10) | `xs3_gap_bondmanagement.c` |
+| `src/xs3_buttonpress.c` (new) | `buttonpress_assert_invalid_lockstate` (0x1E858), `buttonpress_find_conn_slot` (0x1E918) | `xs3_buttonpress.c` |
+| `src/util.c` (new) | `util_assert_fail` (0x20F4C), `util_atoi` (0x20F98) | `misc/util.c` |
+| `src/pakfs.c` (new) | `pakfs_open` (0x15888), `pakfs_read_next_entry` (0x185B8), `pakfs_close` (0x26A90) | `oad/pakfs.c` |
+| `src/audiotask.c` (new) | `audio_wav_open` (0xB164), `audio_clip_dump_one` (0xD5CC), `audio_get_clip_duration` (0x22FE8) | `tasks/audiotask.c` |
+
+`source/filetransfer.c` was already fully covered (`ymodem_receive` 0x101B0
+in `ymodem.c` + `firmware_update_start` 0xD444 in `cmd_update.c`). The
+superseded stubs in `audio_stubs.c` (`audio_clip_dump_one`,
+`audio_player_play`) and `packfs_stubs.c` (the misspelled `packfs_*`) were
+removed; `cmd_packfs.c` now binds to the real `pakfs_*` symbols.
+
+Central scaffolding for these new TUs (weak placeholders in `hal_stubs.S`,
+overridden by the SDK/ROM in a real build): `audiotask_kick`,
+`conn_phy_get_current/_set_requested/_reapply`, `bleware_snprintf`,
+`gap_adv_disable_set1/2`, `bytes_all_equal`, and globals `g_sm_state_table`
+(flash 0x2B228), `g_sm_context` (0x20005950), `g_gap_adv_cfg` (0x20005290),
+`g_gap_adv_rand_addr` (0x20005AF8), `g_bond_addr_mode_strings` (0x200058E0),
+`g_bond_last_state` (0x200058DC), `g_buttonpress_log_enabled` (0x20005670),
+`g_ctype_table` (flash 0x29B2C). New public prototypes added to `bleware.h`.
+
+### Final open-items pass (2026-06)
+
+The remaining "open (small)" items were then decoded — 15 more functions /
+2 data tables, build still clean:
+
+| New/extended file | Items |
+| --- | --- |
+| `src/ble_connection.c` | `conn_phy_get_current` (0x22870), `conn_phy_set_requested` (0x228F0), `conn_phy_reapply` (0x22050) |
+| `src/audiotask.c` | `audio_player_stop_or_pause` (0x27630, veneer→0x26A68 = `ti_event_post`), `audiotask_kick` (0x237C8) |
+| `src/xs3_gap_adv.c` | `gap_adv_disable_set1` (0x24FE8), `gap_adv_disable_set2` (0x25010) |
+| `src/util.c` | `bytes_all_equal` (0x25BFE) + **`g_ctype_table` materialized** (257 bytes read verbatim from flash 0x29B2C) |
+| `src/state_machine.c` | **`g_sm_state_table` materialized** byte-exact (flash 0x2B228): 2 state records + transition lists at 0x2BB14 (1 entry) / 0x29EF8 (25 entries); handlers referenced by raw address (uncarved Thumb thunks) |
+| `src/bleware_printf.c` (new) | `bleware_snprintf` (0x22A30) — wraps the TI vsnprintf core `FUN_00000BC0` |
+| `src/monitor/monitor.c` (new) | **the elusive input parser, found & decoded**: `monitor_task_iteration` (0x13924, reads a line then calls `monitor_dispatch_loop`) + `monitor_readline` (0x9E84, the char-level console line editor) |
+
+`src/audio_stubs.c` and `src/packfs_stubs.c` are now retired (empty). The
+materialized `g_sm_state_table` / `g_ctype_table` were verified byte-exact
+against the OEM image. Weak placeholders in `hal_stubs.S` were trimmed to
+just the genuinely-undecoded callees (monitor console driver
+`monitor_console_read/_flush/_active/_tab_complete/_event_signal`, `strcpy`,
+`strlen`, and a few gap-adv/bond RAM globals).
+
+**Validation of the decoded code** (both decode passes — 61 OEM functions
+re-checked vs Ghidra, adversarially verified): **6 confirmed findings, all
+fixed**. Notably `state_machine_post`'s 4th argument was a fabricated
+"opaque tag" `0xE48F2A39` where the OEM stores `&sm_dispatch_event_callback`
+(0x2719D) — the queue-worker callback the bluetoothtask invokes to consume
+the posted message (a cross-cutting bug the new `sm_dispatch_event_callback`
+decode exposed); `bond_save_event_cb`'s status==3 path used a nonexistent
+4th argument instead of `has_data`; `bleware_snprintf` passed `&ap` where
+the formatting core wants the va-args pointer value; `pakfs` `total_base_sum`
+was at +0x64 instead of overlapping the scratch buffer at +0x5C;
+`monitor_readline` didn't reset the bare-ESC counter on non-ESC chars and
+recalled up-arrow history to the stale cursor instead of the buffer base.
+All other decoded functions validated clean.
+
+Of the 1477 functions in the live Ghidra database, ~179 are now decoded
+VanMoof-custom C in `src/`; the bulk of the remainder are TI SDK
+vendor-stock (out of scope).
+
+### Console driver, SM handlers & RAM-global pinning pass (2026-06)
+
+The three items left open by the previous pass are now closed; build stays
+clean (text 900 B, no warnings in touched files).
+
+**26 state-machine transition handlers** (`src/state_machine_handlers.c`,
+new): every handler the `g_sm_transitions_state0/_state1` tables point at is
+now decoded to faithful C, and the tables reference the real symbols
+(`sm_handler_ev00`..`sm_handler_ev24`) instead of raw address casts. They
+fall into two shapes — thin trampolines (adapt the arg, call one worker,
+return the `0x03000000` HANDLED sentinel) and a handful of real bodies
+(`ev05`/`ev06`/`ev0f`/`ev10`/`ev18`/`ev19`/`ev1a` — connection-param
+updates, the GATT-write relay, the auth-state transition at 0x1D7AC, etc.).
+Key ABI note documented in the file: the dispatcher invokes handlers with
+`r3` = the handler's own address (a `mov r3,r1; blx r3` artifact), so the
+dead `param_4` Ghidra surfaces is *not* a real argument; callees are given
+their true arities. `g_sm_context` was widened 4 → 0x10 bytes (handlers
+read a flag at +2 and three clock handles at +4/+8/+0xc). All 26 carved &
+named in Ghidra.
+
+**Console-device driver TU** (`src/monitor/console.c`, new):
+`monitor_console_read` (0x238A8), `monitor_console_flush` (0x255D4),
+`monitor_event_signal` (0x232B8), `monitor_console_active` (0x27742) —
+formerly weak no-ops. Plus the tab-completion helper, decoded into
+`monitor.c` under its OEM name **`monitor_predict_command`** (0xC948, the
+prior `monitor_tab_complete` placeholder name was wrong — OEM `__func__` is
+`monitor_predict_command`) with its common-prefix helper `monitor_match_len`
+(0x2621A). `strcpy` (0x26AF4) added to `runtime.c`. `strlen` is **ROM libc**
+(ROM 0x1002FDDA, reached via the import veneer at flash 0x28058) — now a ROM
+alias, not a no-op (a no-op returns 0 and would break up-arrow recall / tab
+completion). Uncovered in passing: `trng_fill_16` in hal_stubs.S is aliased
+to the *same* ROM thunk (0x1002FDDA), which is provably `strlen` — so
+`trng_fill_16`'s mapping is a pre-existing mislabel needing re-check.
+
+**RAM-global pinning** (`linker_cc2642r1.ld`): added an "OEM global address
+pins" block that places every decoded global with a confirmed OEM address
+at that address via absolute symbol assignment (overrides the weak
+`hal_stubs.S` placeholders cleanly — verified in the map). 23 symbols
+pinned (g_sm_context=0x20005950, g_gap_adv_cfg=0x20005290,
+g_ble_connection_table_storage=0x20004158, the console/heap/ssp/icall/notify
+bases, …). This is scaffolding: with `--gc-sections` the stub build drops
+everything that references them, so the pins don't change the 900-byte
+`.bin` — they carry the correct addresses for the day the code is rooted at
+OEM flash offsets (full byte-exactness additionally needs the TI SDK to
+materialise the ~85% vendor portion of the image). `g_sm_context`'s def in
+`state_machine.c` was made `weak` so the pin is authoritative even if that
+section survives GC.
+
+**Still open (future passes, not blocking):** globals whose OEM SRAM
+address is not yet known stay unpinned (weak BSS in `hal_stubs.S`:
+`g_oad_state`, `g_ti_tick_period_us`, the 8 `g_svc_*_mailbox_callback`
+slots, `g_timekeeper_state`, `g_lcg_state`, the M-Key struct fields, …);
+the SM handlers' undecoded leaf workers (`FUN_xxxx`, other TUs); and full
+byte-exact flash placement (needs the SDK). The deferred validation finding
+`ble_connection_count` (FUN_00026A7C — the connection-count query used by
+`sm_handler_ev05`) is still open.
 
 ### Decoded functions
 
