@@ -53,6 +53,10 @@ ${FLAG_13E}       0x2000013E      # "scheduler has driving work" latch
 ${DRIVE_DIR}      0x20000114      # 0x0F up / 0xF0 down / 0 idle
 ${STATE_115}      0x20000115      # current gear-position counter
 ${GPIOA_IDR}      0x48000008      # STM32F1-style GPIOA input data register
+${GPIOA_BSRR}     0x48000010      # GPIOA bit-set register (last set-mask written)
+${GPIOA_BRR}      0x48000014      # GPIOA bit-reset register (last clear-mask written)
+${PA9_MASK}       0x200           # 1 << 9  — motor H-bridge half A
+${PA10_MASK}      0x400           # 1 << 10 — motor H-bridge half B
 
 *** Keywords ***
 Create Leaf Machine
@@ -163,6 +167,27 @@ Process Rx Frame
     ...                validated buffer, verifies its CRC-16, and on success latches
     ...                G_REQ_PENDING and dispatches the PDU — all in a single call.
     Call Function    modbus_rx_poll
+
+Run Superloop With Shift Command
+    [Documentation]    End-to-end motor path: preload a Modbus cmd-0x5A shift command
+    ...                with the given target byte (0 = forward bank, 1 = reverse bank),
+    ...                then run the real `main` super-loop for a short window. main's
+    ...                modbus_rx_poll consumes the frame and latches G_5A_TARGET, and
+    ...                the very next motor_drive_step energises the H-bridge in that
+    ...                direction. SRAM is zero on a fresh machine (so this skips
+    ...                Reset_Handler and jumps straight to main — main does its own
+    ...                .data copy). The un-overridden SysTick handler (Default_Handler,
+    ...                a `b .` trap) is neutralised by a hook that performs the exception
+    ...                return, otherwise the first SysTick would wedge the loop.
+    [Arguments]    ${target}
+    Create App Machine
+    Inject Short Frame    0x20    0x5A    0x00    0x5A    0x00    ${target}
+    ${def}=    Resolve Symbol    Default_Handler
+    Execute Command    cpu AddHook ${def} "cpu.PC = cpu.LR"
+    ${main}=    Resolve Symbol    main
+    Execute Command    cpu SetRegister 13 ${STACKTOP}
+    Execute Command    cpu PC ${main}
+    Execute Command    emulation RunFor "0.02"
 
 Read Byte
     [Documentation]    Read a single SRAM byte and return it as an integer.
@@ -488,3 +513,39 @@ Command 0x95 Erases Staging And Enters Long-Frame Mode
     Process Rx Frame
     ${mode}=    Read Byte    ${RX_FRAME_MODE}
     Should Be Equal As Integers    ${mode}    1
+
+# --- Modbus → motor integration (real super-loop) ----------------------------
+# These boot the actual `main` super-loop and feed it a Modbus shift command, then
+# confirm the gear motor's H-bridge (PA9/PA10 on GPIOA, driven via BSRR/BRR) was
+# energised in the commanded direction — i.e. the command actually moved the motor.
+# motor_drive_step(G_5A_TARGET) maps target 0 → mask 0xF0 (PA9 high / PA10 low) and
+# target 1 → mask 0x0F (PA9 low / PA10 high); the residual BSRR/BRR values are the
+# last drive the H-bridge saw.
+
+Modbus Shift Command Moves The Motor Forward
+    [Documentation]    A cmd-0x5A shift command with target 0 must drive the H-bridge
+    ...                forward: PA9 set high (BSRR bit 9) and PA10 pulled low (BRR
+    ...                bit 10), with the motor-running latch raised. Proves the bus
+    ...                command propagates through the dispatcher into real motor motion.
+    Run Superloop With Shift Command    0x00
+    ${bsrr}=    Read Dword    ${GPIOA_BSRR}
+    ${brr}=     Read Dword    ${GPIOA_BRR}
+    Should Be Equal As Integers    ${bsrr}    ${PA9_MASK}
+    Should Be Equal As Integers    ${brr}     ${PA10_MASK}
+    ${running}=    Read Byte    ${MOTOR_RUNNING}
+    Should Be Equal As Integers    ${running}    1
+
+Modbus Shift Command Moves The Motor Reverse
+    [Documentation]    The same command with target 1 must drive the H-bridge the other
+    ...                way: PA10 set high (BSRR bit 10) and PA9 pulled low (BRR bit 9).
+    ...                Because the cold-boot default target is 0 (forward), seeing the
+    ...                *reverse* pattern proves the dispatcher actually consumed the
+    ...                command — a bad/ignored frame would have left the motor going
+    ...                forward.
+    Run Superloop With Shift Command    0x01
+    ${bsrr}=    Read Dword    ${GPIOA_BSRR}
+    ${brr}=     Read Dword    ${GPIOA_BRR}
+    Should Be Equal As Integers    ${bsrr}    ${PA10_MASK}
+    Should Be Equal As Integers    ${brr}     ${PA9_MASK}
+    ${running}=    Read Byte    ${MOTOR_RUNNING}
+    Should Be Equal As Integers    ${running}    1
