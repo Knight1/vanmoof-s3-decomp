@@ -189,6 +189,48 @@ int ble_conn_state_byte(uint32_t conn, uint8_t *out_byte)
     return rc;
 }
 
+/* Store a 16-bit value at connection-record offset 0x54. Same accessor
+ * template. The state machine writes the per-connection request value here
+ * (see sm_handler_ev10) before signalling the SSP fetch. The exact field
+ * meaning is not yet pinned down, so it is named by offset. Returns 0 on
+ * success, -1 if conn doesn't match. OEM @ 0x0002309C. */
+int ble_connection_set_field54(uint32_t conn, uint16_t value)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *(uint16_t *)((uint8_t *)e + 0x54) = value;
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}
+
+/* Store two 32-bit words (the first 8 bytes of the SM event payload) at
+ * connection-record offsets 0x6C and 0x70. Same accessor template; offset-
+ * named pending field-meaning identification. Returns 0 on success, -1 if
+ * conn doesn't match. OEM @ 0x0002168C. */
+int ble_connection_set_field6c(uint32_t conn, const uint32_t *words2)
+{
+    struct ble_connection_state *e = &g_ble_connection_table[conn];
+    int rc;
+
+    ti_semaphore_pend(e->sem, SEM_TIMEOUT_FOREVER);
+    if (conn == e->conn_handle) {
+        *(uint32_t *)((uint8_t *)e + 0x6C) = words2[0];
+        *(uint32_t *)((uint8_t *)e + 0x70) = words2[1];
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+    ti_semaphore_post(e->sem);
+    return rc;
+}
+
 int ble_connection_set_session_key(uint32_t conn, const void *key_16)
 {
     struct ble_connection_state *e = &g_ble_connection_table[conn];

@@ -5,6 +5,10 @@
  *   system_state_save()        @ 0x00026FF4 — LED off (DIO 0xD low)
  *   system_power_down()        @ 0x0001D404 — AON sleep-deep sequence
  *   system_software_reset()    @ 0x0001F7F8 — same as firmware_abort
+ *
+ * (The LED-ON complement at 0x00027004 lives in protocols/ssp.c as
+ *  `ble_activity_led_pulse` — same gpio_write(ctx, 0xD, 1) — so it is not
+ *  duplicated here.)
  */
 
 #include <stdint.h>
@@ -31,5 +35,6 @@ int system_power_down(int unused1, int unused2)
 
 void system_software_reset(void)
 {
+    extern void firmware_abort(void);   /* @ 0x0001F7F8 */
     firmware_abort();
 }

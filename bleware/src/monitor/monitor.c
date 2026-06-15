@@ -344,8 +344,9 @@ static int monitor_match_len(const char *a, const char *b)
  * with the `typed_len` bytes already in `line`:
  *
  *   0 matches  -> return 0, `line` untouched.
- *   1 match    -> append the rest of that command's name, echo it ("%s"),
- *                 return the number of characters appended.
+ *   1 match    -> append the rest of that command's name, echo just that
+ *                 appended suffix ("%s" of line + typed_len), and return
+ *                 the number of characters appended.
  *   >1 matches -> list the candidates in columns (one "%-20s " each, with
  *                 a newline every fourth), append the longest common
  *                 prefix they share, re-emit the "\r\n> %s" prompt, and
@@ -404,11 +405,13 @@ static int monitor_predict_command(char *line, int typed_len)
 
     int appended = 0;
     if (matches == 1) {
-        /* unique completion: append the remainder of the command name */
+        /* unique completion: append the remainder of the command name and
+         * echo only that appended suffix (the OEM prints line + typed_len,
+         * not the whole line — r6 = line+typed_len at the 0xFE log site). */
         strcpy(line + typed_len, best + typed_len);
         appended = strlen(best + typed_len);
         line[typed_len + appended] = '\0';
-        monitor_log(MON_FILE, 0xFE, MON_FN_PREDICT, 8, "%s", line);
+        monitor_log(MON_FILE, 0xFE, MON_FN_PREDICT, 8, "%s", line + typed_len);
     } else if (matches >= 2) {
         /* ambiguous: complete up to the longest common prefix */
         best[common] = '\0';
