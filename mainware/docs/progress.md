@@ -240,6 +240,16 @@ boundaries `HAL_RTC_SetTime`/`SetDate` (`0x08022F44`/`0x08023042`, rtc.c) + the 
 
 ## Per-module decomp log
 
+- **Version diff 1.07.06 → 1.08.02 documented (batteryware-style).** Imported the next OEM
+  release (`mainware_1.08.02.bin`, +1360 B, May 2022) fresh into Ghidra `/diff/` @0x08020000 and ran a
+  function-level diff (position-independent body-hash + fuzzy match + per-function `diff_functions`; survey +
+  4 deep-dives, adversarially verified). **539/836 named bodies byte-identical**; 167 changed (158 genuine).
+  Three user-visible features: **off-road region REMOVED from the BLE control surface** (off-road sentinel
+  0xFF now → EU, restriction message/branch deleted), the **`gear` console cmd repurposed** from a
+  SOC-override into a real shifter driver (0=off, 99=reset SM), and the **wake-reason taxonomy expanded
+  9→13 + a new wake counter**. Docs: `changelog-1.07.06-to-1.08.02.md` + `compare-1.07.06/` (README +
+  wake.md/gear.md/region.md). `src/` reconstructs 1.07.06 (the "before" side).
+
 - **`flash_read_config_with_crc_restore` SOURCED + SMS remote-control documented + 9 more validated — all PASS.**
   The 4th deferred named-extern is now reconstructed (**PASS-verified**, build clean **text 1996**):
   `flash_read_config_with_crc_restore` → flash.c (`0x08031784`, the config-*load* twin of
