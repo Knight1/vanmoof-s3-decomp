@@ -2,21 +2,17 @@
  * machine (src/state_machine_handlers.c) that were previously referenced by
  * raw OEM address.
  *
- * Only the helpers whose entire call graph resolves to already-decoded /
- * unambiguous symbols are decoded here. Several sibling helpers
- * (FUN_00025400, FUN_00023800, FUN_00026FC4, FUN_000211F8, FUN_0002200C,
- * and the large xs3_app functions) call two shared primitives that the
- * existing tree appears to mislabel, so they are deferred until those are
- * reconciled:
+ * Two shared primitives these reach were investigated against the SimpleLink
+ * SDK 3.40 cc26x2v2 golden ROM symbol table (docs/rom-thunk-audit.md):
  *
- *   - 0x0001AC6C — decoded as `log_emit_v` (variadic logger) in
- *     src/log_emit.c, but the body is a *generic* ICall synchronous
- *     service request (type-0x14 envelope -> send to service `param_1`
- *     -> wait 1000 ms -> return the reply word). The connection-count and
- *     GAP-state paths call it as a request, not a log.
- *   - 0x00020098 — defined as `oad_state_lock` (Semaphore_pend) in
- *     src/oad.c, but the body is a clock-set-period helper (Clock_setTimeout
- *     in ticks, then restart) called by the SM clock-arm path.
+ *   - 0x0001AC6C (`log_emit_v`) is the generic ICall synchronous service
+ *     request/reply helper (type-0x14 envelope -> send to service `param_1`
+ *     -> wait 1000 ms -> return reply). Not a mislabel; the tree already uses
+ *     it for GAP commands and bond reads as well as logging.
+ *   - 0x00020098 (decoded as `oad_state_lock`) is actually a Clock-reconfigure
+ *     helper (Clock_stop/Clock_setTimeout/Clock_setPeriod/Clock_start) — the
+ *     "Semaphore_pend/HwiP" framing in oad.c IS a mislabel (SDK-confirmed). It
+ *     is referenced here by its existing symbol pending an oad.c re-validation.
  *
  * The OEM source file for these helpers is not recoverable from the binary
  * (they emit no log/__func__ strings); they are grouped here by role.
@@ -37,14 +33,15 @@ extern void ssp_signal_fetch(uint16_t cmd_id);                         /* FUN_00
  * `service_id`, wait for the reply, return the reply word. FUN_0001AC6C. */
 extern uint32_t log_emit_v(uint32_t service_id, const void *payload, ...);
 
-/* TI-RTOS Clock primitives. 0x20098 sets the period (ms→ticks, Hwi-guarded)
- * and 0x27D50 / 0x27BE0 start / stop the Clock object. NOTE: 0x20098 carries
- * the existing-tree name `oad_state_lock` (oad.c models it as a timed
- * Semaphore_pend); in this SM one-shot-timer context it behaves as
- * Clock_setTimeout. The exact ROM-thunk identity (Clock_* vs Semaphore/Hwi)
- * is unconfirmed pending the TI SimpleLink ROM map — see progress.md. */
-extern void oad_state_lock(void *handle, int period_ms);  /* FUN_00020098 (== set-period here) */
-extern void clock_start(void *handle);                    /* @ 0x00027D50 (ROM thunk veneer) */
+/* TI-RTOS Clock primitives. RESOLVED via the SDK 3.40 cc26x2v2 golden ROM
+ * symbol table (docs/rom-thunk-audit.md): 0x20098 is a Clock-reconfigure
+ * helper (Clock_stop?/Clock_setTimeout/Clock_setPeriod/Clock_start), and the
+ * veneers 0x27D50 / 0x27BE0 are Clock_start (0x1002E9E6) / Clock_stop
+ * (0x1002E2C4). The existing-tree name `oad_state_lock` for 0x20098 is a
+ * confirmed mislabel (kept for now — oad.c also Semaphore_post()s the handle
+ * it passes, an unresolved clock-vs-semaphore tangle needing Ghidra). */
+extern void oad_state_lock(void *handle, int period_ms);  /* FUN_00020098 = clock-reconfigure */
+extern void clock_start(void *handle);                    /* @ 0x00027D50 → Clock_start */
 
 /* Connection-presence bitmask: the variable at 0x00026924 points at a
  * 32-bit word whose bit N is set while link/handle N is up. */
@@ -78,11 +75,10 @@ void module_cmd_fa_clear(void)
 /* Stop a TI-RTOS Clock object and free the argument block it was carrying.
  * The clock stores its callback argument at handle+0x1C; on disarm the OEM
  * stops the clock, frees that block (if any), and clears the slot. Returns 0.
- * OEM @ 0x000261B2. (Its arm counterpart, 0x00025F8C, calls the
- * apparently-mislabeled 0x00020098 and is deferred — see file header.) */
+ * OEM @ 0x000261B2. (Arm counterpart: clock_arm, 0x00025F8C.) */
 int clock_disarm(void *clock_handle)
 {
-    extern void clock_stop(void *handle);   /* @ 0x00027BE0 — ROM Clock_stop veneer */
+    extern void clock_stop(void *handle);   /* @ 0x00027BE0 → Clock_stop (0x1002E2C4) */
     extern void heap_free(void *p);         /* FUN_00021B88 */
 
     if (clock_handle != NULL) {

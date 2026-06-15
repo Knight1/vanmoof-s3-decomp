@@ -100,7 +100,9 @@ extern void     monitor_log(const char *file, int line, uint32_t logger,
 extern void     ti_semaphore_post(uint32_t handle);
 /* TI-RTOS Semaphore_pend; ROM thunk alias (0x1002BFB0). Returns 1 on take. */
 extern int      ti_semaphore_pend(uint32_t handle, uint32_t timeout_ticks);
-/* TI-RTOS HwiP_disable; ROM thunk (0x1002E2C4). */
+/* TI-RTOS Clock_stop; ROM thunk (0x1002E2C4). NOTE: earlier labelled
+ * "HwiP_disable" — corrected via the SDK 3.40 cc26x2v2 golden ROM symbol
+ * table (see docs/rom-thunk-audit.md). */
 extern void     thunk_FUN_1002e2c4(uint32_t handle);
 
 /* TI-RTOS tick-period in microseconds; OEM `*PTR_DAT_0000BA50`. */
@@ -293,34 +295,43 @@ int oad_gatt_write_handler(uint32_t       conn_handle,
     return 0;
 }
 
-/* Acquire the OAD session lock semaphore. Converts `timeout_ms` to
- * TI-RTOS ticks (using the global tick period), disables Hwi if
- * privilege permits, calls Semaphore_pend, restores Hwi. OEM @ 0x00020098. */
+/* Reconfigure a TI-RTOS Clock object's timeout to `timeout_ms` (converted to
+ * ticks): if the clock is active, Clock_stop it, Clock_setTimeout + set its
+ * period, then Clock_start it. OEM @ 0x00020098.
+ *
+ * NOTE: the name `oad_state_lock` and the "Semaphore_pend/HwiP" framing are a
+ * mislabel — the SDK 3.40 cc26x2v2 golden ROM symbol table proves the three
+ * thunks are Clock_stop/Clock_setTimeout/Clock_start (see
+ * docs/rom-thunk-audit.md). The same helper is the one clock_arm/
+ * advert_keepalive_pulse call. The symbol is kept for now because oad.c's
+ * metadata-write path also Semaphore_post()s the `+0x04` handle it passes
+ * here (oad.c:~144) — a clock-vs-semaphore contradiction that needs a Ghidra
+ * re-validation of the OAD session model before this is renamed/restructured. */
 int oad_state_lock(uint32_t lock_handle, int timeout_ms)
 {
     extern uint32_t  *g_tick_period_ptr;     /* DAT_000200E8 = 0x0002BB88 → 10 µs */
-    extern int        FUN_00027766(void);
-    extern void       FUN_0002776a(uint32_t, uint32_t);
-    extern int        thunk_FUN_1002ecc2(uint32_t, uint32_t);
-    extern void       thunk_FUN_1002e2c4(uint32_t);
-    extern void       thunk_FUN_1002e9e6(uint32_t);
+    extern int        FUN_00027766(void);                /* guard: clock active? (arg unconfirmed) */
+    extern void       FUN_0002776a(uint32_t, uint32_t);  /* Clock_setPeriod (companion) */
+    extern int        thunk_FUN_1002ecc2(uint32_t, uint32_t);  /* Clock_setTimeout (0x1002ECC2) */
+    extern void       thunk_FUN_1002e2c4(uint32_t);            /* Clock_stop       (0x1002E2C4) */
+    extern void       thunk_FUN_1002e9e6(uint32_t);            /* Clock_start      (0x1002E9E6) */
     uint32_t           tick_us;
     uint32_t           timeout_ticks;
-    int                was_privileged;
+    int                was_active;
 
-    was_privileged = FUN_00027766();   /* check if in privileged/Hwi-disabled mode */
-    if (was_privileged != 0) {
-        thunk_FUN_1002e2c4(lock_handle);
+    was_active = FUN_00027766();              /* clock currently running? */
+    if (was_active != 0) {
+        thunk_FUN_1002e2c4(lock_handle);      /* Clock_stop */
     }
 
     tick_us       = *g_tick_period_ptr;
     timeout_ticks = (uint32_t)timeout_ms * (1000u / tick_us);
 
-    thunk_FUN_1002ecc2(lock_handle, timeout_ticks);
-    FUN_0002776a(lock_handle, timeout_ticks);  /* post-pend hook */
+    thunk_FUN_1002ecc2(lock_handle, timeout_ticks);  /* Clock_setTimeout */
+    FUN_0002776a(lock_handle, timeout_ticks);        /* Clock_setPeriod */
 
-    if (was_privileged != 0) {
-        thunk_FUN_1002e9e6(lock_handle);
+    if (was_active != 0) {
+        thunk_FUN_1002e9e6(lock_handle);      /* Clock_start */
     }
     return 1;
 }
@@ -337,12 +348,16 @@ void bleware_control_event_post(uint32_t status)
 }
 
 /* Tear down the OAD session: probes the SESSION semaphore (+0x08, 0 ms
- * timeout); if it was free, disables Hwi (via the +0x04 lock handle) and
- * sets conn_handle to 0xFFFF (idle); then posts the SESSION semaphore.
+ * timeout); if it was free, Clock_stop()s the +0x04 handle and sets
+ * conn_handle to 0xFFFF (idle); then posts the SESSION semaphore.
  * OEM @ 0x00025060.
  *
- * OEM uses TWO distinct handles: pend/post on +0x08 (session_handle),
- * HwiP_disable on +0x04 (lock_handle). */
+ * OEM uses TWO handles: pend/post on +0x08 (session_handle, a Semaphore),
+ * and 0x1002E2C4 = Clock_stop on +0x04 (NOT HwiP_disable — SDK-confirmed).
+ * NOTE: the metadata-write path (above) instead treats +0x04 as a Semaphore
+ * (Semaphore_post) right after the clock-reconfigure call — an unresolved
+ * clock-vs-semaphore contradiction in the OAD model, flagged for a Ghidra
+ * re-validation (see docs/rom-thunk-audit.md). */
 void oad_session_close(void)
 {
     extern struct oad_state *g_oad_conn_handle; /* DAT_00025084 → struct base */
@@ -351,7 +366,7 @@ void oad_session_close(void)
 
     rc = ti_semaphore_pend(st->session_handle, 0);   /* pend sem at +0x08 */
     if (rc == 0) {
-        thunk_FUN_1002e2c4(st->lock_handle);         /* HwiP_disable on +0x04 */
+        thunk_FUN_1002e2c4(st->lock_handle);         /* Clock_stop on +0x04 */
         st->conn_handle = 0xFFFFu;
     }
     ti_semaphore_post(st->session_handle);           /* post sem at +0x08 */

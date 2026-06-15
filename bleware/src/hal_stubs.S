@@ -164,10 +164,14 @@ g_mkey_owning_struct_field3C:
 
     /* WEAK_NOOP(FUN_00027766) -- now strong */
     /* WEAK_NOOP(FUN_0002776a) -- now strong */
-/* ROM Semaphore thunks used by oad_state_lock / oad_session_close:
- * thunk_EXT_FUN_1002ecc2 = SemaphoreP_pend (with owner tracking?)
- * thunk_EXT_FUN_1002e2c4 = HwiP_disable
- * thunk_EXT_FUN_1002e9e6 = HwiP_restore */
+/* ROM Clock thunks (CONFIRMED via SimpleLink SDK 3.40 cc26x2v2 golden ROM
+ * symbol table — NOT Semaphore/Hwi as earlier guessed):
+ * thunk_EXT_FUN_1002ecc2 = ti_sysbios_knl_Clock_setTimeout  (0x1002ECC2)
+ * thunk_EXT_FUN_1002e2c4 = ti_sysbios_knl_Clock_stop        (0x1002E2C4)
+ * thunk_EXT_FUN_1002e9e6 = ti_sysbios_knl_Clock_start       (0x1002E9E6)
+ * Used by the clock-reconfigure helper at 0x20098 (decoded as `oad_state_lock`
+ * — itself a mislabel) and by clock_arm/clock_disarm/advert_keepalive_pulse.
+ * See docs/rom-thunk-audit.md. */
     /* WEAK_NOOP(thunk_FUN_1002ecc2) -- now ROM alias */
     /* WEAK_NOOP(thunk_FUN_1002e2c4) -- now ROM alias */
     /* WEAK_NOOP(thunk_FUN_1002e9e6) -- now ROM alias */
