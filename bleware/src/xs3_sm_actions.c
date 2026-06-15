@@ -27,8 +27,24 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* ---- already-decoded callees (other TUs) --------------------------- */
+/* ---- already-decoded / shared callees (other TUs) ------------------ */
 extern int module_forward_async(uint32_t cmd_id, uint8_t byte_value);  /* FUN_00024508, ssp.c */
+extern void ssp_signal_fetch(uint16_t cmd_id);                         /* FUN_00025B04, ssp.c */
+
+/* Generic TI-BLE-stack ICall synchronous request/reply helper (the same
+ * primitive log_emit.c/xs3_gap_adv.c/xs3_bond.c use): send a type-0x14
+ * message carrying `payload` + up to two inline args to ICall service
+ * `service_id`, wait for the reply, return the reply word. FUN_0001AC6C. */
+extern uint32_t log_emit_v(uint32_t service_id, const void *payload, ...);
+
+/* TI-RTOS Clock primitives. 0x20098 sets the period (ms→ticks, Hwi-guarded)
+ * and 0x27D50 / 0x27BE0 start / stop the Clock object. NOTE: 0x20098 carries
+ * the existing-tree name `oad_state_lock` (oad.c models it as a timed
+ * Semaphore_pend); in this SM one-shot-timer context it behaves as
+ * Clock_setTimeout. The exact ROM-thunk identity (Clock_* vs Semaphore/Hwi)
+ * is unconfirmed pending the TI SimpleLink ROM map — see progress.md. */
+extern void oad_state_lock(void *handle, int period_ms);  /* FUN_00020098 (== set-period here) */
+extern void clock_start(void *handle);                    /* @ 0x00027D50 (ROM thunk veneer) */
 
 /* Connection-presence bitmask: the variable at 0x00026924 points at a
  * 32-bit word whose bit N is set while link/handle N is up. */
@@ -93,4 +109,94 @@ void oad_close_for_conn(uint16_t conn)
         bleware_control_event_post(0x15);
         oad_session_close();
     }
+}
+
+/* Arm a one-shot TI-RTOS timer: set its period (ms), stash the (heap-owned)
+ * callback argument at handle+0x1C — freed by clock_disarm — and start it.
+ * Returns 0, or 1 if the handle is NULL. OEM @ 0x00025F8C. */
+int clock_arm(uint32_t clock_handle, int period_ms, void *arg)
+{
+    void *h = (void *)(uintptr_t)clock_handle;
+    if (h == NULL) {
+        return 1;
+    }
+    oad_state_lock(h, period_ms);   /* 0x20098 — set-period (see note above) */
+    *(void *volatile *)((uint8_t *)h + 0x1c) = arg;
+    clock_start(h);
+    return 0;
+}
+
+/* GAP advertising "force" state set: when `flag` differs from the cached state
+ * byte (state+3), push GAP stack command 0x10A, then cache it. OEM @ 0x00023800. */
+void gap_adv_state_set(int flag)
+{
+    extern uint8_t        *g_gap_adv2_state;    /* DAT_00023830 (record ptr) */
+    extern const uint8_t   g_gap_cmd_10a_desc[];/* DAT_00023834 */
+    uint8_t local = (uint8_t)flag;
+
+    if ((char)local != (char)g_gap_adv2_state[3]) {
+        log_emit_v(0x10, g_gap_cmd_10a_desc, 0x10a, 1, &local);
+    }
+    g_gap_adv2_state[3] = local;
+}
+
+/* Issue GAP stack command 0x409 (no args). Returns 0 on success, -1 if the
+ * ICall request failed. OEM @ 0x00025400. */
+int gap_terminate_request(void)
+{
+    extern const uint8_t g_gap_cmd_409_desc[];   /* DAT_00025420 */
+    return log_emit_v(0x10, g_gap_cmd_409_desc, 0x409, 0) == 0 ? 0 : -1;
+}
+
+/* Post GAP stack command 0x13 (a per-connection link/notify failure signal)
+ * for `conn`. OEM @ 0x00026FC4. */
+void ble_post_link_error(uint16_t conn)
+{
+    extern const uint8_t g_gap_cmd_13_desc[];   /* DAT_00026FD0 */
+    log_emit_v(0x10, g_gap_cmd_13_desc, conn, 0x13);
+}
+
+/* Advertising keep-alive gate. On an event whose byte has bit 2 set, and only
+ * while the gate is idle (record+0 == 0), (re)start a 500 ms keep-alive timer
+ * on the record's clock (record+0xC), bump the counter (record+8), and on the
+ * first pulse poke SSP cmd 0x5521. Returns the running count / the event's
+ * high bits. OEM @ 0x0002200C. */
+uint32_t advert_keepalive_pulse(const uint8_t *ev)
+{
+    extern uint8_t *g_advert_gate;    /* DAT_00022048: +0 active, +8 counter, +0xC clock */
+    extern uint8_t *g_advert_other;   /* DAT_0002204C */
+    uint32_t v = ev[0] >> 3;
+
+    if ((ev[0] >> 2) & 1) {
+        v = *(uint32_t *)(g_advert_gate + 8);
+        if (g_advert_gate[0] == 0) {
+            if (v == 0) {
+                *g_advert_other = 0xff;
+                ssp_signal_fetch(0x5521);
+                v = *(uint32_t *)(g_advert_gate + 8);
+            }
+            *(uint32_t *)(g_advert_gate + 8) = v + 1;
+            oad_state_lock(*(void **)(g_advert_gate + 0xc), 500);
+            clock_start(*(void **)(g_advert_gate + 0xc));
+            v = 1;
+            g_advert_gate[0] = 1;
+        }
+    }
+    return v;
+}
+
+/* Event-payload helper used by sm_handler_ev03: when the event byte has bit 2
+ * set, clear the global one-byte ack flag and return its address; otherwise
+ * return the event byte's high bits. The sole caller discards the result.
+ * OEM @ 0x00026A40. */
+uint8_t *event_payload_ack(uint8_t *ev)
+{
+    extern uint8_t *g_event_ack_flag;   /* DAT_00026A50 */
+    uint8_t *result = (uint8_t *)(uintptr_t)(ev[0] >> 3);
+
+    if ((ev[0] >> 2) & 1) {
+        *g_event_ack_flag = 0;
+        result = g_event_ack_flag;
+    }
+    return result;
 }

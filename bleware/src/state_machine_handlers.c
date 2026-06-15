@@ -72,24 +72,23 @@ extern void module_cmd_fa_set(void);                      /* FUN_000275A8, xs3_s
 extern void module_cmd_fa_clear(void);                    /* FUN_000275B0, xs3_sm_actions.c */
 extern int  clock_disarm(void *clock_handle);             /* FUN_000261B2, xs3_sm_actions.c */
 extern void oad_close_for_conn(uint16_t conn);            /* FUN_000254B4, xs3_sm_actions.c */
+extern int  clock_arm(uint32_t clock_handle, int period_ms, void *arg);  /* FUN_00025F8C, xs3_sm_actions.c */
+extern uint32_t advert_keepalive_pulse(const uint8_t *ev);/* FUN_0002200C, xs3_sm_actions.c */
+extern uint8_t *event_payload_ack(uint8_t *ev);           /* FUN_00026A40, xs3_sm_actions.c */
+extern void gap_adv_state_set(int flag);                  /* FUN_00023800, xs3_sm_actions.c */
+extern int  gap_terminate_request(void);                  /* FUN_00025400, xs3_sm_actions.c */
+extern void ble_post_link_error(uint16_t conn);           /* FUN_00026FC4, xs3_sm_actions.c */
+extern int  ble_connection_param_update_request(uint16_t conn, uint16_t latency,
+                uint16_t timeout, uint32_t interval, uint16_t interval_dup); /* FUN_000211F8, ble_connection.c */
 /* gap_adv_apply_set1 (0x12EB0), xs3_gatt_process_write_event (0x4DB0),
  * monitor_alloc (0x13470) are declared in bleware.h. */
 
-/* ---- Still-undecoded leaf callees (signatures from the call sites) ----
- * The five below plus the four large xs3_app functions all reach the two
- * mislabeled shared primitives (ICall sync-request 0x1AC6C / clock-set-period
- * 0x20098); they are decoded once those are reconciled. See progress.md. */
-extern void FUN_0000a458(void);
-extern void FUN_0000a81c(void);
-extern void FUN_00009274(void *payload);
-extern void FUN_00014ee4(uint16_t v);
-extern void FUN_0002200c(void *payload);
-extern void FUN_00023800(int v);
-extern void FUN_00025400(void);
-extern void FUN_00025f8c(uint32_t clock_handle, int period_ms, void *arg);
-extern void FUN_000211f8(int conn, uint16_t a, uint16_t b, uint32_t c, uint16_t d);
-extern void FUN_00026a40(void *payload);
-extern void FUN_00026fc4(uint16_t v);
+/* ---- The four large xs3_app functions (decoded in xs3_app.c; their own
+ * leaf subgraphs are the current extern frontier there) ---------------- */
+extern void app_boot_event_handler(void);             /* FUN_0000A458 (OEM __func__) */
+extern void platform_tick_handler(void);              /* FUN_0000A81C (OEM __func__) */
+extern void xs3_app_dispatch_command(uint16_t *msg);  /* FUN_00009274 (no __func__ recovered) */
+extern void handle_ssp_request_event(uint16_t cmd);   /* FUN_00014EE4 (OEM __func__) */
 
 /* ===================================================================
  * State 0 — the single transition
@@ -99,8 +98,8 @@ extern void FUN_00026fc4(uint16_t v);
  * 1000 ms clock stored at g_sm_context + 8. */
 uint32_t sm_handler_ev00(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_0000a458();
-    FUN_00025f8c(*(volatile uint32_t *)(g_sm_context + 8), 1000, NULL);
+    app_boot_event_handler();
+    clock_arm(*(volatile uint32_t *)(g_sm_context + 8), 1000, NULL);
     return SM_HANDLED;
 }
 
@@ -111,21 +110,21 @@ uint32_t sm_handler_ev00(uint32_t event_id, const void *payload, uint32_t len)
 /* event 0x01 — OEM 0x00027424. */
 uint32_t sm_handler_ev01(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_0000a81c();
+    platform_tick_handler();
     return SM_HANDLED;
 }
 
 /* event 0x02 — OEM 0x00027164. */
 uint32_t sm_handler_ev02(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_0002200c((void *)payload);
+    advert_keepalive_pulse((const uint8_t *)payload);
     return SM_HANDLED;
 }
 
 /* event 0x03 — OEM 0x00027172. */
 uint32_t sm_handler_ev03(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_00026a40((void *)payload);
+    event_payload_ack((uint8_t *)payload);
     return SM_HANDLED;
 }
 
@@ -162,7 +161,7 @@ uint32_t sm_handler_ev06(uint32_t event_id, const void *payload, uint32_t len)
 uint32_t sm_handler_ev0f(uint32_t event_id, const void *payload, uint32_t len)
 {
     if (xs3_gatt_process_write_event((struct gatt_write_event *)payload) < 0) {
-        FUN_00026fc4(*(const uint16_t *)((const uint8_t *)payload + 2));
+        ble_post_link_error(*(const uint16_t *)((const uint8_t *)payload + 2));
     }
     return SM_HANDLED;
 }
@@ -243,14 +242,14 @@ uint32_t sm_handler_ev18(uint32_t event_id, const void *payload, uint32_t len)
 
     if (is_peer_connected() == 0) {
         ble_activity_led_pulse();
-        FUN_00025f8c(*(volatile uint32_t *)(g_sm_context + 4), 200, NULL);
+        clock_arm(*(volatile uint32_t *)(g_sm_context + 4), 200, NULL);
     } else {
         bleware_control_event_post(0x1b);
     }
 
     module_cmd_fa_set();
     gap_adv_disable_set2();
-    FUN_00023800(0);
+    gap_adv_state_set(0);
     if (ble_authenticated_connection_count() > 0) {
         gap_adv_disable_set1();
     }
@@ -259,7 +258,7 @@ uint32_t sm_handler_ev18(uint32_t event_id, const void *payload, uint32_t len)
     if (evt_copy != NULL) {
         *evt_copy = *(const uint16_t *)payload;
         clock_disarm((void *)(uintptr_t)auth_clock);
-        FUN_00025f8c(*(volatile uint32_t *)(g_sm_context + 0xc), 0x1d4c, evt_copy);
+        clock_arm(*(volatile uint32_t *)(g_sm_context + 0xc), 0x1d4c, evt_copy);
     }
     return SM_HANDLED;
 }
@@ -289,7 +288,8 @@ uint32_t sm_handler_ev1a(uint32_t event_id, const void *payload, uint32_t len)
     uint32_t interval = 0;
 
     ble_connection_params(conn, (uint16_t *)&interval, NULL, NULL);
-    FUN_000211f8(conn, 0, 200, interval & 0xffff, (uint16_t)(interval & 0xffff));
+    ble_connection_param_update_request(conn, 0, 200, interval & 0xffff,
+                                        (uint16_t)(interval & 0xffff));
     return SM_HANDLED;
 }
 
@@ -303,14 +303,14 @@ uint32_t sm_handler_ev1b(uint32_t event_id, const void *payload, uint32_t len)
 /* event 0x1c — OEM 0x000271C6. */
 uint32_t sm_handler_ev1c(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_00014ee4(*(const uint16_t *)payload);
+    handle_ssp_request_event(*(const uint16_t *)payload);
     return SM_HANDLED;
 }
 
 /* event 0x1d — OEM 0x000271B8. */
 uint32_t sm_handler_ev1d(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_00009274((void *)payload);
+    xs3_app_dispatch_command((uint16_t *)payload);
     return SM_HANDLED;
 }
 
@@ -335,7 +335,7 @@ uint32_t sm_handler_ev1f(uint32_t event_id, const void *payload, uint32_t len)
 /* event 0x20 — OEM 0x000273C4. */
 uint32_t sm_handler_ev20(uint32_t event_id, const void *payload, uint32_t len)
 {
-    FUN_00025400();
+    gap_terminate_request();
     return SM_HANDLED;
 }
 

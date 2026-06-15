@@ -231,6 +231,52 @@ int ble_connection_set_field6c(uint32_t conn, const uint32_t *words2)
     return rc;
 }
 
+/* Request a connection-parameter update for `conn`. Builds the param-update
+ * request (conn, interval ×2, latency, timeout) on the stack and issues it via
+ * the generic ICall request helper to the GAP service. If the stack replies
+ * 0x11 (update must be re-issued asynchronously), a 12-byte message carrying
+ * the conn handle is allocated and posted to the worker queue. Returns the
+ * ICall/queue status (the sole caller, sm_handler_ev1a, discards it).
+ * OEM @ 0x000211F8. Field semantics (latency/timeout) are inferred from the
+ * standard BLE connection-parameter layout. */
+int ble_connection_param_update_request(uint16_t conn, uint16_t latency,
+                                        uint16_t timeout, uint32_t interval,
+                                        uint16_t interval_dup)
+{
+    /* log_emit_v (FUN_0001AC6C, generic ICall request) and monitor_alloc
+     * (FUN_00013470) are declared in bleware.h. */
+    extern const uint8_t g_conn_param_update_desc[];   /* DAT_0002123C */
+    extern int        task_queue_post(const void *q, void **msg);  /* FUN_00025126 */
+    extern const void *g_conn_param_update_queue;      /* DAT_00021240 */
+
+    struct {
+        uint16_t conn;          /* +0x00 */
+        uint16_t interval;      /* +0x02 */
+        uint16_t interval_dup;  /* +0x04 */
+        uint16_t latency;       /* +0x06 */
+        uint16_t timeout;       /* +0x08 */
+        uint16_t interval_hi;   /* +0x0A */
+    } req;
+
+    req.conn         = conn;
+    req.interval     = (uint16_t)interval;
+    req.interval_dup = interval_dup;
+    req.latency      = latency;
+    req.timeout      = timeout;
+    req.interval_hi  = (uint16_t)(interval >> 16);
+
+    uint8_t reply = (uint8_t)log_emit_v(0x10, (const char *)g_conn_param_update_desc, &req);
+    if (reply == 0x11) {
+        void *msg = monitor_alloc(0xc);
+        if (msg == NULL) {
+            return 0;
+        }
+        *(uint16_t *)((uint8_t *)msg + 8) = conn;
+        return task_queue_post(g_conn_param_update_queue, &msg);
+    }
+    return 0;
+}
+
 int ble_connection_set_session_key(uint32_t conn, const void *key_16)
 {
     struct ble_connection_state *e = &g_ble_connection_table[conn];

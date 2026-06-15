@@ -240,9 +240,156 @@ address is not yet known stay unpinned (weak BSS in `hal_stubs.S`:
 `g_oad_state`, `g_ti_tick_period_us`, the 8 `g_svc_*_mailbox_callback`
 slots, `g_timekeeper_state`, `g_lcg_state`, the M-Key struct fields, …);
 the SM handlers' undecoded leaf workers (`FUN_xxxx`, other TUs); and full
-byte-exact flash placement (needs the SDK). The deferred validation finding
-`ble_connection_count` (FUN_00026A7C — the connection-count query used by
-`sm_handler_ev05`) is still open.
+byte-exact flash placement (needs the SDK). The previously-deferred
+`ble_connection_count` (FUN_00026A7C, used by `sm_handler_ev05`) is now
+understood and closed (see the 2026-06-15 note below): it is a synchronous
+ICall query into the BLE stack, not a foldable local — correctly invoked by
+address, no behavioral discrepancy, and its ICall plumbing is out of scope.
+
+### `monitor_strtol` ctype fix (2026-06-15)
+
+A Renode test session reported `monitor_strtol` mis-parsing hex letters.
+Verified against the OEM (disassembly of 0x107BC + the live ctype bytes at
+0x29B2C) and adversarially cross-checked via a workflow (11.4M `(string,base)`
+combinations, zero divergences): the *reported* a–f/A–F symptom was already
+fixed on disk, but `runtime.c` still kept a hand-built `s_ctype` that only
+covered `0-9`/`A-F`/`a-f`, so **bases 17..36 mis-parsed** letter digits and the
+table wasn't byte-faithful. Fixed by classifying through the byte-exact
+`g_ctype_table[c + 1]` already materialized in `util.c` (single source of truth;
+bits 0=A-Z, 1=a-z, 2=digit, 3=space, 6=hex; decode `-0x30`/`-0x37`/`-0x57`).
+Renode coverage extended (`"0xFF"`→255, `"AbCd"`/16→0xABCD, `"zz"`/36→1295,
+`"G"`/16→0); see `docs/strtol-hex-letter-bug.md`. Known residual (out of scope,
+no caller hits it): an invalid base > 36 is treated literally instead of the
+OEM's clamp-to-auto-detect.
+
+### SM-handler & console-TU validation (2026-06-15)
+
+All 26 transition handlers (`state_machine_handlers.c`) and all 4 console
+functions (`monitor/console.c`) were re-checked function-by-function against
+the live OEM disassembly. The console TU is faithful as written (struct layout
+signal/pending/mutex/required at +0/+4/+8/+0xc confirmed; `monitor_console_read`
+do/while + wrap-guard, `monitor_event_signal` single-read-of-pending semantics
+all match). 25 of 26 handlers match; the leaf-arity assumptions were verified
+against the callees themselves — `FUN_0002309c` and `FUN_00024508` genuinely
+read only r0/r1 (the trailing `param_3`/`param_4` Ghidra shows are the
+dispatcher's dead `r2`/`r3`), and `FUN_0001f640` is truly 4-arg writing 16-bit
+out-params, so the narrowed prototypes are correct.
+
+**One real bug found & fixed — `sm_handler_ev10` (OEM 0x24CEA).** The OEM forms
+`val` with `uxth` (zero-extended 16-bit) and passes it to `FUN_00025b04`, which
+forwards the *full 32-bit* argument into `FUN_00015d24`. The reconstruction had
+`short val`, which sign-extends on the call, corrupting the high half for any
+value ≥ 0x8000. Changed to `uint16_t val` (and read payload+4 as `uint16_t` to
+match the `ldrh`). The `(uint16_t)` cast on the `FUN_0002309c` call had been
+masking the defect for that one call only. Build still clean (text 900 B).
+Also clarified two non-bugs in comments: ev10 drops the payload+6 byte the OEM
+leaves in r2 (callee ignores it), and ev1a's `interval = 0` differs from the
+OEM only on `FUN_0001f640`'s no-match path, where the original read an
+uninitialised local (UB).
+
+The other additions from the same pass were re-checked too: `strcpy` (0x26AF4)
+and `monitor_match_len` (0x2621A) are exact, and the `strlen` ROM alias is
+confirmed (veneer 0x28058 = `ldr.w pc,[0x2805c]`; `monitor_predict_command`
+itself calls it for a length). `monitor_predict_command` (0xC948) matched the
+OEM control flow exactly, and disassembly-level inspection of the hidden
+`monitor_log` varargs confirmed every format string byte-for-byte (`"%-20s "`,
+`"\r\n"`, `"\r\n> %s"`, `"%s"`).
+
+**Second real bug found & fixed — `monitor_predict_command` unique-match echo.**
+At the 0xFE log site the OEM passes `line + typed_len` (r6 = typed_len + line),
+i.e. it echoes only the newly-completed *suffix*; the reconstruction passed the
+whole `line`, so a unique tab-completion would have re-printed the prefix
+(type `he`+TAB → OEM echoes `lp`, the bug echoed `help`). Fixed to
+`line + typed_len`. The ambiguous (0x108) branch correctly echoes the whole
+`line` and was already right. Build clean (text 900 B).
+
+Finally, the long-deferred `ble_connection_count` (FUN_00026A7C) was run down:
+it is a 2-line wrapper around `FUN_0001ac6c`, a synchronous ICall request
+(build message → `FUN_00020c54` alloc → `FUN_00025100` send opcode 0x10 →
+`FUN_0001134c` wait 1000 ms → return `*local_2c`) that asks the BLE stack for
+the live connection count and returns it as a `uint16`. It cannot be reduced
+to a local; it is a runtime round-trip, and the ICall transport it uses is
+vendor-stock (out of decode scope). `sm_handler_ev05` already calls it by
+address as `< 3`, so there is no behavioral discrepancy — the finding is
+closed (understood, not a bug).
+
+### SM-handler leaf-worker decode (2026-06-15)
+
+`state_machine_handlers.c` referenced ~22 leaf workers by raw OEM address.
+All of them are now decoded or wired — **the handler file is `FUN_`-free**
+(build clean, text 900 B).
+
+* **Root cause** of most of them: the functions *were already decoded* (in
+  ssp.c, ble_connection.c, oad.c, pack_ingest.c, system.c) but had **never
+  been renamed in Ghidra**, so they surfaced as `FUN_xxxx` when the handler
+  file was written. 10 were wired to their existing symbols
+  (`ble_connection_params`, `bleware_control_event_post`, `pack_ingest_start`,
+  `system_state_save`, `ble_activity_led_pulse`, `module_forward_async`,
+  `ssp_signal_fetch`, `ble_authenticated_connection_count`,
+  `ble_connection_count`, plus `module_cmd_fa_*`→`module_forward_async`). To
+  stop the recurrence, every identified function (existing + new) was
+  **renamed in Ghidra and the program saved** — re-dump the JSON.
+* **New small/medium decodes:** `ble_connection_set_field54` (0x2309C),
+  `ble_connection_set_field6c` (0x2168C) and `ble_connection_param_update_request`
+  (0x211F8) → ble_connection.c; and `src/xs3_sm_actions.c` (new) holding
+  `ble_link_state_bit` (0x26914), `is_peer_connected` (0x26C54),
+  `module_cmd_fa_set`/`_clear` (0x275A8/0x275B0), `clock_disarm` (0x261B2) /
+  `clock_arm` (0x25F8C), `oad_close_for_conn` (0x254B4),
+  `advert_keepalive_pulse` (0x2200C), `gap_adv_state_set` (0x23800),
+  `gap_terminate_request` (0x25400), `event_payload_ack` (0x26A40),
+  `ble_post_link_error` (0x26FC4).
+* **Four large `xs3_app` functions decoded** into xs3_app.c:
+  `xs3_app_boot` (0xA458, cold-start), `xs3_app_connection_supervise` (0xA81C),
+  `xs3_app_dispatch_command` (0x9274, the GATT/SSP command tree),
+  `xs3_app_info_query` (0x14EE4). These are faithful control-flow
+  reconstructions; their many leaf callees are the **new extern frontier in
+  xs3_app.c** (decoded symbol where one exists, `FUN_xxxx` otherwise). The two
+  largest (`xs3_app_boot`, `xs3_app_dispatch_command`) are flagged in-file as
+  pending a line-by-line re-validation.
+* **Removed a duplicate:** an earlier `system_state_restore` (system.c) for
+  0x27004 was a duplicate of ssp.c's `ble_activity_led_pulse`
+  (`gpio_write(ctx,0xD,1)`); reverted and wired to the canonical symbol. Also
+  fixed a latent `firmware_abort` implicit-declaration warning in system.c.
+
+**On the two "mislabel" suspicions — resolved:**
+
+1. `0x0001AC6C` (`log_emit_v`) is **not** mislabeled. It is the established
+   generic TI-BLE-stack ICall request/reply helper, and the tree already uses
+   it for GAP commands (`log_emit_v(0x10, GAP_ADV_CMD_*, …)` in xs3_gap_adv.c)
+   and bond-NV reads (xs3_bond.c), not only logging. The new code references it
+   under that same name — single source of truth, no duplication.
+2. `0x00020098` carries the existing name `oad_state_lock` (oad.c models it as
+   a timed `Semaphore_pend`); the SM one-shot-timer callers (`clock_arm`, the
+   advert re-arm gate) use it as a `Clock_setTimeout`. The two readings can only
+   be told apart by the TI ROM-thunk identities (`0x1002E2C4/E9E6/ECC2`), which
+   the existing tree only *guesses* (hal_stubs comments them HwiP/SemaphoreP).
+   New code references the existing `oad_state_lock` symbol (non-duplicating)
+   with an in-file note; definitively resolving it needs the TI SimpleLink ROM
+   symbol map (not vendored). **Open follow-up.**
+
+### SM-worker validation pass (2026-06-15)
+
+Every function decoded in the leaf-worker pass was re-checked line-by-line
+against the OEM decompile. The small/medium helpers all matched (incl. the
+tricky ones: `ble_connection_param_update_request`'s stack-struct layout and
+`advert_keepalive_pulse`'s gate). **Two bugs in the first transcription of the
+big functions were found and fixed:**
+
+1. `app_boot_event_handler` (0xA458) — the "firmware updated" flag is the byte
+   at **`scratch[0x10]`** (OEM `local_98` = `auStack_a8 + 0x10`), not
+   `scratch[0]`, and `FUN_0001c5a4(0, 0x8D, buf)` fills **0x8D bytes** (via
+   `FUN_00024418`), so the buffer was resized from 16 → 0x8D bytes (the first
+   version both read the wrong byte and overflowed the stack buffer).
+2. `xs3_app_dispatch_command` (0x9274) — the `FUN_00018c4c(...)` argument list
+   was scrambled and mis-width. Corrected to the OEM order/types
+   `(u16@0, u16@2, u8@7, u16@4, u8@6, payload, len)`.
+
+The pass also recovered the **real OEM `__func__` names** for three of the four
+big functions (from the `monitor_log` func-name pointers): `0xA458` =
+`app_boot_event_handler`, `0xA81C` = `platform_tick_handler`, `0x14EE4` =
+`handle_ssp_request_event` (replacing the provisional `xs3_app_*` names in
+source and Ghidra). `0x9274` emits no log line, so it keeps the descriptive
+`xs3_app_dispatch_command`. Build clean (900 B); Ghidra re-saved → re-dump JSON.
 
 ### Decoded functions
 
