@@ -460,7 +460,17 @@ typedef struct {
     uint16_t assist_down_hmh[4][3]; /* +0x126 region[4] × moment[3]: assist *release* speed (0.1 km/h) */
     uint8_t  _pad_13e[2];           /* +0x13E                                                     */
     uint32_t saved_schema_version;  /* +0x140 config schema/version stamp                         */
-    uint8_t  persisted_rest[0x80];  /* +0x144 remainder of boot_cfg_block (not touched here)      */
+    uint8_t  region_lock;           /* +0x144 region-lock state (1=off-road disabled, 2=locked,   */
+                                    /*        else unlocked). Persisted; preserved across factory */
+                                    /*        reset; read/written by the `region` console cmd —   */
+                                    /*        same field as session_ctx.region_lock (app_state.h).*/
+    uint8_t  reserved_tail[0x7f];   /* +0x145..+0x1C3 persisted but with NO runtime consumer in    */
+                                    /*        1.07.06: settings_factory_reset leaves it zeroed and */
+                                    /*        console_cmd_show (0x08042820, the full dump) reads    */
+                                    /*        nothing here. Later firmware repurposes the first     */
+                                    /*        three bytes — 1.09.01 uses +0x145/+0x146/+0x147 as    */
+                                    /*        HW-config bitfield / custom-SOC / HW-version (see     */
+                                    /*        docs/compare-1.08.02/set-model.md, soc-override.md).  */
 } bike_config_t;                    /* total 0xD0 bytes (== ctx+0xF4 .. ctx+0x1C3) */
 
 /* Pin the overlay to the OEM byte offsets — a future field edit that shifts the
@@ -471,6 +481,7 @@ _Static_assert(offsetof(bike_config_t, cfg_byte_104)        == 0x10,   "boot_cfg
 _Static_assert(offsetof(bike_config_t, assist_up_hmh)       == 0x1a,   "assist_up @ ctx+0x10E");
 _Static_assert(offsetof(bike_config_t, assist_down_hmh)     == 0x32,   "assist_down @ ctx+0x126");
 _Static_assert(offsetof(bike_config_t, saved_schema_version) == 0x4c,  "schema @ ctx+0x140");
+_Static_assert(offsetof(bike_config_t, region_lock)         == 0x50,   "region_lock @ ctx+0x144");
 
 /* Seed the three sound-group volume-tier bitmasks ("Group low/medium/high" at
  * cfg+0/+4/+8 == ctx+0xF4/F8/FC): low={}, medium=0x383F33FE, high=0x47C0CC00

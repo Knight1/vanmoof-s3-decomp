@@ -273,14 +273,19 @@ void ble_cmd_dispatch(unsigned int cmd, unsigned int p2, unsigned char *payload)
                     return;
 
                 case 0x123:
+                    /* "Mute" is implemented by holding the BLE chip in reset:
+                     * PE5 is the BLE reset line (same pin the `blereset` cmd and
+                     * the reset state-machine pulse). Here it is driven as a level
+                     * — asserted = chip held down (silent), released = chip runs —
+                     * rather than a 10 ms pulse. */
                     g_log_func("CMD_BLE_MUTE\r\n");
                     if (*payload != 0) {
                         g_log_func("Mute\r\n");
-                        HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 1);
+                        HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 1);   /* PE5 asserted (hold in reset) */
                         return;
                     }
                     g_log_func("Unmute\r\n");
-                    HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 0);
+                    HAL_GPIO_WritePin(GPIOE_BASE, 0x20, 0);       /* PE5 released */
                     return;
                 }
                 return;

@@ -54,9 +54,16 @@ struct session_ctx {
     uint8_t  region_lock;           /* +0x144 — region lock state: 1=off-road
                                      *           disabled, 2=locked, else unlocked.
                                      *           Read (not set) by the `region` cmd. */
-    uint8_t  _pad1c[0x80];          /* +0x145..+0x1C4 — rest of the snapshotted
-                                     *                  block; not individually
-                                     *                  decoded yet. */
+    uint8_t  _pad1c[0x80];          /* +0x145..+0x1C4 — tail of the persisted
+                                     *                  config block (which ends
+                                     *                  at +0x1C3; +0x1C4 is the
+                                     *                  first byte past it). No
+                                     *                  runtime consumer in
+                                     *                  1.07.06 — settings_factory_reset
+                                     *                  zeroes it and console_cmd_show
+                                     *                  never reads it. 1.09.01 later
+                                     *                  repurposes +0x145/+0x146/+0x147
+                                     *                  (HW-config/customsoc/HW-ver). */
     uint8_t  _pad2[0x114];          /* +0x1C5..+0x2D8 */
     /* logged_in (+0x2D9) and fail_count (+0x2E0) are NOT in session_ctx — they
      * live in the OUTER struct app_state (adjacent to ctx_sub @ +0x2DC). The OEM
