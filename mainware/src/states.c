@@ -38,11 +38,20 @@ extern int charge_level_adc_get();
 extern int console_cmd_logout();
 extern int ctx_flag_0x131_is_clear();
 extern int diagnostics_run_step();
+/* console-dump commands + bus scan invoked by the diagnostics sequence (console.c/i2c.c) */
+extern void console_cmd_shifterstatus();
+extern void console_cmd_battery();
+extern void console_cmd_motorstatus();
+extern void console_cmd_show();
+extern void console_cmd_adc();
+extern void i2c_bus_scan();
+extern void app_log_sink_enable();
 extern int display_send_init_cmd();
 void enter_stop_mode(uint8_t reason);          /* sourced at end of file */
 extern int gpio_pc1_is_low();
 extern int internal_lipo_charge_step();
 extern int is_display_bus_ready();
+extern int display_aux_byte_get();
 extern int is_user_reset_pending();
 extern int led_channel3_set_brightness();
 extern int led_driver_enter_shipping_mode();
@@ -52,7 +61,7 @@ extern int lis3dh_config_motion_int();
 extern int lis3dh_int1_clear();
 extern int lis3dh_powerdown();
 extern int lock_blink_sequence_step();
-extern int locked_state_step();
+void locked_state_step(char *state_tab, int active);
 extern int maybe_enqueue_tx_message();
 extern int maybe_ota_progress_all_low();
 extern int modbus_shift_submit();
@@ -63,8 +72,8 @@ extern int power_assist_gear_step();
 extern int power_state_get_clamped();
 void reboot_restart_task(void);                /* sourced at end of file */
 extern int save_state_record_to_eeprom();
-extern int sched_timer_arm_or_alloc();
-extern int set_unlock_state_persist();
+void sched_timer_arm_or_alloc(uint32_t period);
+void set_unlock_state_persist(void);
 extern int shifter_firmware_update_step();
 extern int shifter_get_active_flag();
 extern int shifter_sm_get_step();
@@ -77,10 +86,15 @@ extern int state_check_and_clear_step5();
 extern int state_flags_clear();
 extern int state_flags_set();
 extern int state_flags_test();
-extern int state_table_ptr_get();
+void state_table_ptr_get(char **out);
 extern int system_reset();
-extern int telemetry_datalog_emit();
-extern int testmode_command_dispatch();
+void telemetry_datalog_emit(uint8_t *ctx);
+extern int stc_read();                 /* 0x080396E4 — STC3115 read into buffer */
+extern int update_sm_is_idle(void);    /* 0x08032980 */
+void testmode_command_dispatch(int cmd);
+extern int snprintf(char *s, unsigned int n, const char *fmt, ...);
+extern unsigned int strlen(const char *s);
+extern int hw_version_lookup();          /* 0x08032CE4 */
 extern int testmode_continue_state_10();
 extern int testmode_enter_state_16();
 extern int display_request_clear();
@@ -2515,6 +2529,651 @@ LAB_0802d668:
     }
   }
   return;
+}
+
+/* power_assist_gear_step (OEM 0x0802A304) — the boost-button (PC1) power-assist
+ * "gear"/level selector and its on-screen indicator. Holding boost cycles the
+ * power-assist level at ctx+0x3CA (1..4, wrapping past 4 back to 0); each level
+ * maps to an assist parameter written to ctx+0x354 (180/120/60/30). The selected
+ * level is drawn on the LED matrix for ~2 s by a small display state machine in
+ * G_CLK[0x14]. VanMoof labels this "gear"/"power level" interchangeably ("Start
+ * gear", "Power level %d"). State bytes:
+ *   G_STATE[0xB] last level shown, [0xC] display timer, [0xD] boost-hold timer,
+ *                [0xE] auto-advance timer  (0xFA/-6 = no slot)
+ *   G_CLK[0x14]  display SM (0=idle, 1..4), [0x15] last PC1 level, [0x16] fast-repeat,
+ *                [0x17] change-allowed (speed < 0.9 km/h), [0x18] advancing
+ *   ctx+0x3C2 speed (0.1 km/h), +0x3C9 saved level, +0x3CB decel flag, +0x372 wheel word.
+ * Returns non-zero while the on-screen display SM is active. */
+int power_assist_gear_step(uint8_t *ctx)
+{
+    /* Level changed elsewhere while the indicator is idle -> pop it up for 2 s. */
+    if ((uint8_t)G_STATE[0xb] != ctx[0x3ca] && G_CLK[0x14] == 0) {
+        G_STATE[0xb] = (signed char)ctx[0x3ca];
+        if (G_STATE[0xc] == -6) {
+            G_STATE[0xc] = scheduler_alloc();
+        }
+        scheduler_start(G_STATE[0xc], 2000, 0);
+        G_CLK[0x14] = 1;
+        g_log_func("Start gear\r\n");
+    }
+
+    /* Boost held at standstill (ctx+0x372 == 0) with the decel flag set -> fast repeat. */
+    if (ctx[0x3cb] != 0 && gpio_pc1_is_low() != 0 &&
+        G_CLK[0x15] == 0 && *(int16_t *)(ctx + 0x372) == 0) {
+        G_CLK[0x16] = 1;
+    }
+
+    /* Boost pressed below 0.9 km/h -> allow a level change this cycle. */
+    if (gpio_pc1_is_low() != 0 && G_CLK[0x15] == 0 && *(uint16_t *)(ctx + 0x3c2) < 9) {
+        G_CLK[0x17] = 1;
+    }
+    if (*(uint16_t *)(ctx + 0x3c2) > 9) {
+        G_CLK[0x17] = 0;
+    }
+
+    G_CLK[0x15] = (signed char)gpio_pc1_is_low();
+
+    if ((G_CLK[0x17] == 0 && G_CLK[0x16] == 0) ||
+        gpio_pc1_is_low() == 0 || state_flags_test(0, 0x200) != 0) {
+        /* Release / commit: if a level was being shown, latch + announce it. */
+        if (G_STATE[0xe] != -6) {
+            ctx[0x3c9] = ctx[0x3ca];
+            log_print_timestamp_prefix();
+            g_log_func("Power level %d\r\n", ctx[0x3c9]);
+            channel_notify_with_status(3);
+        }
+        G_CLK[0x18] = 0;
+        G_CLK[0x16] = 0;
+        scheduler_release((uint8_t *)(G_STATE + 0xe));
+        scheduler_release((uint8_t *)(G_STATE + 0xd));
+    } else {
+        /* Boost held: after an initial delay, auto-advance the level. */
+        if (G_STATE[0xd] == -6) {
+            G_STATE[0xd] = scheduler_alloc();
+            scheduler_start(G_STATE[0xd], G_CLK[0x16] == 0 ? 3000 : 1000, 0);
+        }
+        if (scheduler_slot_is_idle(G_STATE[0xd]) != 0 && G_STATE[0xe] == -6) {
+            ctx[0x3ca] = ctx[0x3c9];
+            G_STATE[0xb] = (signed char)0xfe;
+            G_STATE[0xe] = scheduler_alloc();
+            G_CLK[0x18] = 1;
+            scheduler_start(G_STATE[0xe], G_CLK[0x16] == 0 ? 0x5dc : 0x514, 0);
+        }
+        if (*(int16_t *)(ctx + 0x372) != 0) {
+            scheduler_release((uint8_t *)(G_STATE + 0xd));
+        }
+        if (scheduler_slot_is_idle(G_STATE[0xe]) != 0) {
+            uint8_t lvl = (uint8_t)(ctx[0x3ca] + 1);
+            ctx[0x3ca] = lvl;
+            if (lvl > 4) {
+                ctx[0x3ca] = 0;
+            }
+            scheduler_start(G_STATE[0xe], G_CLK[0x16] == 0 ? 1000 : 800, 0);
+            channel_notify_with_status(1);
+        }
+    }
+
+    /* Assist parameter for the selected level. */
+    switch (ctx[0x3ca]) {
+    case 1:  *(uint16_t *)(ctx + 0x354) = 0xb4; break;
+    case 2:  *(uint16_t *)(ctx + 0x354) = 0x78; break;
+    case 3:  *(uint16_t *)(ctx + 0x354) = 0x3c; break;
+    case 4:  *(uint16_t *)(ctx + 0x354) = 0x1e; break;
+    default: *(uint16_t *)(ctx + 0x354) = 0;
+    }
+
+    /* On-screen level-indicator display state machine. */
+    switch (G_CLK[0x14]) {
+    case 1:
+        G_CLK[0x14] = 2;
+        announce_records_reset(2);
+        break;
+    case 2:
+        set_mode_state_byte(0xd);
+        G_CLK[0x14] = 3;
+        break;
+    case 3:
+        if (is_display_bus_ready() != 0) {
+            G_CLK[0x14] = 4;
+        }
+        break;
+    case 4:
+        if ((uint8_t)G_STATE[0xb] != ctx[0x3ca] && display_aux_byte_get() != 0) {
+            if (ctx[0x3ca] == 0) {
+                display_request_clear();
+                reset_dual_buffers_and_flags();
+            }
+            G_STATE[0xb] = (signed char)ctx[0x3ca];
+            matrix_draw_icon(ctx[0x3ca], 0xb);
+            scheduler_start(G_STATE[0xc], 2000, 0);
+        }
+        set_mode_state_byte(0xe);
+        if (scheduler_slot_is_idle(G_STATE[0xc]) != 0) {
+            scheduler_release((uint8_t *)(G_STATE + 0xc));
+            G_CLK[0x14] = 0;
+            set_mode_state_byte(7);
+        }
+        break;
+    }
+
+    return G_CLK[0x14] != 0;
+}
+
+/* locked_state_step (OEM 0x0802A5C4) — the "locked" behaviour engine, run each
+ * pass while the bike is in a locked state. It reacts to the lock-command table
+ * (`state_tab` from state_table_ptr_get: [0] lock(1)/unlock(2) request, [1]
+ * kick-lock, [2] remote-lock=6), the front lock sensor (PC2), the kickstand
+ * (PA11) / charger (PC10) / plug (PC2) inputs and the motion sensor, deciding
+ * whether to (re)assert the lock, ask the app to unlock over BLE (SSP 0x5522),
+ * fall back to backup-code entry when no code is set, release on cartridge/kick
+ * removal, or arm the alarm on a mems/wheel wake. `active` gates the
+ * command-driven transitions. State: G_STATE[4]=bike state, [0xF]/[0x10]=lock
+ * timers, [0x11]=release latch, [0x12]=alarm-wake slot; G_CLK[0x19]=last lock-
+ * sensor level, [0x1A]=kick latch; the mode word at 0x20000004 is the wake mode. */
+void locked_state_step(char *state_tab, int active)
+{
+    uint8_t *sctx = *(uint8_t **)0x20000944u;   /* session_ctx (cached by status_process) */
+    uint8_t  buf[8];
+
+    /* Remote/kick-lock request, or the lock sensor (PC2) engaged -> (re)lock. */
+    if ((state_tab[2] == 6 || state_tab[1] == 1 ||
+         (state_tab[0] == 1 && HAL_GPIO_ReadPin(GPIOC_BASE, 4) == 0)) &&
+        sctx[0x310] != 4 && active != 0) {
+        announce_records_reset(7);
+        scheduler_release((uint8_t *)(G_STATE + 0xf));
+        scheduler_release((uint8_t *)(G_STATE + 0x10));
+        log_print_timestamp_prefix();
+        g_log_func("Locked\r\n");
+        G_STATE[4] = 0x11;
+    }
+
+    /* Lock-sensor (PC2) edge while a lock command is pending -> clear horn queue. */
+    if ((uint8_t)G_CLK[0x19] != HAL_GPIO_ReadPin(GPIOC_BASE, 4) && state_tab[0] == 1) {
+        log_print_timestamp_prefix();
+        g_log_func("Clear horn queue\r\n");
+        announce_records_reset(3);
+    }
+    G_CLK[0x19] = (signed char)(HAL_GPIO_ReadPin(GPIOC_BASE, 4) != 0);
+
+    if (state_tab[0] == 1) {
+        /* Lock command with the sensor released -> ask the app to unlock over BLE. */
+        if (HAL_GPIO_ReadPin(GPIOC_BASE, 4) != 0 && active != 0) {
+            announce_records_reset(3);
+            log_print_timestamp_prefix();
+            g_log_func("ASK APP to unlock\r\n");
+            buf[0] = 1;
+            if (ssp_ble_enqueue_tx_packet(0x5522, 1, buf, 0) > 0x80) {
+                g_log_func("  ERROR SSPB place\r\n");
+            }
+        }
+    } else if (state_tab[0] == 2 && active != 0) {
+        /* Unlock request. */
+        if (sctx[0x310] == 4) {
+            G_STATE[4] = 4;
+        } else {
+            announce_records_reset(3);
+            scheduler_release((uint8_t *)(G_STATE + 0xf));
+            scheduler_release((uint8_t *)(G_STATE + 0x10));
+            if (*(uint16_t *)(sctx + 0x100) == 0xff) {
+                log_print_timestamp_prefix();
+                g_log_func("No backupcode\r\n");
+                G_STATE[4] = 0x11;
+            } else {
+                G_STATE[4] = 0x26;
+            }
+        }
+    }
+
+    /* Kickstand down / charging / plugged / latched -> stay locked (and maybe arm
+     * the alarm); else the cartridge/kickstand was removed -> release the lock. */
+    if (HAL_GPIO_ReadPin(GPIOA_BASE, 0x800) == 0 ||
+        HAL_GPIO_ReadPin(GPIOC_BASE, 0x400) != 0 ||
+        G_CLK[0x1a] != 0 ||
+        HAL_GPIO_ReadPin(GPIOC_BASE, 4) != 0) {
+        /* Arm the alarm on a motion/mems trigger while the alarm is enabled. */
+        if ((HAL_GPIO_ReadPin(GPIOC_BASE, 8) != 0 ||
+             *(int *)0x20000004u == 5 || *(int *)0x20000004u == 7) &&
+            sctx[0x317] != 0 && G_STATE[0x12] == -6) {
+            *(int *)0x20000004u = 10;
+            log_print_timestamp_prefix();
+            g_log_func("Locked wake by mems\r\n");
+            if (maybe_get_bike_state() == 0x15 &&
+                HAL_GPIO_ReadPin(GPIOD_BASE, 0x20) != 0 && sctx[0x3e0] != 1) {
+                channel_notify_with_status(0x12);
+            }
+            scheduler_release((uint8_t *)(G_STATE + 0xf));
+            scheduler_release((uint8_t *)(G_STATE + 0x10));
+            if (sctx[0x312] != 0 || sctx[0x340] == 1) {
+                switch (sctx[0x310]) {
+                case 2:  G_STATE[4] = 2; break;
+                case 3:  G_STATE[4] = 3; break;
+                case 4:  G_STATE[4] = 4; break;
+                default: G_STATE[4] = 0;
+                }
+            }
+            lis3dh_int1_clear();
+        }
+    } else {
+        announce_records_reset(4);
+        log_print_timestamp_prefix();
+        g_log_func("Cartridge removed\r\n");
+        G_CLK[0x1a] = 0;
+        G_STATE[4] = 0x13;
+        G_STATE[0x11] = 1;
+    }
+
+    if (scheduler_slot_is_idle(G_STATE[0x12]) != 0) {
+        lis3dh_int1_clear();
+        scheduler_release((uint8_t *)(G_STATE + 0x12));
+    }
+}
+
+/* set_unlock_state_persist (OEM 0x0802A95C) — commit the "unlocked" state to the
+ * EEPROM state record. If the record already reads unlocked (session_ctx+0x310 ==
+ * 0x0B) with the remote-lock (+0x312) and kick-lock (+0x340) flags clear, it is a
+ * no-op; otherwise it logs "SET UNLOCK", forces state 0x0B and clears those two
+ * flags, then writes the 15-word state record to both EEPROM copies (logs
+ * " ERROR Save values" on failure). See docs/hardware.md "EEPROM map". */
+void set_unlock_state_persist(void)
+{
+    uint8_t *sctx = *(uint8_t **)0x20000944u;   /* session_ctx (cached by status_process) */
+
+    if (sctx[0x310] == 0xb && sctx[0x340] == 0 && sctx[0x312] == 0) {
+        return;
+    }
+    g_log_func("SET UNLOCK\r\n");
+    sctx[0x312] = 0;
+    sctx[0x340] = 0;
+    sctx[0x310] = 0xb;
+    if (save_state_record_to_eeprom(
+            *(uint32_t *)(sctx + 0x310), *(uint32_t *)(sctx + 0x314),
+            *(uint32_t *)(sctx + 0x318), *(uint32_t *)(sctx + 0x31c),
+            *(uint32_t *)(sctx + 0x320), *(uint32_t *)(sctx + 0x324),
+            *(uint32_t *)(sctx + 0x328), *(uint32_t *)(sctx + 0x32c),
+            *(uint32_t *)(sctx + 0x330), *(uint32_t *)(sctx + 0x334),
+            *(uint32_t *)(sctx + 0x338), *(uint32_t *)(sctx + 0x33c),
+            *(uint32_t *)(sctx + 0x340), *(uint32_t *)(sctx + 0x344),
+            *(uint32_t *)(sctx + 0x348)) != 0) {
+        g_log_func(" ERROR Save values\r\n");
+    }
+}
+
+/* lock_blink_sequence_step (OEM 0x08029960) — drives the lock-indicator blink
+ * sequence (up to 10 blinks) off the lock-command table. `counter` is the caller's
+ * blink-count byte (0xFF = (re)start). Returns the sequence state via G_CLK[0]
+ * (0 = arming, 1 = blink gap, 2 = done/settled). G_CLK[4] caches the state-table
+ * pointer (state_table_ptr_get); G_STATE[1]/[2] are the gap/timeout timer slots. */
+int lock_blink_sequence_step(uint8_t *counter)
+{
+    if (*counter == 0xff) {
+        G_CLK[0] = 0;
+        if (G_STATE[1] == -6) {
+            G_STATE[1] = scheduler_alloc();
+        }
+        scheduler_start(G_STATE[1], 3000, 0);
+        *counter = 0;
+    }
+
+    state_table_ptr_get((char **)(G_CLK + 4));
+    if (**(char **)(G_CLK + 4) == 2) {
+        **(char **)(G_CLK + 4) = 0;
+    }
+    if (**(char **)(G_CLK + 4) == 1) {
+        **(char **)(G_CLK + 4) = 0;
+        uint8_t n = *counter;
+        *counter = (uint8_t)(n + 1);
+        if ((uint8_t)(n + 1) > 9) {
+            **(char **)(G_CLK + 4) = 0;
+            scheduler_release((uint8_t *)(G_STATE + 2));
+            scheduler_release((uint8_t *)(G_STATE + 1));
+            G_CLK[0] = 2;
+        }
+        if (G_STATE[2] == -6) {
+            G_STATE[2] = scheduler_alloc();
+        }
+        scheduler_start(G_STATE[2], 1000, 0);
+        scheduler_start(G_STATE[1], 3000, 0);
+    }
+
+    if (scheduler_slot_is_idle(G_STATE[2]) != 0) {
+        **(char **)(G_CLK + 4) = 0;
+        scheduler_release((uint8_t *)(G_STATE + 2));
+        scheduler_release((uint8_t *)(G_STATE + 1));
+        G_CLK[0] = 1;
+    }
+    if (scheduler_slot_is_idle(G_STATE[1]) != 0) {
+        **(char **)(G_CLK + 4) = 0;
+        scheduler_release((uint8_t *)(G_STATE + 2));
+        scheduler_release((uint8_t *)(G_STATE + 1));
+        G_CLK[0] = 2;
+    }
+    return (uint8_t)G_CLK[0];
+}
+
+/* diagnostics_run_step (OEM 0x08030870) — the on-demand self-test sequence
+ * (bike state 0x15). A 6-step machine (state byte at SRAM 0x20000650) that dumps
+ * shifter/battery/motor status, then (after a 4 s settle) the full `show`, then an
+ * I2C bus scan + ADC dump with the app-log sink enabled, and finally pushes the
+ * logging-target byte (ctx+0x313) to the app over BLE char 0x55C1 ("Start Diag";
+ * "diag_tmr"; "ERROR SSPB place2a" on TX-queue overflow). Returns non-zero on the
+ * final step. Slot at SRAM 0x20000074. */
+int diagnostics_run_step(uint8_t *ctx)
+{
+    uint8_t *state = (uint8_t *)0x20000650u;
+    uint8_t *slot  = (uint8_t *)0x20000074u;
+    uint8_t  buf[4];
+
+    switch (*state) {
+    case 0:
+        g_log_func("Start Diag\r\n");
+        set_mode_state_byte(0x15);
+        channel_notify_with_status(0x13);
+        *state = 1;
+        break;
+    case 1:
+        console_cmd_shifterstatus((char *)0);
+        console_cmd_battery((char *)0);
+        console_cmd_motorstatus((char *)0);
+        if (*slot == SCHED_SLOT_NONE) {
+            *slot = scheduler_alloc();
+            scheduler_set_timer_name(*slot, 4000, "diag_tmr");
+        }
+        scheduler_start(*slot, 4000, 0);
+        *state = 2;
+        break;
+    case 2:
+        if (scheduler_slot_is_idle(*slot) != 0) {
+            console_cmd_show();
+            *state = 3;
+        }
+        break;
+    case 3:
+        i2c_bus_scan(0);
+        console_cmd_adc((char *)0);
+        scheduler_start(*slot, 2000, 0);
+        app_log_sink_enable();
+        *state = 4;
+        break;
+    case 4:
+        if (scheduler_slot_is_idle(*slot) != 0) {
+            scheduler_release(slot);
+            buf[0] = ctx[0x313];
+            if (ssp_ble_enqueue_tx_packet(0x55c1, 1, buf, 0) > 0x80) {
+                g_log_func("  ERROR SSPB place2a\r\n");
+            }
+            *state = 5;
+        }
+        break;
+    case 5:
+        *state = 0;
+        break;
+    }
+    return *state == 5;
+}
+
+/* telemetry_datalog_emit (OEM 0x08036DB8) — the CSV datalog emitter. On a motor-
+ * error change (while riding) it logs "Motor error %04X" and mirrors bits into the
+ * fault flags. Every 30 s (when the updater is idle) it reads the STC3115 fuel
+ * gauge and requests fresh module telemetry, then 100 ms later emits one CSV row
+ * matching the header
+ *   TIME;LiPOSOC;BMSSOC;BATTEMP;BATVOLTAGE;BATCURRENT;MOTORCURRENT;MOTORTMP;
+ *   DRIVERTMP;SPEED;ODO;BOOST;LUX;BATDSG
+ * (printed once). The OEM's reciprocal-multiply scalings are exact divisions by
+ * 10/100/1000 — written as such here (behaviour-equivalent). Shared STC/telemetry
+ * state block at SRAM 0x20005DB4; timer slots at 0x20000084 +5/+6. */
+void telemetry_datalog_emit(uint8_t *ctx)
+{
+    uint8_t *mon  = (uint8_t *)0x20005db4u;
+    uint8_t *slot = (uint8_t *)0x20000084u;
+
+    if (*(int16_t *)(ctx + 0x364) != *(int16_t *)(mon + 0x34) &&
+        maybe_get_bike_state() == 0xc) {
+        log_print_timestamp_prefix();
+        g_log_func("Motor error %04X\r\n", *(uint16_t *)(ctx + 0x364));
+        if ((*(uint16_t *)(ctx + 0x364) & 4) == 0) {
+            state_flags_clear(0, 0x2000);
+        } else {
+            state_flags_set(0, 0x2000);
+        }
+        if ((*(uint16_t *)(ctx + 0x364) & 0x2100) == 0x2100) {
+            state_flags_set(0, 0x200000);
+        } else {
+            state_flags_clear(0, 0x200000);
+        }
+    }
+    *(int16_t *)(mon + 0x34) = *(int16_t *)(ctx + 0x364);
+
+    if (slot[5] == SCHED_SLOT_NONE) {
+        slot[5] = scheduler_alloc();
+        scheduler_start(slot[5], 6000, 0);
+        stc_read(mon + 0x38, mon + 8);
+        log_print_timestamp_prefix();
+        g_log_func("LiPo SoC %d%% (first read)\r\n", *(int *)(mon + 0x10) / 10);
+    }
+
+    if (scheduler_slot_is_idle(slot[5]) != 0 && update_sm_is_idle() != 0) {
+        scheduler_start(slot[5], 30000, 0);
+        if (slot[6] == SCHED_SLOT_NONE) {
+            slot[6] = scheduler_alloc();
+            scheduler_set_timer_name(slot[6], 100, "result_tmr");
+            scheduler_start(slot[6], 100, 0);
+        }
+        if (*(int16_t *)(ctx + 0x3fc) != -1 &&
+            maybe_enqueue_tx_message(0xc, 0, 0, 1) > 0x10) {
+            g_log_func("  ERROR SSPM place\r\n");
+        }
+        if (stc_read(mon + 0x38, mon + 8) == 1) {
+            *(int16_t *)(ctx + 0x3d2) = (int16_t)*(int *)(mon + 0x10);
+            *(int16_t *)(mon + 0x68) = 0;
+        } else {
+            *(int16_t *)(mon + 0x68) = (int16_t)(*(int16_t *)(mon + 0x68) + 1);
+            g_log_func(" ERR Read STC\r\n");
+        }
+        if (*(uint16_t *)(mon + 0x68) < 5) {
+            state_flags_clear(0, 0x40);
+        } else {
+            state_flags_set(0, 0x40);
+        }
+        if (mon[0x6a] == 0) {
+            mon[0x6a] = 1;
+            g_log_func("TIME;LiPOSOC;BMSSOC;BATTEMP;BATVOLTAGE;BATCURRENT;MOTORCURRENT;"
+                       "MOTORTMP;DRIVERTMP;SPEED;ODO;BOOST;LUX;BATDSG\r\n");
+        }
+    }
+
+    if (scheduler_slot_is_idle(slot[6]) != 0) {
+        scheduler_release(&slot[6]);
+        log_print_timestamp_prefix();
+
+        int      lipo   = *(int *)(mon + 0x10);
+        int      lipo_w = lipo / 10;
+        int      temp   = *(int16_t *)(ctx + 0x3f8) - 0xaab;   /* 0.1 K -> 0.1 °C */
+        int      temp_w = temp / 10;
+        uint16_t vbat   = *(uint16_t *)(ctx + 0x3fa);
+        unsigned vbat_w = vbat / 1000;
+
+        int16_t  cur  = *(int16_t *)(ctx + 0x3fe);
+        const char *sign = (((cur + 0x62) & 0xffff) < 0x62) ? "-" : "";
+        int16_t  cur_w = (int16_t)(cur / 100);
+        int16_t  cur_f = (int16_t)(cur - cur_w * 100);
+        if (cur_f < 0) {
+            cur_f = (int16_t)-cur_f;
+        }
+
+        uint16_t mcur   = *(uint16_t *)(ctx + 0x368);
+        unsigned mcur_w = mcur / 10;
+        int      mtmp   = *(int16_t *)(ctx + 0x36a);
+        if (mtmp < -0x10d) {
+            mtmp = 0;
+        }
+        int16_t  dtmp   = *(int16_t *)(ctx + 0x36c);
+        uint16_t spd    = *(uint16_t *)(ctx + 0x3c2);
+        unsigned spd_w  = spd / 10;
+        uint32_t odo    = *(uint32_t *)(ctx + 0x31c);
+        uint32_t odo_w  = odo / 10;
+
+        int boost = gpio_pc1_is_low() ? 100 : 0;
+        int lux   = light_sensor_read_step();
+        int lux_v = (lux == 0xfffe) ? 0 : light_sensor_read_step();
+
+        /* NB: the LiPOSOC field ends in a literal '%' (OEM format byte, single '%'
+           passed to the non-printf-attributed g_log_func) — kept byte-faithful. */
+        g_log_func(";%d.%d%;%d;%d.%d;%d.%02d;%s%d.%02d;%d.%d;%d;%d;%d.%d;%d.%d;%d;%d;%d\r\n",
+                   lipo_w, lipo - lipo_w * 10,
+                   (int)*(int16_t *)(ctx + 0x3fc),
+                   temp_w, temp - temp_w * 10,
+                   (int)vbat_w, (int)((vbat - vbat_w * 1000) / 10),
+                   sign, (int)cur_w, (int)cur_f,
+                   (int)mcur_w, (int)(mcur - mcur_w * 10),
+                   mtmp, (int)dtmp,
+                   (int)spd_w, (int)(spd - spd_w * 10),
+                   (int)odo_w, (int)(odo - odo_w * 10),
+                   boost, lux_v,
+                   (int)*(int16_t *)(ctx + 0x402));
+    }
+}
+
+/* testmode_command_dispatch (OEM 0x08029CA0) — the factory/service test-mode
+ * command handler. Persists the state record to EEPROM first (clearing the
+ * fw-update-order fields for any non-zero command), then: cmd 0 -> idle (bike
+ * state 0x19); cmd 1 -> stream the identity blobs to the app (fw build "%d.%02d.%02d",
+ * serial "%c.%d.%02d.%02d", "HW:%d", the batch string, shifter fw "%d.%d", BMS fw
+ * "%X.%02X" over BLE chars 0x554A..0x5550) then state 0x1D; cmd 2..0xC -> inject a
+ * single test fault bit into the 64-bit flag pair (ctx+0x3B8 low / +0x3BC high),
+ * enter test drive-mode 0x18, state 0x1B. Session ctx via 0x20000944. */
+void testmode_command_dispatch(int cmd)
+{
+    uint8_t *ctx = *(uint8_t **)0x20000944u;
+    char buf96[96];
+    char buf20[20];
+    uint8_t hwver;
+
+    if (cmd != 0) {
+        *(uint32_t *)(ctx + 0x32c) = 0;
+        *(uint16_t *)(ctx + 0x330) = 0;
+    }
+    if (save_state_record_to_eeprom(
+            *(uint32_t *)(ctx + 0x310), *(uint32_t *)(ctx + 0x314),
+            *(uint32_t *)(ctx + 0x318), *(uint32_t *)(ctx + 0x31c),
+            *(uint32_t *)(ctx + 0x320), *(uint32_t *)(ctx + 0x324),
+            *(uint32_t *)(ctx + 0x328), *(uint32_t *)(ctx + 0x32c),
+            *(uint32_t *)(ctx + 0x330), *(uint32_t *)(ctx + 0x334),
+            *(uint32_t *)(ctx + 0x338), *(uint32_t *)(ctx + 0x33c),
+            *(uint32_t *)(ctx + 0x340), *(uint32_t *)(ctx + 0x344),
+            *(uint32_t *)(ctx + 0x348)) != 0) {
+        g_log_func(" ERROR Save values\r\n");
+    }
+
+    switch (cmd) {
+    case 0:
+        G_STATE[4] = 0x19;
+        break;
+    case 1: {
+        uint32_t v = *(uint32_t *)0x08020004u;   /* fw build word from the image vector table */
+        snprintf(buf20, 0x10, "%d.%02d.%02d", v >> 0x18, (v & 0xffffff) >> 0x10, (v & 0xffff) >> 8);
+        if (ssp_ble_enqueue_tx_packet(0x554a, (uint16_t)strlen(buf20), buf20, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        uint32_t sn = *(uint32_t *)(ctx + 0x388);
+        snprintf(buf96, 0x60, "%c.%d.%02d.%02d",
+                 sn >> 0x18, (sn & 0xffffff) >> 0x10, (sn & 0xffff) >> 8, sn & 0xff);
+        if (ssp_ble_enqueue_tx_packet(0x554c, (uint16_t)strlen(buf96), buf96, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        if (hw_version_lookup(&hwver) == 0) {
+            g_log_func("  ERR HWversion\r\n");
+        }
+        snprintf(buf96, 0x60, "HW:%d", hwver);
+        if (ssp_ble_enqueue_tx_packet(0x554d, (uint16_t)strlen(buf96), buf96, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        snprintf(buf96, 0x60, "%s", (char *)(*(int *)(ctx + 1000) + 0x20));
+        if (ssp_ble_enqueue_tx_packet(0x554e, (uint16_t)strlen(buf96), buf96, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        snprintf(buf96, 0x60, "%d.%d",
+                 *(uint16_t *)(ctx + 0x336) >> 8, (char)*(uint16_t *)(ctx + 0x336));
+        if (ssp_ble_enqueue_tx_packet(0x554f, (uint16_t)strlen(buf96), buf96, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        snprintf(buf96, 0x60, "%X.%02X",
+                 *(uint16_t *)(ctx + 0x408) >> 8, (char)*(uint16_t *)(ctx + 0x408));
+        if (ssp_ble_enqueue_tx_packet(0x5550, (uint16_t)strlen(buf96), buf96, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+        G_STATE[4] = 0x1d;
+        break;
+    }
+    case 2:  *(uint32_t *)(ctx + 0x3b8) = 0x10000000; *(uint32_t *)(ctx + 0x3bc) = 0;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 3:  *(uint32_t *)(ctx + 0x3b8) = 0x20000000; *(uint32_t *)(ctx + 0x3bc) = 0;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 4:  *(uint32_t *)(ctx + 0x3b8) = 0x40000000; *(uint32_t *)(ctx + 0x3bc) = 0;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 5:  *(uint32_t *)(ctx + 0x3b8) = 0x80000000; *(uint32_t *)(ctx + 0x3bc) = 0;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 6:  *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 1;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 7:  *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 2;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 8:  *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 4;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 9:  *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 8;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 10: *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 0x10;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 11: *(uint32_t *)(ctx + 0x3b8) = 0; *(uint32_t *)(ctx + 0x3bc) = 0x20;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    case 12: *(uint32_t *)(ctx + 0x3b8) = 0x4000000; *(uint32_t *)(ctx + 0x3bc) = 0;
+             set_mode_state_byte(0x18); G_STATE[4] = 0x1b; break;
+    }
+}
+
+/* is_user_reset_pending (OEM 0x08038EB0) — 1 when a user-requested reset is queued
+ * (the flag byte at SRAM 0x20006E44 == 1). */
+int is_user_reset_pending(void)
+{
+    return *(uint8_t *)0x20006e44u == 1;
+}
+
+/* set_wakeup_done_flag (OEM 0x080279C8) — bit-band set of bit 1 at SRAM 0x20007001
+ * (the "wake handled" latch), written through its bit-band alias. */
+void set_wakeup_done_flag(void)
+{
+    *(volatile uint32_t *)0x420e0024u = 1;
+}
+
+/* state_table_ptr_get (OEM 0x08040310) — hand back the pointer to the shared
+ * lock/announce state-table block at SRAM 0x20009360. */
+void state_table_ptr_get(char **out)
+{
+    *out = (char *)0x20009360u;
+}
+
+/* bike_is_locked (OEM 0x0802A8B0) — 1 when the bike is locked: the kickstand/lock
+ * sensor on PC8 reads high, OR the remote-lock (session_ctx+0x312) or kick-lock
+ * (session_ctx+0x340 == 1) flags are set. */
+int bike_is_locked(void)
+{
+    uint8_t *ctx = *(uint8_t **)0x20000944u;
+
+    if (HAL_GPIO_ReadPin(GPIOC_BASE, 0x100) == 0) {
+        if (ctx[0x312] != 0) {
+            return 1;
+        }
+        return (ctx[0x340] == 1) ? 1 : 0;
+    }
+    return 1;
+}
+
+/* sched_timer_arm_or_alloc (OEM 0x0802A014) — (alloc if needed and) arm the shared
+ * G_STATE[7] scheduler slot for `period` ticks. */
+void sched_timer_arm_or_alloc(uint32_t period)
+{
+    if (G_STATE[7] == -6) {
+        G_STATE[7] = scheduler_alloc();
+    }
+    scheduler_start(G_STATE[7], period, 0);
 }
 
 /* ── scheduler-arming helpers for the status / display state machines ────────
