@@ -103,7 +103,7 @@ soft float for now.
 | `0x20000914` | ≥0x2C | `g_adc_ctx` | `sensor.c` | ADC/sensor context **shared** by `supply_voltage_read` and `moving_avg10_push`: moving-avg write cursor (byte) `+0x00`, ten `u16` samples `+0x04`, ADC status byte `+0x22`, raw ADC sample (`u16`) `+0x2A`. `hw_version_lookup` also uses `+0x22` (cached HW-rev byte) and `+0x24` (`u16` HW-ID divider ADC average, matched vs the 16-entry float table at flash `0x08044F9C`). `adc_config_shadow_copy` latches the live sampling config (words `+0x18`/`+0x1c`, half `+0x20`) into the shadow fields `+0x24`/`+0x28`/`+0x2c` while `+0x22` is clear. |
 | `0x20005DB4` | ≥0x14 | `g_charge_adc_ctx` | `sensor.c` | charger/lipo monitor context (`lipo_charge_state_monitor`); `charge_level_adc_get` reads the raw 12-bit charger ADC sample at `+0x10` (`0xFFF` = invalid → reports `0xFF`, else `/10`). |
 | `0x200000C8` | 3 | `g_msg_tx_handle` | `ssp.c` | `[0]` rolling 8-bit handle counter for `maybe_enqueue_tx_message` (bumped per committed record + per handle collision); `[1]`/`[2]` = `sspm_tx_queue_pump`'s "retry_tmr" (0x32) / "between_pack_tmr" (0xF) scheduler-slot handles. |
-| `0x20009360` | 6 | `g_button_sm` | `states.c` | three button/announce state machines (`button_press_state_machines_step`); `announce_records_reset(mask)` resets them — phase bytes `[0..2]`, dispatch-state bytes `[3..5]` (machine A re-arms to state 5, B/C to 0). |
+| `0x20009360` | 7 | `g_button_sm` | `buttons.c` | three button state machines (`button_press_state_machines_step`, `src/buttons.c`): event bytes `[0]` bell/`[1]` boost/`[2]` reset, machine-state bytes `[3..5]`, reset press-count `[6]`. Region is shared with the announcement-record block (`announce_records_reset`, higher offsets). Bell=PC0, boost=PC1, reset=PD2. |
 | `0x20006E44` | ≥2 | `g_reset_sm` | `ble.c` / (reset-SM) | factory-reset / power-cycle SM control block (`factory_reset_sm_step`): `[0]` main_state (4 = kick), `[1]` sub_step (0..6). `post_request_with_arg` seeds `[1]` then sets `[0]=4`. |
 | `0x20000944` | 4 | `g_app_ctx_ptr` | `app.c` | pointer to the app context used by `channel_resolve_status`; the three sound-group volume-tier masks (low/medium/high) are at `*ptr + 0xF4/0xF8/0xFC` (see `g_ctx` row; defaults from `sound_groups_init_default`). |
 | `0x20001A44` | ≥0xB44 | `g_uart_ctx` | `uart.c` / `ssp.c` / `bus.c` | shared serial driver context holding two UARTs' ring handles. **UART5** (BLE): `+0xB3C` TX ring (`uart_send_byte`), `+0xB40` RX ring (`ssp_rx_byte` / `uart5_irq_handler`). **UART4** (BMS/battery bus): `+0x330` TX ring (`bus_tx_enqueue_byte`), `+0x334` RX ring (`bus_rx_byte_locked` / `uart4_irq_handler`). |
@@ -214,6 +214,43 @@ on-board EEPROM (AT24C, dev `0xA0`) bus; its HAL handle lives at SRAM
 `0x20009B04`. The GPIOC AF pins are the other peripheral I/O (inter-module-bus
 UART + the I2C3 normal SCL/SDA). The **window watchdog** (WWDG `0x40002C00`) is
 refreshed each loop by `watchdog_kick` (writes `0x7F` to `WWDG_CR`).
+
+### User inputs — buttons & wheel/RPM sensor
+
+Three physical push-buttons, each polled once per super-loop pass by
+**`button_press_state_machines_step`** (`0x08040380`, `src/buttons.c`). Each runs
+the same 6-state debounce/classify machine and writes an event code consumed by
+`status_process` and the BLE `0x5568` read:
+
+| Button | Pin | Read | Hold / debounce | Timer names |
+| --- | --- | --- | --- | --- |
+| **bell / horn** | **PC0** | `gpio_pc0_is_low` (low = pressed) | 500 ms / 20 ms | `button_horn_tmr` / `button_horn_debounce_tmr` |
+| **boost** | **PC1** | `gpio_pc1_is_low` (low = pressed) | 150 ms / 20 ms | `button_boost_tmr` / `button_boost_debounce_tmr` |
+| **reset** | **PD2** | `HAL_GPIO_ReadPin(GPIOD,0x4)` (0 = pressed) | 500 ms / 20 ms | `button_reset_tmr` / `button_reset_debounce_tmr` |
+
+Event codes written to the state block: `1` = short click, `2` = held (>hold
+timer), `4` = long hold (+3 s); reset also uses `3`/`6`. State bytes live at
+`0x20009360` (`[0..2]` events, `[3..5]` machine state, `[6]` reset press-count);
+the debounce/hold scheduler-slot ids at `0x20000102..0x20000109`. (What the app
+calls the **bell** is this PC0 horn button; the EEPROM state record timestamps the
+bell/boost presses at `+0x320`/`+0x324`.)
+
+**Wheel / RPM sensor — PC5.** A reed/hall pulse on **PC5** (`HAL_GPIO_ReadPin
+(GPIOC,0x20)`) toggles once per wheel revolution. `status_process` polls it
+(`src/states.c`), latches the last level in `G_CLK[0xA1]`, and on each edge logs
+`"Wheel trigger"` / `"Wheel move"` — this is the movement/wake input (wake source
+`WAKE_SRC_WHEEL`), used together with the LIS3DH `"Mems trigger"` to drive alarm
+escalation. mainware only **detects motion** here; the actual road **speed** value
+is reported by the motor controller (motorware) over Modbus, not measured from PC5.
+
+**Alarm system** is not a separate module — it is the low half of the
+`status_process` state switch: states `0x00..0x05` are `ALARM_PRE_M1`,
+`ALARM_ACTIVE_M1_CNT`, `ALARM_ACTIVE_M2`, `ALARM_TRACKING_UNCONFIRMED`,
+`ALARM_TRACKING_CONFIRMED`, `ALARM_BMS_REMOVED` (names via `alarm_state_name`,
+`src/states.c`). Escalation is fed by the PC5 wheel trigger + LIS3DH mems trigger
+above, counted in `G_CLK[0xA4]` (`"Alarm count %d"`), with BLE control via
+`CMD_BLE_DEFENCE_ALARM_STATE` / `_SETTING`. See `docs/status-process.md` and
+`docs/state-machine.md`.
 
 ### Motion sensor — ST LIS3DH accelerometer
 
@@ -342,6 +379,80 @@ toggled around the amp probe; **PE10** read as SIM-source detect (low →
 `"SIM: PCB"` + set **PE12**; high → `"SIM: Holder"` + clear PE12); **PC8** read for
 a state-record default. The firmware self-identifies as **"ES3"** (boot banner
 `"ES3 v%d.%02d.%02d"`, model string `"%cS3.%c"` → e.g. `ES3.2`).
+
+#### EEPROM map (AT24C, I2C3 dev `0xA0`, 128 bytes)
+
+The whole 0x80-byte device is reached only through the three primitives in
+`src/eeprom.c` (`eeprom_write_region` `0x0803E258`, `eeprom_read_bounded`
+`0x0803E174`, `eeprom_read_id_block` `0x0803E138`). It holds exactly two persisted
+objects plus one read-only device block — **nothing else lives in EEPROM**
+(the *config* block is on-chip *flash*, banks `0x08008000`/`0x0800C000` via
+`config_persist_dual_bank`, not here):
+
+| EEPROM range | Size | Contents |
+| --- | --- | --- |
+| `0x00..0x3B` | 0x3C | **State record, copy A** (primary) |
+| `0x3C..0x3F` | 4 | unused |
+| `0x40..0x7B` | 0x3C | **State record, copy B** (mirror) |
+| `0x7C..0x7F` | 4 | unused |
+| cmd `0xFA` | 6 | **lock/security "ID" block** — device special read, *not* in the `0x00..0x7F` array; `eeprom_read_id_block` (= `Security_GetLockState` in fw 1.9.x), probed once at boot |
+
+##### State record (odometer / runtime state)
+
+`save_state_record_to_eeprom` (`0x0803E2CC`, `app.c`) writes a 15-word (0x3C-byte)
+block to **both copies** (offset `0x00` then `0x40`, 5 ms + watchdog kick between),
+with a HW CRC-32 over words 0..0xD stored in word `0xE` (offset `0x38`). The read
+path `eeprom_read_config_with_crc_fallback` (`0x0803E1A8`) reads copy A, CRC-checks
+it, and **falls back to copy B** on mismatch — returning failure only if *both*
+copies fail CRC; it runs once from `mainware_boot_init_sequence`. The record is a
+verbatim image of the contiguous `session_ctx` block **`+0x310..+0x347`**
+(word *n* = `ctx+0x310+4n`):
+
+| Record word | EEPROM off (A / B) | `session_ctx` off | Field |
+| --- | --- | --- | --- |
+| 0 | `0x00` / `0x40` | `+0x310` | `+0x310` alarm/bike state · `+0x311` play-lock-sound · `+0x312` remote-locked · `+0x313` logging APP/serial |
+| 1 | `0x04` / `0x44` | `+0x314` | `+0x314` shipping · `+0x315` cached BMS SOC · `+0x316` power level+boost · `+0x317` alarm enable |
+| 2 | `0x08` / `0x48` | `+0x318` | `+0x318` horn file index |
+| **3** | **`0x0C` / `0x4C`** | **`+0x31C`** | **trip distance / odometer** (tenths of a km, u32) |
+| 4 | `0x10` / `0x50` | `+0x320` | timestamp — bell button |
+| 5 | `0x14` / `0x54` | `+0x324` | timestamp — boost button |
+| 6 | `0x18` / `0x58` | `+0x328` | timestamp — GSM check |
+| 7-8 | `0x1C..0x21` | `+0x32C` | firmware update order (6 bytes) · `+0x332` BMS-SOC override · `+0x333` BLE-sleep request |
+| 9 | `0x24` / `0x64` | `+0x334` | `+0x334` shifter retries · `+0x336` shifter firmware version |
+| 10 | `0x28` / `0x68` | `+0x338` | shifter total shifts |
+| 11 | `0x2C` / `0x6C` | `+0x33C` | GSM tracking heartbeat |
+| 12 | `0x30` / `0x70` | `+0x340` | `+0x340` kicklock state · `+0x341` battery state · `+0x342` BMS firmware version |
+| 13 | `0x34` / `0x74` | `+0x344` | **wake counter** |
+| 14 | `0x38` / `0x78` | (`+0x348`) | **CRC-32** over words 0..0xD |
+
+So the console `distance` command writes only `ctx+0x31C` in RAM; the value reaches
+EEPROM (word 3, offset `0x0C`/`0x4C`) at the next state-record flush —
+`set_unlock_state_persist` (lock/unlock), `status_process`, boot init, factory
+reset, or a BLE/SMS/testmode trigger — not from the command itself.
+
+##### Cross-reference — `dev/vanmoof/vanmoof-tools/README.md`
+
+The vanmoof-tools README carries an independent SRAM/flash/EEPROM field map (for
+**mainware 1.09.03** — `session_ctx` base `0x20000A00` there vs our 1.07.06 base
+`0x200083A8`; the *relative* offsets are what match). Every offset we derived from
+the 1.07.06 binary agrees with it:
+
+- **Exact matches** (independently derived here, confirmed there): odometer `+0x31C`
+  ("Odometer: km*10"), wake counter `+0x344`, record CRC-32 at word 0xE = `+0x348`,
+  record size `0x3C`, and — in the *flash* config block — region-lock `+0x144`, the
+  region-indexed shift tables `+0x10E`/`+0x126`, and the **config CRC-32 at `+0x1C0`**
+  (our `flash_config_bank_write` `u.w[0x33]`; previously mislabelled as part of the
+  reserved tail — now split out as `bike_config_t.config_crc32`).
+- **Richer field names** for bytes we had only as opaque "counters/flags" are folded
+  into the table above (timestamps `+0x320/+0x324/+0x328`, firmware-update-order
+  `+0x32C`, shifter/BMS fields `+0x334..+0x342`, `+0x140` = "Mainware version").
+- **Version caveat:** some labelled bytes are 1.09.x-era additions and are *not*
+  necessarily live in 1.07.06 — notably `+0x315` cached BMS SOC, `+0x332` BMS-SOC
+  override and `+0x333` BLE-sleep request (both introduced in 1.09.01, see
+  `docs/compare-1.08.02/soc-override.md` and `wake.md`). They occupy the same record
+  slots but should be confirmed against the 1.07.06 binary before being treated as
+  active there. The config-block `+0x145/+0x146/+0x147` (model / custom-SOC /
+  HW-revision) are likewise 1.09.x and sit in our `reserved_tail` for 1.07.06.
 
 ### Battery / BMS (inter-module Modbus, `docs/battery.md`)
 
