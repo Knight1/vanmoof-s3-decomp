@@ -23,4 +23,10 @@ uint32_t systick_now(void);
  * OEM systick_delay at 0x08023304. */
 void systick_delay(uint32_t ticks);
 
+/* Gate the SysTick interrupt by clearing/setting SysTick CTRL.TICKINT (bit 1,
+ * at 0xE000E010). OEM systick_irq_disable 0x0802332C / systick_irq_enable
+ * 0x0802333C — used around the stop/low-power transitions. */
+void systick_irq_disable(void);
+void systick_irq_enable(void);
+
 #endif

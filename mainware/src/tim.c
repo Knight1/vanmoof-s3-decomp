@@ -220,3 +220,10 @@ void HAL_TIM_PWM_MspDeInit(tim_handle_t *htim)
         RCC_APB2ENR &= ~0x1u;   /* TIM1EN off */
     }
 }
+
+/* Application hook the TIM6 update ISR calls before the framework servicer
+ * (OEM tim6_app_hook, 0x08037AA8). Empty in this build — a weak override point
+ * the shipped firmware never populated (the OEM body is a bare `bx lr`). */
+void tim6_app_hook(void)
+{
+}

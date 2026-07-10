@@ -25,7 +25,41 @@
 #include <stdint.h>
 
 #include "bus.h"
+#include "scheduler.h"   /* scheduler_release (bus_crc16_verify) */
 #include "util.h"
+
+/* Modbus-RTU CRC-16 (poly 0xA001): one shared accumulator at SRAM 0x200000C2 that
+ * the inter-module bus RX/TX paths feed one byte at a time. */
+#define BUS_CRC (*(volatile uint16_t *)0x200000C2u)
+
+void bus_crc16_reset(void)
+{
+    BUS_CRC = 0xffff;
+}
+
+uint16_t bus_crc16_update(uint16_t byte)
+{
+    BUS_CRC ^= byte;
+    for (int i = 8; i != 0; i--) {
+        uint16_t c = BUS_CRC;
+        BUS_CRC = (c & 1) ? (uint16_t)((c >> 1) ^ 0xa001) : (uint16_t)(c >> 1);
+    }
+    return BUS_CRC;
+}
+
+uint16_t bus_crc16_get(void)
+{
+    return BUS_CRC;
+}
+
+/* Despite the name, this resets the bus-RX framing state: release the RX-timeout
+ * scheduler slot at SRAM 0x200000C4 and clear the framing flag at 0x20006E90
+ * (OEM 0x08039954). */
+void bus_crc16_verify(void)
+{
+    scheduler_release((uint8_t *)0x200000c4u);
+    *(volatile uint8_t *)0x20006e90u = 0;
+}
 
 /* UART4 register-block handle (pointer-to-pointer) and the serial context base
  * holding its ring handles. */

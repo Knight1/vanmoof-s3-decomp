@@ -459,18 +459,24 @@ typedef struct {
     uint16_t assist_up_hmh  [4][3]; /* +0x10E region[4] × moment[3]: assist *engage*  speed (0.1 km/h) */
     uint16_t assist_down_hmh[4][3]; /* +0x126 region[4] × moment[3]: assist *release* speed (0.1 km/h) */
     uint8_t  _pad_13e[2];           /* +0x13E                                                     */
-    uint32_t saved_schema_version;  /* +0x140 config schema/version stamp                         */
+    uint32_t saved_schema_version;  /* +0x140 version of the mainware that last wrote this config  */
+                                    /*        (the vanmoof-tools field map labels it "Mainware     */
+                                    /*        version"); a schema/compat stamp.                    */
     uint8_t  region_lock;           /* +0x144 region-lock state (1=off-road disabled, 2=locked,   */
                                     /*        else unlocked). Persisted; preserved across factory */
                                     /*        reset; read/written by the `region` console cmd —   */
                                     /*        same field as session_ctx.region_lock (app_state.h).*/
-    uint8_t  reserved_tail[0x7f];   /* +0x145..+0x1C3 persisted but with NO runtime consumer in    */
+    uint8_t  reserved_tail[0x7b];   /* +0x145..+0x1BF persisted but with NO runtime consumer in    */
                                     /*        1.07.06: settings_factory_reset leaves it zeroed and */
                                     /*        console_cmd_show (0x08042820, the full dump) reads    */
                                     /*        nothing here. Later firmware repurposes the first     */
                                     /*        three bytes — 1.09.01 uses +0x145/+0x146/+0x147 as    */
                                     /*        HW-config bitfield / custom-SOC / HW-version (see     */
                                     /*        docs/compare-1.08.02/set-model.md, soc-override.md).  */
+    uint32_t config_crc32;          /* +0x1C0 record CRC-32 = flash_config_bank_write's u.w[0x33]  */
+                                    /*        (offset 0xCC), computed over words 0..0x32 and        */
+                                    /*        re-verified straight from flash on load. This is the  */
+                                    /*        last word of the 0xD0-byte record, NOT reserved.      */
 } bike_config_t;                    /* total 0xD0 bytes (== ctx+0xF4 .. ctx+0x1C3) */
 
 /* Pin the overlay to the OEM byte offsets — a future field edit that shifts the
@@ -482,6 +488,7 @@ _Static_assert(offsetof(bike_config_t, assist_up_hmh)       == 0x1a,   "assist_u
 _Static_assert(offsetof(bike_config_t, assist_down_hmh)     == 0x32,   "assist_down @ ctx+0x126");
 _Static_assert(offsetof(bike_config_t, saved_schema_version) == 0x4c,  "schema @ ctx+0x140");
 _Static_assert(offsetof(bike_config_t, region_lock)         == 0x50,   "region_lock @ ctx+0x144");
+_Static_assert(offsetof(bike_config_t, config_crc32)        == 0xcc,   "config CRC @ ctx+0x1C0 (u.w[0x33])");
 
 /* Seed the three sound-group volume-tier bitmasks ("Group low/medium/high" at
  * cfg+0/+4/+8 == ctx+0xF4/F8/FC): low={}, medium=0x383F33FE, high=0x47C0CC00
@@ -586,4 +593,49 @@ uint8_t save_state_record_to_eeprom(uint32_t a, uint32_t b, uint32_t c, uint32_t
     systick_delay(5);
     uint8_t rc2 = (uint8_t)eeprom_write_region(0x40, (const uint8_t *)u.w, 0x3C);
     return (uint8_t)((rc1 | rc2) & 0xFF);
+}
+
+/* The 64-bit application fault-flag pair — session_ctx+0x3B8 (low 32) / +0x3BC
+ * (high 32), reached through the session-ctx pointer cached at 0x20000944.
+ * set/clear/test are the shared accessors used across the battery, lighting, modem,
+ * button and status modules (OEM 0x0802A268 / 0x0802A240 / 0x0802A28C). */
+void state_flags_set(uint32_t low, uint32_t high)
+{
+    uint8_t *ctx = *(uint8_t **)0x20000944u;
+    *(uint32_t *)(ctx + 0x3b8) |= low;
+    *(uint32_t *)(ctx + 0x3bc) |= high;
+}
+
+void state_flags_clear(uint32_t low, uint32_t high)
+{
+    uint8_t *ctx = *(uint8_t **)0x20000944u;
+    *(uint32_t *)(ctx + 0x3b8) &= ~low;
+    *(uint32_t *)(ctx + 0x3bc) &= ~high;
+}
+
+int state_flags_test(uint32_t low, uint32_t high)
+{
+    uint8_t *ctx = *(uint8_t **)0x20000944u;
+    return (*(uint32_t *)(ctx + 0x3bc) & high) != 0 ||
+           (*(uint32_t *)(ctx + 0x3b8) & low) != 0;
+}
+
+/* app_ctx_ptr_set (OEM 0x08033964) — cache the session-context pointer at the
+ * shared slot 0x20000944 (the copy the state/flag helpers dereference). */
+void app_ctx_ptr_set(void *ctx)
+{
+    *(void **)0x20000944u = ctx;
+}
+
+/* sound_groups_init_default (OEM 0x0803FAC0) — seed the three sound-group
+ * volume-tier bitmasks at cfg+0/+4/+8 (session_ctx+0xF4/F8/FC): low={} (quiet),
+ * medium=0x383F33FE, high=0x47C0CC00 (medium|high partition sound bits 1..30
+ * disjointly). See the settings_factory_reset comment above. */
+void sound_groups_init_default(void *cfg)
+{
+    uint32_t *g = (uint32_t *)cfg;
+
+    g[0] = 0;
+    g[1] = 0x383F33FEu;
+    g[2] = 0x47C0CC00u;
 }

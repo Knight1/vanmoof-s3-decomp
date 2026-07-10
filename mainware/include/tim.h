@@ -64,4 +64,8 @@ void HAL_TIM_Base_MspInit(tim_handle_t *htim);   /* OEM 0x0803C3EC */
 void HAL_TIM_MspPostInit(tim_handle_t *htim);    /* OEM 0x0803C494 */
 void HAL_TIM_PWM_MspDeInit(tim_handle_t *htim);  /* OEM 0x0803C5D0 */
 
+/* Weak application hook the TIM6 update ISR calls first; empty in this build
+ * (OEM 0x08037AA8). */
+void tim6_app_hook(void);
+
 #endif

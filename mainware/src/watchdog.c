@@ -65,6 +65,15 @@ void watchdog_init(void)
     }
 }
 
+/* Enable the WWDG APB1 peripheral clock (OEM wwdg_apb_clk_enable, 0x080314B4):
+ * set RCC_APB1ENR.WWDGEN (bit 11). The argument-free counterpart to
+ * wwdg_clk_enable — a bare read-modify-write, used by the OTA/update path to
+ * re-arm the watchdog clock around a flash operation (see update.c). */
+void wwdg_apb_clk_enable(void)
+{
+    *(volatile uint32_t *)(0x40023800u + 0x40u) |= 0x800u;   /* RCC_APB1ENR.WWDGEN */
+}
+
 /* Disable the WWDG APB1 peripheral clock (OEM wwdg_apb_clk_disable, 0x080314A4):
  * clear RCC_APB1ENR.WWDGEN (bit 11). A bare read-modify-write with no read-back
  * (unlike wwdg_clk_enable). Used by the shipping-mode / stop-mode powerdown paths. */

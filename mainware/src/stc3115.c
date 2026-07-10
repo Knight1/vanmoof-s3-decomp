@@ -22,13 +22,13 @@ int stc3115_i2c_read(uint16_t len, uint8_t reg, uint8_t *out)
     return HAL_I2C_Master_Receive(STC_I2C, STC_ADDR, out, len, STC_TMO);
 }
 
-void stc3115_i2c_write(uint32_t len, uint8_t reg, const void *data)
+int stc3115_i2c_write(uint32_t len, uint8_t reg, const void *data)
 {
     uint8_t buf[64];
 
     buf[0] = reg;
     memcpy(&buf[1], data, len);
-    HAL_I2C_Master_Transmit(STC_I2C, STC_ADDR, buf, (uint16_t)(len + 1), STC_TMO);
+    return HAL_I2C_Master_Transmit(STC_I2C, STC_ADDR, buf, (uint16_t)(len + 1), STC_TMO);
 }
 
 uint32_t stc3115_read_reg(uint32_t reg)
@@ -41,12 +41,12 @@ uint32_t stc3115_read_reg(uint32_t reg)
     return b[0];
 }
 
-void stc3115_write_reg(uint32_t reg, uint8_t value)
+int stc3115_write_reg(uint32_t reg, uint8_t value)
 {
     uint8_t b[8];
 
     b[0] = value;
-    stc3115_i2c_write(1, (uint8_t)reg, b);
+    return stc3115_i2c_write(1, (uint8_t)reg, b);
 }
 
 int stc3115_read_word(uint8_t reg)
@@ -73,9 +73,9 @@ int stc3115_read_block(uint8_t *dst, uint8_t reg, uint32_t len)
     return stc3115_i2c_read((uint16_t)len, reg, dst);
 }
 
-void stc3115_write_block(const void *src, uint8_t reg, uint32_t len)
+int stc3115_write_block(const void *src, uint8_t reg, uint32_t len)
 {
-    stc3115_i2c_write(len, reg, src);
+    return stc3115_i2c_write(len, reg, src);
 }
 
 /* ── RAM working copy (gauge RAM regs 0x20..0x2F) ─────────────────────────── */
@@ -84,9 +84,9 @@ void stc3115_ram_read(uint8_t *dst)
     stc3115_read_block(dst, 0x20, 0x10);
 }
 
-void stc3115_ram_write(const void *src)
+int stc3115_ram_write(const void *src)
 {
-    stc3115_write_block(src, 0x20, 0x10);
+    return stc3115_write_block(src, 0x20, 0x10);
 }
 
 /* CRC-8, polynomial 0x07, MSB-first (the gauge-RAM integrity check). */
@@ -190,4 +190,22 @@ int stc3115_read_measurements(int *out)
         out[7] = r >> 2;
     }
     return 0;
+}
+
+/* gas_gauge_reset (OEM 0x080396C4) — clear the two RAM-mirror fields (the coulomb
+ * counter halfword and the CRC/valid byte at +9) at 0x20006E80, write the mirror
+ * back to the gauge, and — if that succeeded — re-run the STC3115 by writing MODE
+ * (reg 1) = 0x10. Returns the I2C status (0 = ok). */
+int gas_gauge_reset(void)
+{
+    uint8_t *mirror = (uint8_t *)0x20006e80u;
+    int rc;
+
+    *(uint16_t *)mirror = 0;
+    mirror[9] = 0;
+    rc = stc3115_ram_write(mirror);
+    if (rc == 0) {
+        rc = stc3115_write_reg(1, 0x10);
+    }
+    return rc;
 }

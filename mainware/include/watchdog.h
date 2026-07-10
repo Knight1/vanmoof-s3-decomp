@@ -22,6 +22,11 @@ int wwdg_hw_init(uint32_t *desc);
 /* Enable the WWDG peripheral clock (OEM 0x08031474). */
 void wwdg_clk_enable(uint32_t *desc);
 
+/* Enable the WWDG APB1 peripheral clock — sets RCC_APB1ENR.WWDGEN (bit 11)
+ * (OEM 0x080314B4). Argument-free counterpart to wwdg_clk_enable; used by the
+ * OTA/update flash path. */
+void wwdg_apb_clk_enable(void);
+
 /* Disable the WWDG APB1 peripheral clock — clears RCC_APB1ENR.WWDGEN (bit 11)
  * (OEM 0x080314A4). Used on the shipping/stop-mode powerdown paths. */
 void wwdg_apb_clk_disable(void);

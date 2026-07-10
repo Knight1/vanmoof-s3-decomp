@@ -347,7 +347,16 @@ extern int modbus_bat_submit(void *frame);    /* 0x08039DDC — battery slave 0x
 extern int modbus_shift_submit(void *frame);  /* 0x080378A0 — shifter slave 0x20 */
 
 /* `distance` — manually set the trip distance (tenths of a km) at ctx+CTX_DISTANCE and
- * echo it as whole.fraction km (OEM 0x08041360). No-arg path is silent. */
+ * echo it as whole.fraction km (OEM 0x08041360). No-arg path is silent.
+ *
+ * This handler writes RAM only — it does NOT persist. The distance/odometer at
+ * ctx+0x31C is written to EEPROM as part of the 15-word "state record"
+ * (save_state_record_to_eeprom, app.c): word 3 of the record, i.e. EEPROM byte
+ * offset 0x0C in copy A (base 0x00) and 0x4C in copy B (base 0x40), CRC-protected.
+ * That record covers the contiguous ctx block +0x310..+0x347 and is flushed by
+ * lock/unlock (set_unlock_state_persist), status_process, boot init, factory
+ * reset, and the BLE/SMS/testmode paths — never by this command itself, so a
+ * `distance` override only survives to the next state-record write. */
 void console_cmd_distance(char *args)
 {
     char *p = args;

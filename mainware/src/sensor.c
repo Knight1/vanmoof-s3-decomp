@@ -1,6 +1,12 @@
 #include <stdint.h>
 
 #include "sensor.h"
+#include "scheduler.h"   /* scheduler_alloc/start/slot_is_idle, SCHED_SLOT_NONE */
+#include "systick.h"     /* systick_now */
+
+extern void nvic_clear_pending_irq();   /* 0x0802714C */
+extern void nvic_set_priority();        /* 0x08027078 */
+extern void nvic_enable_irq();          /* 0x080270E0 */
 
 /* ADC/sensor context (OEM SRAM 0x20000914). Shared layout: a moving-average
  * ring at the base (write-cursor byte at +0x00, ten u16 samples at +0x04), a
@@ -127,15 +133,34 @@ extern int HAL_I2C_Master_Transmit(void *h, uint16_t addr, const uint8_t *d,
                                    uint16_t n, uint32_t tmo);
 extern int HAL_I2C_Master_Receive(void *h, uint16_t addr, uint8_t *d,
                                   uint16_t n, uint32_t tmo);
+extern int HAL_I2C_Mem_Write(void *h, uint16_t dev, uint16_t mem, uint16_t memsz,
+                             const uint8_t *d, uint16_t n, uint32_t tmo);
+
+/* hdc1080_write_config_reg (OEM 0x08033118) — write the HDC1080 configuration
+ * register (0x02): base 0x14 (mode_a==1) or 0x10, OR'd with 1/2 per mode_b; low
+ * byte 0. Returns the I2C write status. */
+int hdc1080_write_config_reg(void *hi2c, int mode_a, int mode_b)
+{
+    uint8_t cfg[8];
+
+    cfg[0] = (mode_a == 1) ? 0x14 : 0x10;
+    if (mode_b == 1) {
+        cfg[0] |= 1;
+    } else if (mode_b == 2) {
+        cfg[0] |= 2;
+    }
+    cfg[1] = 0;
+    return HAL_I2C_Mem_Write(hi2c, 0x80, 2, 1, cfg, 2, 1000);
+}
 
 /* Set the HDC1080 read pointer to register 0 (temperature) — also triggers a
  * conversion. OEM 0x08033164. */
-void hdc1080_set_pointer(void *hi2c)
+int hdc1080_set_pointer(void *hi2c)
 {
     uint8_t reg[5];
 
     reg[0] = 0;
-    HAL_I2C_Master_Transmit(hi2c, 0x80, reg, 1, 0x32);
+    return HAL_I2C_Master_Transmit(hi2c, 0x80, reg, 1, 0x32);
 }
 
 /* Read the HDC1080's 4 result bytes (temp MSB/LSB, humidity MSB/LSB) and convert
@@ -206,4 +231,56 @@ void adc_config_shadow_copy(void)
     *(volatile uint32_t *)(ADC_CTX + 0x24) = cfg_lo;
     *(volatile uint32_t *)(ADC_CTX + 0x28) = cfg_hi;
     *(volatile uint16_t *)(ADC_CTX + 0x2c) = cfg_x;
+}
+
+/* supply_voltage_sample_step (OEM 0x08029B24) — sample the main supply voltage
+ * (moving-averaged mV) at most every 100 ticks into the cache at G_CLK+0x0A, using
+ * the timer slot at G_STATE[3]; returns the cached value. Called each super-loop. */
+uint16_t supply_voltage_sample_step(void)
+{
+    uint8_t  *slot = (uint8_t  *)0x2000002cu;   /* G_STATE[3] timer slot */
+    uint16_t *samp = (uint16_t *)0x200001e2u;   /* G_CLK+0x0A cached mV */
+
+    if (*slot == SCHED_SLOT_NONE) {
+        *slot = scheduler_alloc();
+        scheduler_start(*slot, 100, 0);
+    }
+    if (scheduler_slot_is_idle(*slot) != 0) {
+        *samp = supply_voltage_read();
+        scheduler_start(*slot, 100, 0);
+    }
+    return *samp;
+}
+
+/* output_value_filter_step (OEM 0x08038F78) — sample-and-hold filter over a 32-bit
+ * value: below 25000 the accumulators (state block 0x20006E48, +0x18/+0x1A/+0x1C)
+ * are reset; every 100 ticks the held value (+0x24) is refreshed from the
+ * accumulator (+0x18). A one-shot init counter at +0x2A (re)enables IRQ 23 when it
+ * counts down to 0. Returns the currently-held value. Called each super-loop. */
+uint32_t output_value_filter_step(uint32_t value)
+{
+    uint8_t *f = (uint8_t *)0x20006e48u;
+
+    if (value < 25000) {
+        *(uint16_t *)(f + 0x1a) = 0;
+        *(uint16_t *)(f + 0x18) = 0;
+        *(uint8_t  *)(f + 0x1c) = 0;
+    }
+    if (*(uint32_t *)(f + 0x20) + 100 < systick_now()) {
+        *(uint32_t *)(f + 0x20) = systick_now();
+        *(uint32_t *)(f + 0x24) = *(uint32_t *)(f + 0x18);
+        *(uint8_t  *)(f + 0x28) = 0;
+    }
+    {
+        int16_t cd = *(int16_t *)(f + 0x2a);
+        if (cd != 0) {
+            *(int16_t *)(f + 0x2a) = (int16_t)(cd - 1);
+            if (cd == 1) {
+                nvic_clear_pending_irq(0x17);
+                nvic_set_priority(0x17, 0, 0);
+                nvic_enable_irq(0x17);
+            }
+        }
+    }
+    return *(uint32_t *)(f + 0x24);
 }

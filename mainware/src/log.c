@@ -4,7 +4,13 @@
 #include "crc.h"
 #include "log.h"
 #include "rtc.h"
+#include "scheduler.h"
 #include "watchdog.h"
+
+/* Cross-module leaves used by the BLE log-upload state machine. */
+extern int strnlen(const char *s, int maxlen);           /* OEM 0x080218C0 (bounded strlen) */
+extern int download_chunks_pending_count(void);          /* 0x0803FA98 */
+extern int ssp_ble_enqueue_tx_packet();                  /* 0x0803F9CC */
 
 /* The console-printf function pointer (SRAM 0x20009D98). Set once during
  * application init (the initialiser is not yet decoded) and then used by
@@ -231,5 +237,98 @@ void log_buffer_dump(void)
         }
 
         src++;
+    }
+}
+
+/* log_upload_sm_step (OEM 0x08029774) — streams the circular text log to the app
+ * over BLE char 0x106, one drained line per packet. A 61 s keep-alive slot
+ * (0x20000027) re-arms each pass and, on `force_start`, kicks the machine into
+ * state 1. States (byte at 0x200001D6): 1 announce ("Transfer log" + ANSI
+ * "\x1b[37m", app-log sink toggled off/on); 2 drain a line (log_drain_line) and
+ * ssp-enqueue it (skipped in bike states 0x19/0x1A; empty line -> done);
+ * 4 wait for the 128-chunk window to drain (2 s slot, "Log transfer timeout %d"
+ * on stall); 3 release + idle. */
+void log_upload_sm_step(int force_start)
+{
+    uint8_t *slot  = (uint8_t *)0x20000027u;   /* [0] keep-alive, [1] chunk timer */
+    uint8_t *state = (uint8_t *)0x200001d6u;
+    uint8_t  line[256];
+
+    if (slot[0] == SCHED_SLOT_NONE) {
+        slot[0] = scheduler_alloc();
+        scheduler_start(slot[0], 61000, 0);
+    }
+    if (scheduler_slot_is_idle(slot[0]) != 0) {
+        scheduler_start(slot[0], 61000, 0);
+        if (force_start != 0) {
+            *state = 1;
+        }
+    }
+
+    switch (*state) {
+    case 1:
+        if (slot[1] == SCHED_SLOT_NONE) {
+            slot[1] = scheduler_alloc();
+        }
+        state_flag_set(0);
+        log_print_timestamp_prefix();
+        g_log_func("Transfer log\r\n");
+        g_log_func("\x1b[37m");
+        state_flag_set(1);
+        *state = 2;
+        break;
+    case 2: {
+        uint8_t bs = maybe_get_bike_state();
+        if (bs != 0x19 && maybe_get_bike_state() != 0x1a) {
+            memset(line, 0, 0x100);
+            if ((log_drain_line(line) & 0xffff) == 0) {
+                *state = 3;
+            } else {
+                uint16_t len = (uint16_t)strnlen((char *)line, 0x100);
+                if (ssp_ble_enqueue_tx_packet(0x106, len, line, 0) < 0x81) {
+                    scheduler_start(slot[1], 2000, 0);
+                    *state = 4;
+                } else {
+                    *state = 0;
+                    g_log_func("  ERROR SSP place\r\n");
+                }
+            }
+        }
+        break;
+    }
+    case 3:
+        scheduler_release(&slot[1]);
+        *state = 0;
+        break;
+    case 4:
+        if (download_chunks_pending_count() == 0x80) {
+            *state = 2;
+        }
+        if (scheduler_slot_is_idle(slot[1]) != 0) {
+            log_print_timestamp_prefix();
+            g_log_func("Log transfer timeout %d\r\n", download_chunks_pending_count());
+            *state = 3;
+        }
+        break;
+    }
+}
+
+/* log_wake_reason (OEM 0x0803DA3C) — log the reason the MCU last woke (the wake-type
+ * code cached at 0x20000004). 0..9 map to a WAKE_* token; anything else is treated
+ * as a cold boot ("Cold boot clear log..") and wipes the circular log. */
+void log_wake_reason(void)
+{
+    static const char *const k_wake_reasons[10] = {
+        "WAKE_NONE", "WAKE_SRC_RTC", "WAKE_SRC_BUTTON_1", "WAKE_SRC_BUTTON_2",
+        "WAKE_SRC_BLE", "WAKE_SRC_MEMS", "WAKE_SRC_CHG", "WAKE_SRC_WHEEL",
+        "WAKE_KEY_IN", "WAKE_KICKLOCK",
+    };
+    uint32_t r = *(volatile uint32_t *)0x20000004u;
+
+    if (r < 10) {
+        g_log_func("Wake Reason: %s\r\n", k_wake_reasons[r]);
+    } else {
+        g_log_func("Cold boot clear log..\r\n");
+        log_buffer_reset();
     }
 }

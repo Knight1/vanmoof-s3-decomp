@@ -13,21 +13,22 @@
 
 /* Low-level I2C: write the register address then read `len` bytes / write
  * `len` data bytes after the register byte. Return is the HAL status of the
- * read (i2c_read); i2c_write discards it. */
+ * read (i2c_read); the write path returns the HAL transmit status. */
 int  stc3115_i2c_read(uint16_t len, uint8_t reg, uint8_t *out);   /* OEM 0x080392C0 */
-void stc3115_i2c_write(uint32_t len, uint8_t reg, const void *data); /* OEM 0x08039448 */
+int  stc3115_i2c_write(uint32_t len, uint8_t reg, const void *data); /* OEM 0x08039448 */
 
 /* Register accessors (read_reg returns 0xFFFFFFFF on bus error). */
 uint32_t stc3115_read_reg(uint32_t reg);          /* OEM 0x080393DC */
-void     stc3115_write_reg(uint32_t reg, uint8_t value); /* OEM 0x080394A6 */
+int      stc3115_write_reg(uint32_t reg, uint8_t value); /* OEM 0x080394A6 */
 int      stc3115_read_word(uint8_t reg);          /* OEM 0x080393FE  (-1 on error, else LE u16) */
 void     stc3115_write_word(uint8_t reg, uint16_t value); /* OEM 0x080394BE  (LE) */
 int      stc3115_read_block(uint8_t *dst, uint8_t reg, uint32_t len);   /* OEM 0x080392F4 */
-void     stc3115_write_block(const void *src, uint8_t reg, uint32_t len); /* OEM 0x0803948C */
+int      stc3115_write_block(const void *src, uint8_t reg, uint32_t len); /* OEM 0x0803948C */
 
 /* 16-byte RAM working copy (reg 0x20..0x2F) + its CRC-8 (poly 0x07). */
 void    stc3115_ram_read(uint8_t *dst);           /* OEM 0x08039302 */
-void    stc3115_ram_write(const void *src);       /* OEM 0x0803949A */
+int     stc3115_ram_write(const void *src);       /* OEM 0x0803949A */
+int     gas_gauge_reset(void);                    /* OEM 0x080396C4 */
 uint8_t stc3115_ram_crc8(const uint8_t *data, int len); /* OEM 0x0803924C */
 void    stc3115_ram_update_crc(void);             /* OEM 0x08039280 */
 void    stc3115_ram_init(const uint8_t *cfg);     /* OEM 0x08039294 */

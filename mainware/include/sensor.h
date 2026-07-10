@@ -25,7 +25,7 @@ int hw_version_lookup(uint8_t *out);
 void stc_gas_gauge_set_run(void);
 
 /* HDC1080 temperature/humidity (I2C device 0x80). */
-void hdc1080_set_pointer(void *hi2c);                              /* 0x08033164 */
+int  hdc1080_set_pointer(void *hi2c);                              /* 0x08033164 (HAL status) */
 int  hdc1080_read(void *hi2c, int16_t *temp_dC, uint16_t *rh_pct); /* 0x08033188 */
 
 /* 6-sample min/max-reject mean filter (ring at 0x20006E48). OEM 0x08038ED4. */

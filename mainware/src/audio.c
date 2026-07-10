@@ -1,7 +1,14 @@
 #include <stdint.h>
 
 #include "audio.h"
+#include "log.h"                 /* g_log_func */
 #include "stm32f413_gpio.h"
+
+/* HDC/amp bus (I2C) primitives used by audio_amp_init. */
+extern int HAL_I2C_Master_Transmit(void *dev, uint16_t addr, const uint8_t *d,
+                                   uint16_t n, uint32_t tmo);      /* 0x08024760 */
+extern int HAL_I2C_IsDeviceReady(void *dev, uint16_t addr, uint32_t trials,
+                                 uint32_t tmo);                    /* 0x08025174 */
 
 /* Amp control lines on GPIOD. */
 #define AMP_MUTE_PIN      (1u << 5)    /* PD5  — strobed low while probing */
@@ -41,4 +48,18 @@ uint32_t amp_volume_brownout_apply(uint8_t *level)
 
     /* transmit the (possibly clamped) 1-byte level to the amp, cmd 0x96. */
     return FUN_08024760(g_amp_dev_ctx, 0x96, level, 1, 0x32);
+}
+
+/* audio_amp_init (OEM 0x08039174) — bring up the MAX9768 amplifier: write config
+ * byte 0xD6 (device address 0x96), log "ERR97" on a NAK, then poll the device
+ * ready. Called once at boot. */
+void audio_amp_init(void)
+{
+    uint8_t cfg[5];
+
+    cfg[0] = 0xd6;
+    if (HAL_I2C_Master_Transmit(g_amp_dev_ctx, 0x96, cfg, 1, 0x32) != 0) {
+        g_log_func("ERR97\r\n");
+    }
+    HAL_I2C_IsDeviceReady(g_amp_dev_ctx, 0x96, 10, 0x32);
 }

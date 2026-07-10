@@ -9,10 +9,18 @@
 #include "lighting.h"
 #include "log.h"
 #include "rtc.h"
+#include "scheduler.h"
 #include "sensor.h"
 #include "ssp.h"
 #include "stm32f413_gpio.h"
+#include "systick.h"
 #include "util.h"
+
+/* Cross-module leaves used by the telemetry-change broadcaster (hdc1080_*,
+ * clock_pulse_gpioa8_until_pc9 come from sensor.h / app.h). */
+extern int bounded_strncmp(const char *a, const char *b, unsigned int n);   /* 0x0802181C */
+extern int ble_interval_debounce(void *state, unsigned a, unsigned lo,
+                                  unsigned hi, unsigned win, unsigned z);     /* 0x0803A538 */
 
 /* ------------------------------------------------------------------ *
  * ble_read_request_dispatch (OEM 0x08034D20) — the BLE read/telemetry
@@ -688,4 +696,434 @@ void ble_read_request_dispatch(unsigned int char_id, unsigned int p2,
 unhandled:
     log_print_timestamp_prefix();
     g_log_func("Unhandeled SSP request %04X\r\n", char_id);
+}
+
+/* ble_telemetry_change_broadcast (OEM 0x0803A5B0) — the master telemetry
+ * change-detector, ticked once per super-loop. It caches ~30 telemetry values in
+ * the block at SRAM 0x200081C8 and, whenever one changes, pushes the new value to
+ * the app as the matching BLE characteristic (0x5521..0x5584), logging
+ * "Notify 0x<char>". The button-state notify (0x5568) runs unconditionally; the
+ * rest are gated on PC2 present + a 1.5 s throttle (SLOT 0x200000D8) + not being in
+ * a transfer state (0x19/0x1A). The two loggers are the g_log_func table slots
+ * [0] (real prints) and [2] (the "Notify …" trace). Payloads are packed byte-wise,
+ * little-endian, exactly as the OEM does — including its quirks (a couple of
+ * mis-prefixed error strings, and the 0x5582 payload leaving byte 2 unset). */
+void ble_telemetry_change_broadcast(void *ctx_)
+{
+    uint8_t   *ctx    = (uint8_t *)ctx_;
+    uint8_t   *cache  = (uint8_t *)0x200081c8u;   /* telemetry value cache */
+    uint8_t   *slot   = (uint8_t *)0x200000d8u;   /* [0] 1.5s timer, [1] lock-state cache, [4/5] debounce, [6] HDC timer */
+    log_func_t notify = *(log_func_t *)0x20009da0u;   /* g_log_func table[2] — change trace */
+    uint8_t    buf[24];
+
+    /* First entry: arm the 1.5 s broadcast timer + snapshot the initial values. */
+    if (slot[0] == SCHED_SLOT_NONE) {
+        slot[0] = scheduler_alloc();
+        scheduler_set_timer_name(slot[0], 0x5dc, "ble_interval_tmr");
+        scheduler_start(slot[0], 0x5dc, 0);
+        cache[0] = ctx[0x3c9];
+        cache[1] = ctx[0x3cc];
+        *(uint16_t *)(cache + 2) = *(uint16_t *)(ctx + 0x3fc);
+        *(uint16_t *)(cache + 4) = (uint16_t)charge_level_adc_get();
+        *(uint16_t *)(cache + 6) = *(uint16_t *)(ctx + 0x36c);
+        *(uint32_t *)(cache + 8) = *(uint32_t *)(ctx + 0x31c);
+        *(uint16_t *)(cache + 0xc) = *(uint16_t *)(ctx + 0x3c2);
+        *(uint16_t *)(cache + 0xe) = 0;
+        cache[0x10] = (uint8_t)ble_unlock_state_get();
+    }
+
+    /* 0x5568 — button state (PC0 horn / PC1 boost / PD2), always checked. */
+    if (maybe_get_bike_state() != 0x19 && maybe_get_bike_state() != 0x1a &&
+        ((unsigned)gpio_pc0_is_low() != cache[0x11] ||
+         (unsigned)gpio_pc1_is_low() != cache[0x12] ||
+         (_Bool)cache[0x13] != (HAL_GPIO_ReadPin((void *)GPIOD_BASE, 4) == 0))) {
+        cache[0x11] = (uint8_t)gpio_pc0_is_low();  buf[0] = cache[0x11];
+        cache[0x12] = (uint8_t)gpio_pc1_is_low();  buf[1] = cache[0x12];
+        cache[0x13] = (HAL_GPIO_ReadPin((void *)GPIOD_BASE, 4) == 0);  buf[2] = cache[0x13];
+        buf[3] = 0;
+        notify("Notify 0x5568\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5568, 4, buf, 0) > 0x80) {
+            notify("  ERROR SSP place\r\n");
+        }
+    }
+
+    if (!(HAL_GPIO_ReadPin((void *)GPIOC_BASE, 4) != 0 &&
+          systick_now() != *(uint32_t *)(cache + 0x14) &&
+          maybe_get_bike_state() != 0x19 && maybe_get_bike_state() != 0x1a)) {
+        return;
+    }
+    *(uint32_t *)(cache + 0x14) = systick_now();
+
+    /* 0x554E — modem info string. */
+    {
+        char *s = (char *)(*(int *)(ctx + 0x3e8) + 0x20);
+        unsigned len = strlen(s);
+        if (bounded_strncmp((char *)(cache + 0x18), s, len) != 0 && len < 0x10) {
+            memcpy(cache + 0x18, s, len);
+            snprintf((char *)buf, 0x18, "%s", s);
+            notify("Notify 0x554E\r\n");
+            if (ssp_ble_enqueue_tx_packet(0x554e, (uint16_t)strlen((char *)buf), buf, 0) > 0x80) {
+                g_log_func("  ERROR SSP place\r\n");
+            }
+        }
+    }
+
+    /* 0x5582 — LED channel bits (OEM leaves payload byte 2 unset). */
+    if ((unsigned)ble_get_led_channel_state() != cache[0x28]) {
+        cache[0x28] = (uint8_t)ble_get_led_channel_state();
+        notify("Notify 0x5582\r\n");
+        buf[0] = (uint8_t)(ble_get_led_channel_state() & 1);
+        buf[1] = (uint8_t)((ble_get_led_channel_state() << 0x1e) >> 0x1f);
+        buf[3] = (uint8_t)((ble_get_led_channel_state() << 0x1d) >> 0x1f);
+        if (ssp_ble_enqueue_tx_packet(0x5582, 3, buf, 0) > 0x80) {
+            notify("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x5538 — transmission mode (ctx+0x108). */
+    if ((char)ctx[0x108] != (char)cache[0x29]) {
+        cache[0x29] = ctx[0x108];
+        buf[0] = ctx[0x108];
+        notify("Notify 0x5538\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5538, 1, buf, 0) > 0x80) {
+            notify("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x5521 — lock state (cached in slot[1]). */
+    if ((unsigned)ble_lock_state_get() != slot[1]) {
+        slot[1] = (uint8_t)ble_lock_state_get();
+        buf[0] = slot[1];
+        notify("Notify 0x5521\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5521, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place1\r\n");
+        }
+    }
+
+    /* 0x5523 — unlock state. */
+    if ((unsigned)ble_unlock_state_get() != cache[0x10]) {
+        cache[0x10] = (uint8_t)ble_unlock_state_get();
+        buf[0] = cache[0x10];
+        notify("Notify 0x5523\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5523, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place1a\r\n");
+        }
+    }
+
+    /* 0x5561 — coarse bike status. */
+    if ((unsigned)bike_status_coarse_get() != cache[0x2a]) {
+        cache[0x2a] = (uint8_t)bike_status_coarse_get();
+        buf[0] = cache[0x2a];
+        notify("Notify 0x5561\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5561, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place2a\r\n");
+        }
+    }
+
+    /* 0x5562 — bike-state mode (drive 0x0C -> 0, ready 0x0E -> 1, boost 0x07 -> 2). */
+    if (maybe_get_bike_state() != cache[0x2b]) {
+        cache[0x2b] = maybe_get_bike_state();
+        notify("Notify 0x5562\r\n");
+        buf[0] = 0;
+        if (maybe_get_bike_state() == 0x0c)      buf[0] = 0;
+        else if (maybe_get_bike_state() == 0x0e) buf[0] = 1;
+        else if (maybe_get_bike_state() == 0x07) buf[0] = 2;
+        if (ssp_ble_enqueue_tx_packet(0x5562, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place\r\n");
+        }
+    }
+
+    /* 0x5534 — power level (ctx+0x3C9) + owner-code state (ctx+0x3CB). */
+    if ((char)ctx[0x3c9] != (char)cache[0]) {
+        cache[0] = ctx[0x3c9];
+        buf[0] = ctx[0x3c9];
+        buf[1] = ctx[0x3cb];
+        notify("Notify 0x5534\r\n");
+        if (ssp_ble_enqueue_tx_packet(0x5534, 2, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place2\r\n");
+        }
+    }
+
+    /* 0x5536 — light mode (ctx+0x3CC). */
+    if ((char)ctx[0x3cc] != (char)cache[1]) {
+        notify("Notify 0x5536\r\n");
+        cache[1] = ctx[0x3cc];
+        buf[0] = ctx[0x3cc];
+        if (ssp_ble_enqueue_tx_packet(0x5536, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place3\r\n");
+        }
+    }
+
+    /* 0x5541 — BMS pack telemetry (10 bytes: clamped SOC + cell/voltage words). */
+    {
+        int16_t soc = *(int16_t *)(ctx + 0x3fc);
+        if (soc != *(int16_t *)(cache + 2) || memcmp(cache + 0x2c, ctx + 0x3d4, 0xe) != 0) {
+            *(uint32_t *)(cache + 0x2c) = *(uint32_t *)(ctx + 0x3d4);
+            *(uint32_t *)(cache + 0x30) = *(uint32_t *)(ctx + 0x3d8);
+            *(uint32_t *)(cache + 0x34) = *(uint32_t *)(ctx + 0x3dc);
+            *(int16_t  *)(cache + 0x38) = (int16_t)*(uint32_t *)(ctx + 0x3e0);
+            *(int16_t  *)(cache + 2) = soc;
+            notify("Notify 0x5541\r\n");
+            buf[0] = (uint8_t)telemetry_map_clamp((uint8_t)soc, 0, 0x61, 0, 100);
+            buf[1] = ctx[0x422];
+            buf[2] = ctx[0x424];
+            buf[3] = ctx[0x425];
+            buf[4] = ctx[0x3e1];
+            buf[5] = ctx[0x3d4];
+            buf[6] = ctx[0x3dd];
+            buf[7] = ctx[0x3de];
+            buf[8] = ctx[0x3df];
+            buf[9] = ctx[0x3e0];
+            if (ssp_ble_enqueue_tx_packet(0x5541, 10, buf, 0) > 0x80) {
+                notify("  ERROR SSP place\r\n");
+            }
+        }
+    }
+
+    /* 0x5543 — charge level. */
+    if ((int16_t)charge_level_adc_get() != *(int16_t *)(cache + 4)) {
+        notify("Notify 0x5543\r\n");
+        *(uint16_t *)(cache + 4) = (uint16_t)charge_level_adc_get();
+        buf[0] = (uint8_t)charge_level_adc_get();
+        if (ssp_ble_enqueue_tx_packet(0x5543, 1, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place5\r\n");
+        }
+    }
+
+    /* 0x5546 — driver temperature (ctx+0x36C), ±2 hysteresis. */
+    if (*(int16_t *)(ctx + 0x36c) + 2 < (int)*(int16_t *)(cache + 6) ||
+        (int)*(int16_t *)(cache + 6) < *(int16_t *)(ctx + 0x36c) - 2) {
+        notify("Notify 0x5546\r\n");
+        *(uint16_t *)(cache + 6) = *(uint16_t *)(ctx + 0x36c);
+        buf[0] = ctx[0x36c];
+        if (ssp_ble_enqueue_tx_packet(0x5546, 1, buf, 0) > 0x80) {
+            g_log_func("  5ERROR SSPB place6\r\n");
+        }
+    }
+
+    /* 0x5547 — motor temperature (ctx+0x36A), ±2 hysteresis (-0x110 -> 0). */
+    if (*(int16_t *)(ctx + 0x36a) + 2 < (int)*(int16_t *)(cache + 0x3a) ||
+        (int)*(int16_t *)(cache + 0x3a) < *(int16_t *)(ctx + 0x36a) - 2) {
+        notify("Notify 0x5547\r\n");
+        int16_t mt = *(int16_t *)(ctx + 0x36a);
+        *(int16_t *)(cache + 0x3a) = mt;
+        buf[0] = (mt == -0x110) ? 0 : (uint8_t)mt;
+        if (ssp_ble_enqueue_tx_packet(0x5547, 1, buf, 0) > 0x80) {
+            g_log_func("  6ERROR SSPB place7\r\n");
+        }
+    }
+
+    /* 0x5531 — odometer (ctx+0x31C). */
+    if (*(int *)(ctx + 0x31c) != *(int *)(cache + 8)) {
+        notify("Notify 0x5531\r\n");
+        *(uint32_t *)buf = *(uint32_t *)(ctx + 0x31c);
+        *(uint32_t *)(cache + 8) = *(uint32_t *)buf;
+        if (ssp_ble_enqueue_tx_packet(0x5531, 4, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place9\r\n");
+        }
+    }
+
+    /* 0x554F — shifter firmware version (ctx+0x336). */
+    if ((int)*(int16_t *)(cache + 0x3c) != (int)*(uint16_t *)(ctx + 0x336)) {
+        notify("Notify 0x554F\r\n");
+        uint16_t v = *(uint16_t *)(ctx + 0x336);
+        *(uint16_t *)(cache + 0x3c) = v;
+        snprintf((char *)buf, 0x18, "%d.%d", (int)(v >> 8), (int)(uint8_t)v);
+        if (ssp_ble_enqueue_tx_packet(0x554f, (uint16_t)strlen((char *)buf), buf, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x5550 — BMS firmware version + build (ctx+0x408 / ctx+0x3DA..0x3DC). */
+    if (*(int16_t *)(ctx + 0x408) != *(int16_t *)(cache + 0x3e) ||
+        *(uint16_t *)(slot + 2) != (uint16_t)ctx[0x3da]) {
+        notify("Notify 0x5550\r\n");
+        uint16_t v = *(uint16_t *)(ctx + 0x408);
+        *(uint16_t *)(cache + 0x3e) = v;
+        uint8_t b = ctx[0x3da];
+        *(uint16_t *)(slot + 2) = b;
+        snprintf((char *)buf, 0x18, "%X.%02X %X.%X.%X",
+                 (unsigned)(v >> 8), (unsigned)(uint8_t)v, (unsigned)b,
+                 (unsigned)ctx[0x3db], (unsigned)ctx[0x3dc]);
+        if (ssp_ble_enqueue_tx_packet(0x5550, (uint16_t)strlen((char *)buf), buf, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x554C — motorware version (ctx+0x388). */
+    if (*(int *)(ctx + 0x388) != *(int *)(cache + 0x40)) {
+        notify("Notify 0x554C\r\n");
+        uint32_t v = *(uint32_t *)(ctx + 0x388);
+        *(uint32_t *)(cache + 0x40) = v;
+        snprintf((char *)buf, 0x18, "%c.%d.%02d.%02d",
+                 (int)(v >> 0x18), (int)((v & 0xffffff) >> 0x10),
+                 (int)((v & 0xffff) >> 8), (int)(v & 0xff));
+        if (ssp_ble_enqueue_tx_packet(0x554c, (uint16_t)strlen((char *)buf), buf, 0) > 0x80) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x5542 — charge plug state (7 bytes). */
+    if ((unsigned)ble_get_charge_plug_state() != cache[0x44] ||
+        (char)ctx[0x3d5] != (char)cache[0x45]) {
+        notify("Notify 0x5542\r\n");
+        cache[0x45] = ctx[0x3d5];
+        cache[0x44] = (uint8_t)ble_get_charge_plug_state();
+        buf[0] = cache[0x44];
+        buf[1] = 0;
+        buf[2] = ctx[0x3d5];
+        buf[3] = ctx[0x3d6];
+        buf[4] = ctx[0x3d7];
+        buf[5] = ctx[0x3d8];
+        buf[6] = ctx[0x3d9];
+        if (ssp_ble_enqueue_tx_packet(0x5542, 7, buf, 0) > 0x80) {
+            notify("  ERROR SSP place\r\n");
+        }
+    }
+
+    /* 0x5563 — the 64-bit fault-flag pair (ctx+0x3B8 low / +0x3BC high), debounced. */
+    if ((*(uint32_t *)(ctx + 0x3bc) != *(uint32_t *)(cache + 0x4c) ||
+         *(uint32_t *)(ctx + 0x3b8) != *(uint32_t *)(cache + 0x48)) &&
+        ble_interval_debounce(slot + 4, 0, *(uint32_t *)(ctx + 0x3b8),
+                              *(uint32_t *)(ctx + 0x3bc), 0x40000, 0) != 0 &&
+        ble_interval_debounce(slot + 5, 0, *(uint32_t *)(ctx + 0x3b8),
+                              *(uint32_t *)(ctx + 0x3bc), 0x100000, 0) != 0) {
+        notify("Notify 0x5563\r\n");
+        g_log_func("Error Flags: 0x%08X %08X\r\n",
+                   *(uint32_t *)(ctx + 0x3bc), *(uint32_t *)(ctx + 0x3b8));
+        *(uint32_t *)(cache + 0x48) = *(uint32_t *)(ctx + 0x3b8);
+        *(uint32_t *)(cache + 0x4c) = *(uint32_t *)(ctx + 0x3bc);
+        *(uint32_t *)buf       = *(uint32_t *)(ctx + 0x3b8);
+        *(uint32_t *)(buf + 4) = *(uint32_t *)(ctx + 0x3bc);
+        if (ssp_ble_enqueue_tx_packet(0x5563, 8, buf, 0) > 0x80) {
+            g_log_func("  ERROR SSPB place8\r\n");
+        }
+    }
+
+    /* The remaining broadcasts are gated on the same 1.5 s slot going idle. */
+    if (scheduler_slot_is_idle(slot[0]) != 0) {
+        scheduler_start(slot[0], 0x5dc, 0);
+
+        if (*(uint16_t *)(ctx + 0x3b0) > 25000 &&
+            maybe_enqueue_tx_message(0xc, 0, 0, 1) > 0x10) {
+            g_log_func("  ERROR SSP place\r\n");
+        }
+
+        /* 0x5539 — front assist speed limit (ctx+0x374). */
+        if (*(int16_t *)(ctx + 0x374) != *(int16_t *)(cache + 0x50)) {
+            notify("Notify 0x5539\r\n");
+            *(uint16_t *)(cache + 0x50) = *(uint16_t *)(ctx + 0x374);
+            *(uint32_t *)buf = *(uint16_t *)(ctx + 0x374);
+            if (ssp_ble_enqueue_tx_packet(0x5539, 4, buf, 0) > 0x80) {
+                g_log_func("  ERROR SSPB place9\r\n");
+            }
+        }
+
+        /* 0x5548 — the 4 assist speed presets (ctx+0x3A4, 8 bytes, sent in place). */
+        if (*(int16_t *)(ctx + 0x3a4) != *(int16_t *)(cache + 0x52) ||
+            *(int16_t *)(ctx + 0x3aa) != *(int16_t *)(cache + 0x54) ||
+            *(int16_t *)(ctx + 0x3a6) != *(int16_t *)(cache + 0x56) ||
+            *(int16_t *)(ctx + 0x3a8) != *(int16_t *)(cache + 0x58)) {
+            notify("Notify 0x5548\r\n");
+            *(uint16_t *)(cache + 0x52) = *(uint16_t *)(ctx + 0x3a4);
+            *(uint16_t *)(cache + 0x54) = *(uint16_t *)(ctx + 0x3aa);
+            *(uint16_t *)(cache + 0x56) = *(uint16_t *)(ctx + 0x3a6);
+            *(uint16_t *)(cache + 0x58) = *(uint16_t *)(ctx + 0x3a8);
+            if (ssp_ble_enqueue_tx_packet(0x5548, 8, ctx + 0x3a4, 0) > 0x80) {
+                notify(" SSP place\r\n");
+            }
+        }
+
+        /* 0x5551 — the test-mode versions blob (0x60 bytes). */
+        {
+            int blob[2];
+            ble_build_testmode_versions_blob((uint32_t *)blob);
+            if (*(int *)(cache + 0x5c) != blob[0]) {
+                *(int *)(cache + 0x5c) = blob[0];
+                notify("Notify 0x5551\r\n");
+                void *payload = (void *)ble_build_testmode_versions_blob(0);
+                if (ssp_ble_enqueue_tx_packet(0x5551, 0x60, payload, 0) > 0x80) {
+                    notify("  ERROR SSP place\r\n");
+                }
+            }
+        }
+
+        /* 0x553A — rear assist word (ctx+0x372). */
+        if (*(int16_t *)(ctx + 0x372) != *(int16_t *)(cache + 0x60)) {
+            notify("Notify 0x553A\r\n");
+            *(uint16_t *)(cache + 0x60) = *(uint16_t *)(ctx + 0x372);
+            *(uint32_t *)buf = *(uint16_t *)(ctx + 0x372);
+            if (ssp_ble_enqueue_tx_packet(0x553a, 4, buf, 0) > 0x80) {
+                g_log_func("  ERROR SSPB place9\r\n");
+            }
+        }
+
+        /* 0x5584 — ambient light + dark threshold (ctx+0x102), ±0x19 hysteresis. */
+        if (light_sensor_read_step() != 0xfffe) {
+            int lx = light_sensor_read_step();
+            if (lx + 0x19 < (int)(unsigned)*(uint16_t *)(cache + 0x62) ||
+                (int)(unsigned)*(uint16_t *)(cache + 0x62) < lx - 0x19) {
+                notify("Notify 0x5584\r\n");
+                *(int16_t *)(cache + 0x62) = (int16_t)lx;
+                buf[0] = (uint8_t)((unsigned)lx >> 8);
+                buf[1] = (uint8_t)lx;
+                buf[2] = (uint8_t)((unsigned)*(uint16_t *)(ctx + 0x102) >> 8);
+                buf[3] = ctx[0x102];
+                if (ssp_ble_enqueue_tx_packet(0x5584, 4, buf, 0) > 0x80) {
+                    g_log_func("  ERROR SSP place\r\n");
+                }
+            }
+        }
+
+        /* Every 10 passes, re-trigger an HDC1080 temperature/humidity read. */
+        cache[0x64] = (uint8_t)(cache[0x64] + 1);
+        if (cache[0x64] == 10) {
+            cache[0x64] = 0;
+            if (hdc1080_set_pointer((void *)0x20009b04u) == 0) {
+                if (slot[6] == SCHED_SLOT_NONE) {
+                    slot[6] = scheduler_alloc();
+                    scheduler_set_timer_name(slot[6], 100, "hdc_read_tmr");
+                    scheduler_start(slot[6], 100, 0);
+                }
+            } else {
+                cache[0x65] = (uint8_t)(cache[0x65] + 1);
+                g_log_func(" ERR HDC start\r\n");
+            }
+            if (cache[0x65] == 3) {
+                cache[0x65] = 0;
+                g_log_func("NAK\r\n", clock_pulse_gpioa8_until_pc9());
+            }
+        }
+
+        /* 0x5532 — speed (ctx+0x3C2), broadcast when the /10 km/h bucket changes. */
+        if ((uint32_t)(((uint64_t)0xCCCCCCCDULL * *(uint16_t *)(ctx + 0x3c2)) >> 0x22) !=
+            (uint32_t)(((uint64_t)0xCCCCCCCDULL * *(uint16_t *)(cache + 0xc)) >> 0x22)) {
+            notify("Notify 0x5532\r\n");
+            uint16_t sp = *(uint16_t *)(ctx + 0x3c2);
+            *(uint16_t *)(cache + 0xc) = sp;
+            int32_t out = (int32_t)(((uint64_t)0x66666667ULL * (uint32_t)(sp + 5)) >> 0x22);
+            if (ssp_ble_enqueue_tx_packet(0x5532, 4, &out, 0) > 0x80) {
+                g_log_func("  ERROR SSPB placeA\r\n");
+            }
+        }
+    }
+
+    /* The HDC1080 result timer fired -> read the temperature and broadcast 0x5545. */
+    if (scheduler_slot_is_idle(slot[6]) != 0) {
+        short  temp;
+        unsigned short rh;
+        scheduler_release(slot + 6);
+        if (hdc1080_read((void *)0x20009b04u, &temp, &rh) != 0) {
+            g_log_func(" ERR HDC read\r\n");
+        }
+        int16_t tC = (int16_t)(temp / 10);
+        if (tC != *(int16_t *)(cache + 0xe)) {
+            notify("Notify 0x5545\r\n");
+            *(int16_t *)(cache + 0xe) = tC;
+            buf[0] = (uint8_t)tC;
+            if (ssp_ble_enqueue_tx_packet(0x5545, 1, buf, 0) > 0x80) {
+                g_log_func("  ERROR SSPB placeB\r\n");
+            }
+        }
+    }
 }

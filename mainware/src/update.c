@@ -769,3 +769,47 @@ void subsystem_update_sm(int param_1)
         break;
     }
 }
+
+/* update_sm_is_idle (OEM 0x08032980) — the OTA control state byte (g_update_sm[0])
+ * is 0 when no transfer is in progress. */
+int update_sm_is_idle(void)
+{
+    return g_update_sm[0] == 0;
+}
+
+/* update_sm_request_start (OEM 0x08032990) — kick the OTA machine into the "start"
+ * state (2) if idle; otherwise complain (the app tried to start twice). */
+void update_sm_request_start(void)
+{
+    if (g_update_sm[0] == 0) {
+        g_update_sm[0] = 2;
+    } else {
+        g_log_func("Update was already started\r\n");
+    }
+}
+
+/* update_sm_kickoff (OEM 0x080329B8) — force the OTA machine to state 1. */
+void update_sm_kickoff(void)
+{
+    g_update_sm[0] = 1;
+}
+
+/* testmode_enter_state_16 (OEM 0x080329C4) — enter OTA/test state 0x16, persist the
+ * state record (testmode_command_dispatch(0)), then stash the caller's byte at
+ * g_update_sm[0x19C]. */
+void testmode_enter_state_16(uint8_t param)
+{
+    g_update_sm[0] = 0x16;
+    testmode_command_dispatch(0);
+    g_update_sm[0x19c] = param;
+}
+
+/* testmode_continue_state_10 (OEM 0x080329E0) — log "Continue %d", enter OTA/test
+ * state 0x10 (with a state-record save) and stash the byte at g_update_sm[0x19C]. */
+void testmode_continue_state_10(int param_1)
+{
+    g_log_func("Continue %d\r\n", param_1);
+    g_update_sm[0] = 0x10;
+    testmode_command_dispatch(0);
+    g_update_sm[0x19c] = (uint8_t)param_1;
+}

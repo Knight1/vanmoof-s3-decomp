@@ -29,3 +29,15 @@ void systick_delay(uint32_t ticks)
     while ((uint32_t)(systick_now() - start) < ticks) {
     }
 }
+
+/* systick_irq_disable / _enable (OEM 0x0802332C / 0x0802333C) — clear/set the
+ * SysTick CTRL.TICKINT bit (bit 1, at 0xE000E010) to gate the SysTick interrupt. */
+void systick_irq_disable(void)
+{
+    *(volatile uint32_t *)0xE000E010u &= ~2u;
+}
+
+void systick_irq_enable(void)
+{
+    *(volatile uint32_t *)0xE000E010u |= 2u;
+}

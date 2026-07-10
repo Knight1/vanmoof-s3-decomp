@@ -11,6 +11,10 @@
 #include "uart.h"
 #include "util.h"
 
+/* Original VanMoof filename: src/ssp_ble.c (recovered from the assert __FILE__
+ * string at 0x08053910, referenced by ssp_ble_enqueue_tx_packet /
+ * ssp_ble_tx_queue_pump). Kept as ssp.c here. */
+
 /* --- externs supplied elsewhere in the image ---
  * ble_cmd_dispatch           0x08033970  BLE command dispatcher (write side).
  * ble_read_request_dispatch  0x08034D20  GATT/SSP read-request dispatcher.
@@ -920,4 +924,32 @@ void sspm_ble_cmd_bridge(uint32_t cmd, uint32_t p2, uint8_t *payload)
 void sspm_ble_read_bridge(uint16_t char_id)
 {
     ble_read_request_dispatch(char_id);
+}
+
+/* download_chunks_pending_count (OEM 0x0803FA98) — count the free slots in the
+ * 128-entry SSP-BLE TX queue (each entry 0xC bytes at SRAM 0x20008A40; a slot is
+ * free when its in-use byte at +1 is 0). */
+int download_chunks_pending_count(void)
+{
+    uint8_t *q = (uint8_t *)0x20008a40u;
+    int n = 0;
+
+    for (int i = 0; i < 0x80; i++) {
+        if (q[i * 0xc + 1] == 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* clear_buffer_0x600 (OEM 0x0803FA84) — wipe the whole 128-entry TX queue. */
+void clear_buffer_0x600(void)
+{
+    memset((void *)0x20008a40u, 0, 0x600);
+}
+
+/* clear_buffer_0x180 (OEM 0x0803A4FC) — wipe the 0x180-byte SSP scratch at 0x20007E14. */
+void clear_buffer_0x180(void)
+{
+    memset((void *)0x20007e14u, 0, 0x180);
 }

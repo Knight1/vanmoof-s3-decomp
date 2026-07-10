@@ -20,6 +20,10 @@ void log_buffer_crc_check(void);
 /* Reset/reinit the SRAM circular log buffer (OEM 0x0802957C). */
 void log_buffer_reset(void);
 
+/* Log the last wake reason (a WAKE_* token from the code cached at 0x20000004),
+ * or wipe the log on a cold boot. OEM 0x0803DA3C. */
+void log_wake_reason(void);
+
 /* Append a NUL-terminated string into the SRAM circular log buffer; returns the
  * byte count or 0xFFFFFFFF if too long (OEM 0x0802963C). */
 uint32_t log_emit_string(const char *s);

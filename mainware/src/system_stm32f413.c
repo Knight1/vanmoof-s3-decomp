@@ -28,3 +28,57 @@ void SystemInit(void)
 
     SCB_VTOR = 0x08000000u;      /* flash base | VECT_TAB_OFFSET(0) */
 }
+
+/* ── Cortex-M4 NVIC helpers (CMSIS-equivalent; NVIC base 0xE000E100) ────────── */
+
+/* nvic_enable_irq (OEM 0x080270E0) — NVIC_ISER[irq>>5] = 1<<(irq&31). */
+void nvic_enable_irq(int irq_n)
+{
+    if (irq_n >= 0) {
+        *(volatile uint32_t *)(0xE000E100u + ((uint32_t)irq_n >> 5) * 4) =
+            1u << (irq_n & 0x1f);
+    }
+}
+
+/* NVIC_DisableIRQ (OEM 0x080270FC) — NVIC_ICER[irq>>5] = 1<<(irq&31), + DSB/ISB. */
+void NVIC_DisableIRQ(int IRQn)
+{
+    if (IRQn >= 0) {
+        *(volatile uint32_t *)(0xE000E100u + (((uint32_t)IRQn >> 5) + 0x20) * 4) =
+            1u << (IRQn & 0x1f);
+        __asm volatile ("dsb sy" ::: "memory");
+        __asm volatile ("isb sy" ::: "memory");
+    }
+}
+
+/* nvic_clear_pending_irq (OEM 0x0802714C) — NVIC_ICPR[irq>>5] = 1<<(irq&31). */
+void nvic_clear_pending_irq(int irq_n)
+{
+    if (irq_n >= 0) {
+        *(volatile uint32_t *)(0xE000E100u + (((uint32_t)irq_n >> 5) + 0x60) * 4) =
+            1u << (irq_n & 0x1f);
+    }
+}
+
+/* nvic_set_priority (OEM 0x08027078) — CMSIS __NVIC_SetPriority: encode preempt +
+ * sub priority per SCB_AIRCR.PRIGROUP, then write the 8-bit priority (top 4 bits
+ * implemented) into SCB SHP (system exceptions, irq<0) or NVIC IPR (irq>=0). */
+void nvic_set_priority(int irq_n, uint32_t preempt_priority, uint32_t sub_priority)
+{
+    uint32_t prigroup = (*(volatile uint32_t *)0xE000ED0Cu & 0x7ffu) >> 8;   /* AIRCR PRIGROUP */
+    uint32_t preempt_bits = 7 - prigroup;
+    uint32_t sub_shift;
+    uint32_t prio;
+
+    if (preempt_bits > 3) {
+        preempt_bits = 4;
+    }
+    sub_shift = (prigroup + 4 < 7) ? 0 : (prigroup - 3);
+    prio = ((preempt_priority & ~(0xFFFFFFFFu << preempt_bits)) << sub_shift) |
+           (sub_priority & ~(0xFFFFFFFFu << sub_shift));
+    if (irq_n < 0) {
+        *(volatile uint8_t *)(0xE000ED14u + (irq_n & 0xf)) = (uint8_t)(prio << 4);
+    } else {
+        *(volatile uint8_t *)((uint32_t)irq_n + 0xE000E400u) = (uint8_t)(prio << 4);
+    }
+}

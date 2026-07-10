@@ -5,7 +5,11 @@
 
 /* The Muco 48-slot one-shot scheduler. The OEM pins this table at SRAM
  * 0x200004C0 through literal pools; we let the linker place it — only the
- * table's effect is observable, not its address (behaviour-equivalent). */
+ * table's effect is observable, not its address (behaviour-equivalent).
+ *
+ * Original VanMoof filename: src/time.c (recovered from the assert __FILE__
+ * string at 0x08050CBC, referenced by scheduler_alloc). Kept as scheduler.c
+ * here for clarity. */
 struct scheduler g_scheduler;
 
 /* Source path the scheduler hands to muco_assert_fail when it runs out of

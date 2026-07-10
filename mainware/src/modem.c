@@ -22,6 +22,7 @@
 #include "modem.h"
 #include "flash.h"  /* config_persist_dual_bank + struct boot_cfg_block (SMS 'key' cmd) */
 #include "log.h"
+#include "rtc.h"    /* rtc_calendar_t, rtc_now_epoch_seconds, rtc_epoch_to_calendar */
 #include "scheduler.h"
 #include "util.h"   /* ringbuf_t + ring primitives for the USART2 transport */
 
@@ -30,6 +31,7 @@
  * ------------------------------------------------------------------ */
 extern void  HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state); /* 0x08026AC6 */
 extern int   HAL_GPIO_ReadPin(void *GPIOx, uint16_t pin_mask);             /* 0x08026AB8 */
+extern int   state_flags_set();                                            /* 0x0802A268 — fault flags */
 extern int   snprintf(char *s, unsigned int n, const char *fmt, ...);
 extern void *memset(void *s, int c, unsigned int n);
 
@@ -1560,4 +1562,289 @@ void modem_sms_dispatch_command(char *out, unsigned int size, char *body)
         }
         snprintf(out, size, "#%s*ack#", code);
     }
+}
+
+/* modem_sim_state_machine (OEM 0x0803D284) — the outer u-blox SARA-G350 modem
+ * state machine, ticked once per super-loop. Gated on SIM-detect (PE10) it
+ * sequences states 1..10 (POWERON, SMS_INIT/READ/WRITE, CTX_ACTIVATE,
+ * CTX_DEACTIVATE, PING, MESSAGE_SEND, LOCATION, POWEROFF) by driving the
+ * modem_step_* sub-machines. On power-up it resets the SMS counters, reads the
+ * network registration into the flag byte sm[8] (bit0 ping / bit1 message / bit2
+ * location), and clears the pending-send request at ctx+0x3C8. CTX_ACTIVATE with
+ * the message bit set formats the BLE MAC (ctx+0x390..0x395) and an
+ * 'mac_address'/'message_type'/'message_data' HTTP body into the SRAM staging
+ * buffers the send steps consume; POWEROFF recycles through sim_iccid_check.
+ * Documented in docs/modem.md. State block at SRAM 0x2000839C:
+ *   [0] state, [1] sub-flag, [2] SIM/poweroff retry, [4] session-ctx ptr, [8] flags. */
+char modem_sim_state_machine(void)
+{
+    uint8_t *sm        = (uint8_t *)0x2000839cu;      /* modem SM state block */
+    uint8_t *ctx       = *(uint8_t **)(sm + 4);       /* session ctx */
+    uint8_t *last      = (uint8_t *)0x200000e6u;      /* last-logged state */
+    uint8_t *sms_count = (uint8_t *)0x20009d8cu;
+    uint8_t *sms_index = (uint8_t *)0x20009d28u;
+
+    if (*last != sm[0]) {
+        *last = sm[0];
+        log_print_timestamp_prefix();
+        g_log_func("GSM_CMD_%s\r\n", modem_sm_state_name(sm[0]));
+    }
+
+    switch (sm[0]) {
+    case 1:   /* POWERON */
+        if (HAL_GPIO_ReadPin((void *)GPIOE_BASE, MODEM_SIM_DET_PIN) == 0) {
+            state_flags_set(0, 0x400000);            /* no SIM present */
+            sm[0] = 0;
+        } else {
+            switch (modem_step_poweron()) {
+            case 0:                                   /* powered + registered */
+                sm[1] = 0;
+                log_print_timestamp_prefix();
+                g_log_func("GSM power ok\r\n");
+                sm[2] = 1;
+                *sms_count = 0;
+                *sms_index = 0;
+                sm[8] = (uint8_t)((ctx[0x3c8] != 0) ? 2 : 0);
+                if (modem_registration_get() != 0) {
+                    uint8_t reg = ctx[0x310];
+                    sm[8] = (uint8_t)(((reg == 3) ? 4 : 0) | sm[8] | ((reg == 4) ? reg : 0));
+                }
+                ctx[0x3c8] = 0;
+                sm[0] = 2;
+                break;
+            case 2:
+            case 3:
+                sm[1] = 1;
+                log_print_timestamp_prefix();
+                g_log_func("GSM power fail\r\n");
+                state_flags_set(0, 0x4000000);
+                sm[0] = 10;
+                break;
+            case 4:
+                if (sm[2] == 0) {
+                    log_print_timestamp_prefix();
+                    g_log_func("Retry read SIM\r\n");
+                } else {
+                    log_print_timestamp_prefix();
+                    g_log_func("Cannot read SIM\r\n");
+                    state_flags_set(0, 0x2000000);
+                }
+                sm[1] = 0;
+                sm[0] = 10;
+                break;
+            case 5:
+                sm[1] = 0;
+                log_print_timestamp_prefix();
+                g_log_func("GSM Could not register\r\n");
+                sm[2] = 1;
+                sm[0] = 10;
+                break;
+            case 6:
+                sm[1] = 0;
+                log_print_timestamp_prefix();
+                g_log_func("GSM no network\r\n");
+                sm[2] = 1;
+                sm[0] = 10;
+                break;
+            }
+        }
+        break;
+
+    case 2: {  /* SMS_INIT */
+        int r = modem_step_sms_init();
+        if (r == 0) {
+            log_print_timestamp_prefix();
+            g_log_func("GSM: sms= %d\r\n", *sms_count);
+            if (*sms_count == 0) {
+                sm[0] = (uint8_t)((sm[8] == 0) ? 10 : 5);
+            } else {
+                sm[0] = 3;
+            }
+        } else if (r == 3) {
+            sm[0] = 10;
+        }
+        break;
+    }
+
+    case 3: {  /* SMS_READ */
+        int r = modem_step_sms_read();
+        if (r != 1) {
+            sm[0] = (uint8_t)((r == 0) ? 4 : 10);
+        }
+        break;
+    }
+
+    case 4: {  /* SMS_WRITE */
+        int r = modem_step_sms_write();
+        if (r == 0) {
+            if (*sms_index < *sms_count) {
+                sm[0] = 3;
+            } else {
+                sm[0] = (uint8_t)((sm[8] == 0) ? 10 : 5);
+            }
+        } else if (r == 3) {
+            sm[0] = 10;
+        }
+        break;
+    }
+
+    case 5: {  /* CTX_ACTIVATE — bring up the PDP context, then dispatch the send */
+        int r = modem_step_ctx_activate();
+        if (r == 0) {
+            uint8_t f = sm[8];
+            if (f & 1) {
+                sm[0] = 7;                            /* ping */
+            } else if (f & 2) {                       /* message: build the HTTP body */
+                snprintf((char *)0x20009cacu, 0x12, "%02X:%02X:%02X:%02X:%02X:%02X",
+                         ctx[0x390], ctx[0x391], ctx[0x392],
+                         ctx[0x393], ctx[0x394], ctx[0x395]);
+                snprintf((char *)0x20009c20u, 0x8a,
+                         "'mac_address':'%s','message_type':'%s','message_data':'%s'",
+                         (char *)0x20009cacu, "alarm2", "");
+                sm[0] = 8;
+            } else if (f & 4) {
+                sm[0] = 9;                            /* location */
+            } else {
+                sm[0] = 6;                            /* nothing to send -> deactivate */
+            }
+        } else if (r == 3) {
+            sm[0] = 10;
+        }
+        break;
+    }
+
+    case 6: {  /* CTX_DEACTIVATE */
+        if (modem_step_ctx_deactivate() != 1) {
+            sm[0] = 10;
+        }
+        break;
+    }
+
+    case 7: {  /* PING */
+        int r = modem_step_ping_send();
+        if (r != 1) {
+            sm[8] = (uint8_t)(sm[8] & 0xfe);
+            sm[0] = (uint8_t)((r == 0) ? 5 : 6);
+        }
+        break;
+    }
+
+    case 8: {  /* MESSAGE_SEND */
+        int r = modem_step_message_send();
+        if (r != 1) {
+            sm[8] = (uint8_t)(sm[8] & 0xfd);
+            sm[0] = (uint8_t)((r == 0) ? 5 : 6);
+        }
+        break;
+    }
+
+    case 9: {  /* LOCATION */
+        int r = modem_step_location_send();
+        if (r != 1) {
+            sm[8] = (uint8_t)(sm[8] & 0xfb);
+            sm[0] = (uint8_t)((r == 0) ? 5 : 6);
+        }
+        break;
+    }
+
+    case 10: { /* POWEROFF */
+        if (modem_step_poweroff() != 1) {
+            if (sm[2] == 0) {
+                sm[2] = 1;
+                sm[0] = 1;                            /* retry power-on once */
+            } else {
+                sim_iccid_check();
+                sm[0] = 0;
+            }
+        }
+        break;
+    }
+    }
+
+    return (char)sm[0];
+}
+
+/* sms_info_tracking_state_machine (OEM 0x0803CC6C) — the anti-theft GSM
+ * "info-tracking" scheduler, ticked once per super-loop (gated by ctx+0x314==0).
+ * A 4-state machine (state byte at SRAM 0x200000E5) that, on a mode-dependent
+ * interval, kicks the modem to send a status/tracking SMS and logs progress. The
+ * lock/alarm mode at ctx+0x310 picks the cadence off the last-start epoch
+ * (ctx+0x328): mode 4 = tracking-on (+0x703 s), 0x0B = tracking-off (+0x1C1B s),
+ * mode 3 throttles by 0x545B s against ctx+0x33C. The tracking-on flag lands at
+ * 0x2000838A. Documented in docs/modem.md. */
+void sms_info_tracking_state_machine(void *ctx_)
+{
+    uint8_t *ctx      = (uint8_t *)ctx_;
+    uint8_t *state    = (uint8_t *)0x200000e5u;
+    uint8_t *track_on = (uint8_t *)0x2000838au;
+
+    if (ctx[0x314] != 0) {
+        return;
+    }
+
+    if (*state == 1) {
+        uint32_t interval;
+        uint8_t  mode = ctx[0x310];
+
+        if (mode == 4) {
+            interval = *(uint32_t *)(ctx + 0x328) + 0x703;
+            *track_on = 1;
+        } else if (mode == 0xb) {
+            interval = *(uint32_t *)(ctx + 0x328) + 0x1c1b;
+            *track_on = 0;
+        } else if (mode == 3) {
+            if (*(uint32_t *)(ctx + 0x33c) + 0x545b < rtc_now_epoch_seconds()) {
+                g_log_func(" Info tracking true %d\r\n", *(uint32_t *)(ctx + 0x33c));
+                *(uint32_t *)(ctx + 0x33c) = rtc_now_epoch_seconds();
+                *track_on = 1;
+            } else {
+                g_log_func(" Info tracking false %d\r\n", *(uint32_t *)(ctx + 0x33c));
+                *track_on = 0;
+            }
+            interval = *(uint32_t *)(ctx + 0x328) + 0x703;
+        } else {
+            interval = 0;
+        }
+
+        if (interval < rtc_now_epoch_seconds()) {
+            rtc_calendar_t cal;
+            log_print_timestamp_prefix();
+            rtc_epoch_to_calendar(&cal, *(uint32_t *)(ctx + 0x328));
+            g_log_func("SMS Previous Check %02d:%02d:%02d\r\n",
+                       cal.hours, cal.minutes, cal.seconds);
+            if (sms_tracking_latch_once() == 1) {
+                g_log_func("GSM Busy\r\n");
+            }
+            *state = 2;
+        } else {
+            log_print_timestamp_prefix();
+            g_log_func("SMS no Check for %d min\r\n",
+                       (uint32_t)(((uint64_t)0x88888889ULL *
+                                   (interval - rtc_now_epoch_seconds())) >> 37));
+            *state = 3;
+        }
+    } else if (*state == 2) {
+        if (sms_tracking_get() == 0) {
+            log_print_timestamp_prefix();
+            g_log_func("Modem ready\r\n");
+            *(uint32_t *)(ctx + 0x328) = rtc_now_epoch_seconds();
+            *state = 3;
+        }
+    } else if (*state == 0) {
+        if (sms_tracking_latch_once() == 1) {
+            g_log_func("GSM Busy\r\n");
+        }
+        *state = 2;
+    }
+}
+
+/* module_ctx_init (OEM 0x0803D624) — wire up the modem "module" context: zero the
+ * 0x68-byte info struct at SRAM 0x20009CC0, point the modem SM block (0x2000839C+4)
+ * at the owner session-ctx, and publish the struct at owner+0x3E8 (where the modem
+ * getters and testmode read it). */
+void module_ctx_init(void *owner)
+{
+    memset((void *)0x20009cc0u, 0, 0x68);
+    *(void **)(0x2000839cu + 4) = owner;
+    *(void **)((uint8_t *)owner + 0x3e8) = (void *)0x20009cc0u;
 }

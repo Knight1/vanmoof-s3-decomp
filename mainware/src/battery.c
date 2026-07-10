@@ -53,6 +53,7 @@ extern const char *const g_power_state_name_table[]; /* power-state name strings
 extern int HAL_GPIO_ReadPin();
 extern int HAL_GPIO_WritePin();
 extern int bus_rx_byte_locked();
+extern uint32_t supply_voltage_read(void);    /* 0x08032D6C — main-supply mV */
 extern int bus_crc16_get();
 extern int bus_crc16_update();
 extern int bus_crc16_reset();
@@ -61,7 +62,7 @@ extern int bus_tx_enqueue_byte();
 extern int bus_tx_enqueue_n();
 extern int state_flags_set();
 extern int state_flags_clear();
-extern int power_state_get_clamped();
+uint8_t power_state_get_clamped(void);
 extern int maybe_enqueue_tx_message();
 extern int sched_timer_arm_or_alloc();
 extern int motor_fw_update_fsm_step();
@@ -1828,4 +1829,218 @@ void tim10_announce_period_cb(void *htim)
         return;
     }
     rec[0x25] = 0;
+}
+
+/* exti4_app_hook (OEM 0x08043CEC) — the EXTI line-4 (PC4) edge decoder that feeds
+ * the staged "announce" record at SRAM 0x200096D4. TIM10 is the free-running time
+ * base (HTIM10 @ 0x20009A04, period 5000): the counter value latched at each edge
+ * classifies the gap into a preamble / data-bit window, and each recovered bit is
+ * shifted into rec+0x14.. at index rec[0x26]. rec[0x24] is raised on every edge so
+ * tim10_announce_period_cb can spot the end-of-message gap; rec[0x25] is the
+ * receive-phase flag (0 = still hunting for a preamble). Runs first from
+ * EXTI4_IRQHandler, ahead of the HAL EXTI demux. */
+void exti4_app_hook(void)
+{
+    volatile uint8_t  *rec    = (volatile uint8_t *)0x200096D4u;    /* staged record */
+    volatile uint32_t *htim10 = (volatile uint32_t *)0x20009A04u;   /* HTIM10 */
+    volatile uint32_t *tim10  = (volatile uint32_t *)htim10[0];     /* HTIM10.Instance = TIM10 */
+    uint32_t cnt;
+    uint32_t period;
+
+    rec[0x24] = 1;                                    /* mark: an edge occurred */
+
+    if (rec[0x25] == 0) {
+        /* --- hunting for the message preamble --- */
+        if (HAL_GPIO_ReadPin((void *)0x40020800u, 0x10) == 0) {     /* PC4 low: restart the gap */
+            tim10[0x24 / 4] = 0;                                    /* TIM10->CNT = 0 */
+            return;
+        }
+        cnt = tim10[0x24 / 4];                                      /* TIM10->CNT */
+        if (cnt >= 0xbc5u && cnt <= 0xe5fu) {                       /* preamble, leading bit = 0 */
+            rec[0x25] = 1;
+            rec[0x26] = 0;
+            *(volatile uint32_t *)(rec + 0x14) = 0;
+            *(volatile uint32_t *)(rec + 0x18) = 0;
+            *(volatile uint32_t *)(rec + 0x1c) = 0;
+            *(volatile uint32_t *)(rec + 0x20) = 0;
+            tim10[0x24 / 4] = htim10[0xc / 4] - 0x682u;             /* CNT = Period - 1666 */
+        } else if (cnt > 0xeb1u && cnt < 0x11f5u) {                 /* preamble, leading bit = 1 */
+            rec[0x25] = 1;
+            *(volatile uint32_t *)(rec + 0x14) = 0;
+            *(volatile uint32_t *)(rec + 0x18) = 0;
+            *(volatile uint32_t *)(rec + 0x1c) = 0;
+            *(volatile uint32_t *)(rec + 0x20) = 0;
+            rec[0x14] = 1;                                          /* record the leading 1 */
+            rec[0x26] = 1;
+            tim10[0x24 / 4] = htim10[0xc / 4] - 0x341u;             /* CNT = Period - 833 */
+        }
+        return;
+    }
+
+    /* --- receiving data bits --- */
+    period = htim10[0xc / 4];                                       /* HTIM10.Init.Period */
+    cnt    = tim10[0x24 / 4];                                       /* TIM10->CNT */
+    if (cnt > period - 999u && cnt < period - 0x29bu) {             /* mid-bit sample window */
+        tim10[0x24 / 4] = period - 0x373u;                         /* re-centre the counter */
+        if (HAL_GPIO_ReadPin((void *)0x40020800u, 0x10) != 0) {     /* PC4 high -> bit = 1 */
+            uint8_t idx = rec[0x26];
+            rec[0x14 + (idx >> 3)] |= (uint8_t)(1u << (idx & 7));
+        }
+        rec[0x26]++;                                               /* advance the bit index */
+    }
+}
+
+/* ── Internal-LiPo (backup cell) charge tracking ────────────────────────────
+ * The board carries a small internal LiPo that keeps the MCU alive when the main
+ * pack is out. PE4 senses whether external supply is present. A shared state
+ * block at SRAM 0x20005DB4 holds: +0 last systick, +4 (u16) settle counter, +6
+ * (u8) last reported state, +7 (u8) charge state-machine, +0x10 (int) last STC3115
+ * reading. The charge/discharge debounce counters live at 0x20000084 (u16 each)
+ * with the charge timer slot at 0x20000088. */
+
+static const char *const k_lipo_state_names[4] = {
+    "LIPO_DISCHARGING", "LIPO_CHARGING", "LIPO_FULL", "LIPO_ERROR",
+};
+
+/* lipo_charge_state_monitor (OEM 0x08036B98) — once per systick, debounce the PE4
+ * external-supply sense into a LiPo charge state at session_ctx+0x3D0
+ * (0 DISCHARGING / 1 CHARGING / 2 FULL / 3 ERROR) and log every transition
+ * ("LiPo state changed to %s"). Called from the main super-loop. */
+void lipo_charge_state_monitor(void *ctx_)
+{
+    uint8_t  *ctx        = (uint8_t *)ctx_;
+    uint32_t *mon_tick   = (uint32_t *)0x20005db4u;
+    uint16_t *mon_settle = (uint16_t *)0x20005db8u;
+    uint8_t  *mon_last   = (uint8_t  *)0x20005dbau;
+    uint16_t *ctr        = (uint16_t *)0x20000084u;   /* [0]=charge, [1]=discharge debounce */
+
+    if (systick_now() == *mon_tick) {
+        return;
+    }
+    *mon_tick = systick_now();
+
+    if (HAL_GPIO_ReadPin((void *)0x40021000u, 0x10) == 0) {   /* PE4 low: no external supply */
+        ctr[0] = 0;
+        if (ctr[1] < 0x1392) ctr[1]++;
+    } else {                                                  /* PE4 high: external supply */
+        if (ctr[0] < 0x1392) ctr[0]++;
+        ctr[1] = 0;
+    }
+
+    if (ctr[0] < 0x1389) {
+        if (ctr[1] < 0x1389) {
+            if (ctr[1] < 600 && ctr[0] < 600) {
+                if (*mon_settle < 0x1392) (*mon_settle)++;
+                ctx[0x3d0] = (*mon_settle < 0x1389) ? 0 : 3;   /* DISCHARGING / ERROR */
+            }
+        } else {
+            ctx[0x3d0] = 1;                                     /* CHARGING */
+            *mon_settle = 0;
+        }
+    } else {
+        ctx[0x3d0] = 2;                                         /* FULL */
+        *mon_settle = 0;
+    }
+
+    if (ctx[0x3d0] != *mon_last) {
+        log_print_timestamp_prefix();
+        g_log_func("LiPo state changed to %s\r\n", k_lipo_state_names[ctx[0x3d0]]);
+        *mon_last = ctx[0x3d0];
+    }
+}
+
+/* internal_lipo_charge_step (OEM 0x08036C9C) — the internal-LiPo charge state
+ * machine, driven from status_process with `soc` = &session_ctx[0x3FC]. State at
+ * 0x20005DBB: 0 arm a 2 s "lipo_tmr" -> 1; 1 if the STC3115 reading is in range
+ * kick a 15 s "Battery on for charge" window -> 2 (else "ERR reading stc3115" ->
+ * 3); 2 wait for the supply/SOC to recover, reporting "Internal Lipo charged"
+ * when the reading passes 0x352. Returns 0 = done, 1 = keep waiting, 2 = busy. */
+int internal_lipo_charge_step(short *soc)
+{
+    uint8_t *state = (uint8_t *)0x20005dbbu;   /* charge SM state */
+    int     *meas  = (int *)0x20005dc4u;       /* last STC3115 reading */
+    uint8_t *slot  = (uint8_t *)0x20000088u;   /* charge timer slot */
+
+    if (*state == 1) {
+        if (*meas != 0xfff) {
+            if (*meas > 700) {
+                return 0;
+            }
+            log_print_timestamp_prefix();
+            g_log_func("Battery on for charge\r\n");
+            battery_on_detect_step(1);
+            scheduler_start(*slot, 15000, 0);
+            *state = 2;
+        }
+        if (scheduler_slot_is_idle(*slot) == 0) {
+            return 2;
+        }
+        log_print_timestamp_prefix();
+        g_log_func(" ERR reading stc3115\r\n");
+        *state = 3;
+        return 2;
+    }
+    if (*state == 2) {
+        if (scheduler_slot_is_idle(*slot) != 0) {
+            uint16_t v = (uint16_t)supply_voltage_read();
+            if (*soc == -1) {
+                return 0;
+            }
+            if (v < 25000) {
+                return 1;
+            }
+            if (*soc < 5) {
+                return 1;
+            }
+        }
+        if (*meas > 0x352) {
+            log_print_timestamp_prefix();
+            g_log_func("Internal Lipo charged\r\n");
+            return 0;
+        }
+        return 2;
+    }
+    if (*state == 0) {
+        *soc = -1;
+        if (*slot == SCHED_SLOT_NONE) {
+            *slot = scheduler_alloc();
+            scheduler_set_timer_name(*slot, 2000, "lipo_tmr");
+        }
+        scheduler_start(*slot, 2000, 0);
+        *state = 1;
+    }
+    return 2;
+}
+
+/* staged_msg_validate_and_dispatch (OEM 0x08043C74) — validate the staged
+ * Manchester "announce" message captured by the TIM10 announce ISR (buffer at
+ * SRAM 0x200096D4: [0] ready flag, [1] bit-length, [4..0x13] payload). When ready,
+ * CRC-16 the payload (bit-length >> 3 bytes) and, if it checks, Manchester-decode
+ * it into the caller's cache (session_ctx+0x3D4); either way clear the buffer.
+ * Called each super-loop. */
+void staged_msg_validate_and_dispatch(void *cache)
+{
+    uint8_t *buf = (uint8_t *)0x200096d4u;
+
+    if (buf[0] != 0) {
+        uint8_t bytes = (uint8_t)(buf[1] >> 3);
+        if (staged_msg_crc16(buf + 4, bytes) == 0) {
+            manchester_announce_decode(buf + 4, bytes, (uint8_t *)cache);
+        }
+        memset(buf + 4, 0, 16);
+        buf[0] = 0;
+    }
+}
+
+/* power_state_get_clamped (OEM 0x0803E490) — read the battery/power-state byte at
+ * session_ctx+0x341 (via the cached ctx pointer at 0x20008A00), clamping any
+ * out-of-range value (>6) back to 0; returns the (possibly corrected) state. */
+uint8_t power_state_get_clamped(void)
+{
+    uint8_t *ctx = *(uint8_t **)0x20008a00u;
+
+    if (ctx[0x341] > 6) {
+        ctx[0x341] = 0;
+    }
+    return ctx[0x341];
 }

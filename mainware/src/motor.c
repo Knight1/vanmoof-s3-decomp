@@ -8,6 +8,11 @@
 #include "ssp.h"
 #include "systick.h"
 
+/* The motor firmware-download functions here (motor_dl_recv/send_*_step) come
+ * from VanMoof's src/F2806/f2806x.c — the TMS320F2806x (C2000) motor-DSP serial
+ * bootloader driver — recovered from the assert __FILE__ string at 0x08050D0C.
+ * Kept together in motor.c here. */
+
 /* Helpers sourced in their home modules (the FSM below drives them). */
 extern void HAL_GPIO_WritePin(void *GPIOx, uint16_t pin_mask, int state);
 extern int  state_flags_test(uint32_t set_mask, uint32_t clr_mask);  /* OEM 0x0802A28C */

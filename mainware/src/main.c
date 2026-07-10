@@ -29,6 +29,7 @@
 
 #include "main.h"
 #include "app.h"        /* clock_pulse_gpioa8_until_pc9 */
+#include "buttons.h"    /* button_press_state_machines_step */
 #include "comm.h"       /* comm_buffers_register_all */
 #include "flash.h"      /* struct boot_cfg_block, config_persist_dual_bank */
 #include "gpio.h"       /* gpio_init */
@@ -107,7 +108,6 @@ extern void tim6_init(void);                          /* 0x0803C2E0 */
 extern void tim7_init(void);                          /* 0x0803C32C */
 extern void tim10_init(void);                         /* 0x0803C37C */
 extern void rtc_init(void);                           /* 0x0803802C */
-extern void button_press_state_machines_step(void);   /* 0x08040380 */
 extern void log_console_subsystem_init(uint32_t magic, void *app_ctx); /* 0x08043114 */
 extern void log_wake_reason(void);                    /* 0x0803DA3C */
 extern void dma_peripheral_transfer_4word_step(void); /* 0x08032CA4 */
@@ -117,13 +117,13 @@ extern void clear_buffer_0x180(void);                 /* 0x0803A4FC */
 extern void clear_buffer_0x600(void);                 /* 0x0803FA84 */
 extern void smodbus_queue_timer_init(void);           /* 0x08037980 */
 extern void bmodbus_queue_timer_init(void);           /* 0x08039F2C */
-extern void reset_reason_log_and_clear(void);         /* 0x0803D978 */
+uint32_t reset_reason_log_and_clear(void);            /* 0x0803D978 */
 extern void speed_capture_init(void *cfg_a, void *cfg_b); /* 0x08038F30 */
 extern void flash_program_rdp_level_once(void);       /* 0x0803DA78 */
 
 /* ── per-loop services ──────────────────────────────────────────────────────*/
 extern void     light_tick_update(void *ctx);                 /* 0x080371E8 */
-extern void     modem_sim_state_machine(void);                /* 0x0803D284 */
+extern char     modem_sim_state_machine(void);                /* 0x0803D284 */
 extern void     light_pattern_step(void *trigger, int channel,
                                    uint16_t threshold, uint8_t bright_mode); /* 0x08037B64 */
 extern void     sms_info_tracking_state_machine(void *ctx);   /* 0x0803CC6C */
@@ -632,4 +632,25 @@ __attribute__((weak)) int main(void)
         factory_reset_sm_step(ctx);
         staged_msg_validate_and_dispatch(ctx + 0x3d4);
     }
+}
+
+/* reset_reason_log_and_clear (OEM 0x0803D978) — decode + log the cause of the last
+ * reset from RCC_CSR (0x40023874) and PWR_CSR (0x40007004), return a reason code,
+ * then set RCC_CSR.RMVF (bit 24) to clear the reset flags. Called once at boot. */
+uint32_t reset_reason_log_and_clear(void)
+{
+    volatile uint32_t *rcc_csr = (volatile uint32_t *)0x40023874u;   /* RCC + 0x74 */
+    volatile uint32_t *pwr_csr = (volatile uint32_t *)0x40007004u;   /* PWR + 0x04 */
+    uint32_t code = 0;
+
+    if (*rcc_csr & 0x40000000) { g_log_func("RCC_FLAG_WWDGRST\r\n"); code = 0x7e; }
+    if (*rcc_csr & 0x20000000) { g_log_func("RCC_FLAG_IWDGRST\r\n"); code = 0x7d; }
+    if ((int32_t)*rcc_csr < 0) { g_log_func("RCC_FLAG_LPWRRST\r\n"); code = 0x7f; }
+    if (*pwr_csr & 1)          { g_log_func("PWR_FLAG_WU\r\n");      code = 1;    }
+    if (*pwr_csr & 2)          { g_log_func("PWR_FLAG_SB\r\n");      code = 2;    }
+    if (*rcc_csr & 0x8000000)  { g_log_func("RCC_FLAG_PORRST\r\n");  code = 0x7b; }
+    if (*rcc_csr & 0x4000000)  { g_log_func("RCC_FLAG_PINRST\r\n");  code = 0x7a; }
+
+    *rcc_csr |= 0x1000000;   /* RMVF — clear the reset flags */
+    return code;
 }

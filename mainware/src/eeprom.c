@@ -3,6 +3,48 @@
 #include "eeprom.h"
 #include "systick.h"
 
+/* =====================================================================
+ * On-board EEPROM map — Atmel/ST AT24C, I2C3 device 0xA0, 128 bytes
+ * (byte addresses 0x00..0x7F). The whole device is reached only through
+ * the three primitives in this file. It holds exactly two persisted
+ * objects plus one read-only device block:
+ *
+ *   0x00..0x3B  State record, copy A (primary)   ── 0x3C bytes = 15 u32
+ *   0x3C..0x3F  unused (4 bytes)                     words: words 0..0xD
+ *   0x40..0x7B  State record, copy B (mirror)     ── are data, word 0xE
+ *   0x7C..0x7F  unused (4 bytes)                     (byte off 0x38) is a
+ *   cmd 0xFA    6-byte lock/security "ID" block      HW CRC-32 over
+ *               (device special read, not in the      words 0..0xD.
+ *                0x00..0x7F array; = Security_GetLockState in fw 1.9.x)
+ *
+ * The state record is a verbatim image of the session_ctx block
+ * ctx+0x310..+0x347 (record word n == ctx+0x310 + 4*n); the CRC occupies
+ * the 15th word, i.e. it replaces what would be ctx+0x348.
+ *
+ *   word  off A/B   ctx      field
+ *    0    00/40    +0x310    lock/alarm state (+0x310 bike/alarm state,
+ *                            +0x312 remote-lock, +0x313 log-by-app)
+ *    1    04/44    +0x314    shipping-mode / misc state (+0x317 alarm)
+ *    2    08/48    +0x318    counter
+ *    3    0C/4C    +0x31C    trip distance / odometer (tenths of a km,u32)
+ *    4-13 10..37   +0x320..  runtime counters / flags (+0x344 wake count)
+ *    14   38/78    (CRC)     HW CRC-32 over words 0..0xD
+ *
+ * Writer: save_state_record_to_eeprom (app.c) writes BOTH copies (0x00
+ *         then 0x40), 5 ms + watchdog kick between.
+ * Reader: eeprom_read_config_with_crc_fallback reads copy A, CRC-checks
+ *         (stored word 0xE vs recomputed), and falls back to copy B on a
+ *         mismatch; returns 1 only if BOTH copies fail CRC. Run once by
+ *         mainware_boot_init_sequence at boot.
+ * ID blk: eeprom_read_id_block issues the 0xFA command + 6-byte read,
+ *         also probed once at boot (the bike lock/security state).
+ *
+ * Every offset above was derived from this 1.07.06 binary and agrees with
+ * the independent field map in dev/vanmoof/vanmoof-tools/README.md (that
+ * map is for 1.09.03; the finer per-byte names + version caveats live in
+ * docs/hardware.md, "EEPROM map" → cross-reference).
+ * ===================================================================== */
+
 /* On-board I2C AT24C EEPROM region writer (OEM eeprom_write_region, 0x0803E258).
  * The device has 8-byte pages; a write that would cross a page boundary is split
  * so each HAL_I2C_Mem_Write stays within one page. The EEPROM address is encoded

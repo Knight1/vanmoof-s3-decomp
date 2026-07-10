@@ -19,4 +19,10 @@ int bus_rx_byte_locked(uint8_t *out);
  * thin vector trampoline. */
 void uart4_irq_handler(void);
 
+/* Modbus-RTU CRC-16 (poly 0xA001) shared accumulator (SRAM 0x200000C2). */
+void     bus_crc16_reset(void);              /* 0x080398E4 */
+uint16_t bus_crc16_update(uint16_t byte);    /* 0x080398F4 */
+uint16_t bus_crc16_get(void);                /* 0x08039930 */
+void     bus_crc16_verify(void);             /* 0x08039954 (bus-RX framing reset) */
+
 #endif
