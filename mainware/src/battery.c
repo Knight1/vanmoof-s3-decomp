@@ -72,6 +72,9 @@ extern int bus_queue_pop();   /* bus ring peek/has-frame */
 extern int bus_queue_reset();   /* bus ring reset */
 extern int shift_aux_state_reset();
 extern uint32_t bus_queue_peek(void *q, uint16_t *out);  /* shifter.c (0x08037f34) */
+extern void nvic_set_priority();                 /* 0x08027078 */
+extern void nvic_enable_irq();                   /* 0x080270E0 */
+extern int  HAL_TIM_Base_Start_IT(void *htim);   /* 0x080274DC — enable UIE + CEN */
 /* scheduler_slot_get_remaining: declared in scheduler.h.
  * status_clear_pulse_flag, bus_queue_peek_status, battery_charge_lookup,
  * battery_charge_complete_watchdog, battery_set_charge_mode,
@@ -1888,6 +1891,28 @@ void exti4_app_hook(void)
         }
         rec[0x26]++;                                               /* advance the bit index */
     }
+}
+
+/* peripheral_irq10_init_and_start (OEM 0x08043CB4) — bring up the announce
+ * receiver: enable the EXTI4 (IRQ 10) line, start HTIM10 (the announce time base)
+ * with its update interrupt, and zero the whole staged-announce record at
+ * 0x200096D4 (both the 16-byte staging window +0x14.. and the committed payload
+ * +0x04..). Called once from the boot init sequence. */
+void peripheral_irq10_init_and_start(void)
+{
+    volatile uint8_t *rec = (volatile uint8_t *)0x200096D4u;
+
+    nvic_set_priority(10, 0, 0);              /* EXTI4_IRQn */
+    nvic_enable_irq(10);
+    HAL_TIM_Base_Start_IT((void *)0x20009A04u);   /* HTIM10 */
+    *(volatile uint32_t *)(rec + 0x14) = 0;
+    *(volatile uint32_t *)(rec + 0x18) = 0;
+    *(volatile uint32_t *)(rec + 0x1c) = 0;
+    *(volatile uint32_t *)(rec + 0x20) = 0;
+    *(volatile uint32_t *)(rec + 0x04) = 0;
+    *(volatile uint32_t *)(rec + 0x08) = 0;
+    *(volatile uint32_t *)(rec + 0x0c) = 0;
+    *(volatile uint32_t *)(rec + 0x10) = 0;
 }
 
 /* ── Internal-LiPo (backup cell) charge tracking ────────────────────────────

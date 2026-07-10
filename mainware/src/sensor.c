@@ -3,10 +3,15 @@
 #include "sensor.h"
 #include "scheduler.h"   /* scheduler_alloc/start/slot_is_idle, SCHED_SLOT_NONE */
 #include "systick.h"     /* systick_now */
+#include "log.h"         /* g_log_func */
 
 extern void nvic_clear_pending_irq();   /* 0x0802714C */
 extern void nvic_set_priority();        /* 0x08027078 */
 extern void nvic_enable_irq();          /* 0x080270E0 */
+extern void NVIC_DisableIRQ(int irq_n);              /* 0x080270FC */
+extern int  HAL_TIM_Base_Start_IT(void *htim);       /* 0x080274DC — enable UIE + CEN */
+extern void state_flags_set(uint32_t low, uint32_t high);    /* 0x0802A268 */
+extern void state_flags_clear(uint32_t low, uint32_t high);  /* 0x0802A240 */
 
 /* ADC/sensor context (OEM SRAM 0x20000914). Shared layout: a moving-average
  * ring at the base (write-cursor byte at +0x00, ten u16 samples at +0x04), a
@@ -283,4 +288,139 @@ uint32_t output_value_filter_step(uint32_t value)
         }
     }
     return *(uint32_t *)(f + 0x24);
+}
+
+/* ── Wheel-speed capture (EXTI9_5 pulse + TIM7 period/timeout) ────────────────
+ * The rear-wheel Hall sensor pulses EXTI line 5; TIM7 is the free-running period
+ * timer (HTIM7 @ 0x20009AC4). Each pulse latches TIM7->CNT as the interval,
+ * derives speed = C / period (C picked by wheel-size), de-glitches it through the
+ * 6-tap filter and counts pulses toward the odometer. State block @ 0x20006E48:
+ *   +0x10 wheel-size cfg ptr (ctx+0x10B)   +0x14 odometer sink ptr (ctx+0x31C)
+ *   +0x18 raw+5 (u16)   +0x1A filtered (u16)   +0x1C first-pulse-seen flag
+ *   +0x2A re-enable one-shot (u16)  +0x2C plausible-run counter (u16)
+ *   +0x28 filter-hold flag  +0x30 odometer pulse counter (int)  +0x34 spurious
+ *   counter (u16). Wheel-moving state lives in the high flag word bit 0x10000. */
+
+/* speed_capture_init (OEM 0x08038F30) — bind the wheel-size / odometer pointers,
+ * clear the accumulators, start HTIM7 with its update interrupt, and arm the
+ * EXTI9_5 (wheel) IRQ. TIM7's NVIC line (55) was already enabled by tim7_init. */
+void speed_capture_init(void *cfg_a, void *cfg_b)
+{
+    uint8_t *st = (uint8_t *)0x20006e48u;
+
+    *(void **)(st + 0x10) = cfg_a;            /* wheel-size config (ctx+0x10B) */
+    *(void **)(st + 0x14) = cfg_b;            /* odometer sink (ctx+0x31C)     */
+    *(uint16_t *)(st + 0x1a) = 0;
+    *(uint16_t *)(st + 0x18) = 0;
+    *(uint8_t  *)(st + 0x1c) = 0;
+    nvic_clear_pending_irq(0x37);             /* TIM7_IRQn */
+    nvic_set_priority(0x37, 0, 0);
+    HAL_TIM_Base_Start_IT((void *)0x20009AC4u);   /* HTIM7 */
+    nvic_clear_pending_irq(0x17);             /* EXTI9_5_IRQn */
+    nvic_set_priority(0x17, 0, 0);
+    nvic_enable_irq(0x17);
+}
+
+/* tim7_app_hook (OEM 0x08039138) — the TIM7 update (period-elapsed) hook: no wheel
+ * pulse arrived within the window, so zero TIM7->CNT and the speed accumulators,
+ * flush the 6-tap filter with zeros (settling the reported speed to 0) and
+ * re-enable the wheel IRQ. Runs first from the TIM7 update servicer. */
+void tim7_app_hook(void)
+{
+    volatile uint32_t *htim7 = (volatile uint32_t *)0x20009AC4u;
+    volatile uint32_t *tim7  = (volatile uint32_t *)htim7[0];   /* HTIM7->Instance = TIM7 */
+    uint8_t *st = (uint8_t *)0x20006e48u;
+    int i;
+
+    tim7[0x24 / 4] = 0;                       /* TIM7->CNT = 0 */
+    *(uint16_t *)(st + 0x1a) = 0;
+    *(uint16_t *)(st + 0x18) = 0;
+    for (i = 0; i < 6; i++) {
+        sensor_filter6_push(0);               /* flush the de-glitch ring -> speed 0 */
+    }
+    *(uint8_t *)(st + 0x1c) = 0;
+    nvic_set_priority(0x17, 0, 0);            /* re-arm the wheel IRQ (EXTI9_5) */
+    nvic_enable_irq(0x17);
+}
+
+/* exti9_5_app_hook (OEM 0x08038FF4) — the wheel-pulse hook on EXTI line 5. Masks
+ * further wheel IRQs (hardware debounce; TIM7/output_value_filter_step re-enable
+ * it), measures the inter-pulse period from TIM7->CNT and derives speed. On a
+ * plausible reading it de-glitches the value and advances the odometer every
+ * 312 (wheel-size 0) or 264 (wheel-size 1) pulses; an implausibly high reading
+ * is logged and, if enough pile up inside a 1 s guard window, latches the
+ * "wheel moving" state flag (high word bit 0x10000). Runs first from EXTI9_5. */
+void exti9_5_app_hook(void)
+{
+    volatile uint32_t *exti  = (volatile uint32_t *)0x40013c00u;   /* EXTI */
+    volatile uint32_t *htim7 = (volatile uint32_t *)0x20009AC4u;   /* HTIM7 */
+    volatile uint32_t *tim7;
+    uint8_t *st   = (uint8_t *)0x20006e48u;
+    uint8_t *slot = (uint8_t *)0x200000c0u;   /* "too fast" guard-timer slot */
+
+    if ((exti[0x14 / 4] & 0x20) == 0) {       /* only EXTI line 5 (the wheel) */
+        return;
+    }
+    NVIC_DisableIRQ(0x17);                     /* mask the wheel IRQ (debounce) */
+    *(uint16_t *)(st + 0x2a) = 100;           /* arm the 100-tick re-enable one-shot */
+    tim7 = (volatile uint32_t *)htim7[0];     /* HTIM7->Instance = TIM7 */
+
+    if (st[0x1c] == 0) {
+        /* first edge after a gap: start the period measurement */
+        tim7[0x24 / 4] = 0;                   /* TIM7->CNT = 0 */
+        st[0x1c] = 1;
+    } else {
+        uint32_t numerator = 0x1c200u;        /* wheel-size 0 constant */
+        uint32_t period    = tim7[0x24 / 4] & 0xffffu;
+        uint32_t speed;
+
+        if (**(uint8_t **)(st + 0x10) != 0) { /* wheel-size != 0 */
+            numerator = 0x21660u;
+        }
+        speed = numerator / period;
+        tim7[0x24 / 4] = 0;                   /* reset for the next interval */
+
+        if (speed <= 0x289u) {                /* plausible reading */
+            uint16_t run = *(uint16_t *)(st + 0x2c);
+            if (run <= 0x3b) {
+                run = (uint16_t)(run + 1);
+                *(uint16_t *)(st + 0x2c) = run;
+                if (run > 0x3b) {             /* 60 plausible in a row */
+                    state_flags_clear(0, 0x10000);
+                }
+            }
+            if (st[0x28] == 0) {              /* filter not held */
+                uint16_t v = (uint16_t)(speed + 5);
+                *(uint16_t *)(st + 0x18) = v;
+                *(uint16_t *)(st + 0x1a) = (uint16_t)sensor_filter6_push(v);
+            }
+            {
+                int rev = *(int *)(st + 0x30) + 1;
+                *(int *)(st + 0x30) = rev;
+                if ((rev == 0x138 && **(uint8_t **)(st + 0x10) == 0) ||
+                    (rev == 0x108 && **(uint8_t **)(st + 0x10) == 1)) {
+                    (**(int **)(st + 0x14))++;   /* odometer += 1 */
+                    *(int *)(st + 0x30) = 0;
+                }
+            }
+        } else {                              /* implausibly fast: log + tally */
+            g_log_func("Ignore speed = %d\r\n", (int)speed);
+            *(uint16_t *)(st + 0x2c) = 0;
+            (*(uint16_t *)(st + 0x34))++;
+            if (*slot == SCHED_SLOT_NONE) {
+                *slot = scheduler_alloc();
+                scheduler_start(*slot, 1000, 0);
+            }
+        }
+    }
+
+    /* When the guard timer expires, decide the "wheel moving" flag from how many
+     * spurious readings accumulated, then reset the tally. */
+    if (scheduler_slot_is_idle(*slot) != 0) {
+        scheduler_release(slot);
+        if (*(uint16_t *)(st + 0x34) > 5) {
+            state_flags_set(0, 0x10000);
+        }
+        *(uint16_t *)(st + 0x34) = 0;
+    }
 }

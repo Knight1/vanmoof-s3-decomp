@@ -50,5 +50,6 @@ void        manchester_announce_decode(const uint8_t *msg, int len, uint8_t *cac
 uint16_t    staged_msg_crc16(const uint8_t *buf, int len);            /* 0x08043AF0 */
 void        tim10_announce_period_cb(void *htim);                     /* 0x08043DE0 */
 void        exti4_app_hook(void);                                     /* 0x08043CEC */
+void        peripheral_irq10_init_and_start(void);                    /* 0x08043CB4 */
 
 #endif

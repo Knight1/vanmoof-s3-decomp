@@ -35,4 +35,9 @@ uint32_t sensor_filter6_push(uint16_t sample);
  * (+0x24/+0x28/+0x2c) while the ADC status byte +0x22 is clear. OEM 0x08032CBC. */
 void adc_config_shadow_copy(void);
 
+/* Wheel-speed capture (state block 0x20006E48; EXTI9_5 pulse + TIM7 period). */
+void speed_capture_init(void *cfg_a, void *cfg_b);   /* 0x08038F30 */
+void tim7_app_hook(void);                             /* 0x08039138 */
+void exti9_5_app_hook(void);                          /* 0x08038FF4 */
+
 #endif
