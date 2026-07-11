@@ -75,6 +75,14 @@ void i2c3_handle_deinit(void);
 /* Populate + HAL-init the I2C3 handle (Instance I2C3, 100 kHz, 7-bit). OEM 0x0803C660. */
 void i2c3_handle_init(void);
 
+/* Populate + HAL-init the general-purpose sensor I2C bus (OEM i2c2_init,
+ * 0x0803C624 — Instance is actually I2C1 @0x40005400, 400 kHz, 7-bit). */
+void i2c2_init(void);
+
+/* De-init the general-purpose sensor I2C bus (Instance I2C1); pre-sleep teardown.
+ * OEM i2c_handle_deinit, 0x0803C8D4. */
+void i2c_handle_deinit(void);
+
 /* CubeF4 HAL entry points (OEM addresses in i2c.c). 0 = HAL_OK. */
 int HAL_I2C_Init(I2C_HandleTypeDef *hi2c);
 int HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c);

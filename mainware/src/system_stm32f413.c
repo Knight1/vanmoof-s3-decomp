@@ -82,3 +82,24 @@ void nvic_set_priority(int irq_n, uint32_t preempt_priority, uint32_t sub_priori
         *(volatile uint8_t *)((uint32_t)irq_n + 0xE000E400u) = (uint8_t)(prio << 4);
     }
 }
+
+/* enter_low_power_wait (OEM 0x08022DC4) — the core STOP-mode sleep primitive: set
+ * PWR_CR.LPDS|PDDS (bits 0-1) to the requested regulator/standby mode, assert
+ * SCB->SCR.SLEEPDEEP, then park the CPU with WFI (use_wfi == 1) or a double WFE.
+ * On wake, clear SLEEPDEEP so ordinary WFI sleeps stay shallow. Driven by
+ * enter_stop_mode after the pre-sleep peripheral de-init cascade. */
+void enter_low_power_wait(uint32_t pwr_cr_mode, int use_wfi)
+{
+    volatile uint32_t *pwr_cr  = (volatile uint32_t *)0x40007000u;   /* PWR_CR   */
+    volatile uint32_t *scb_scr = (volatile uint32_t *)0xE000ED10u;   /* SCB->SCR */
+
+    *pwr_cr  = (*pwr_cr & 0xfffffffcu) | pwr_cr_mode;
+    *scb_scr |= 4u;                     /* SLEEPDEEP */
+    if (use_wfi == 1) {
+        __asm volatile ("wfi");
+    } else {
+        __asm volatile ("wfe");
+        __asm volatile ("wfe");
+    }
+    *scb_scr &= ~4u;                    /* clear SLEEPDEEP */
+}

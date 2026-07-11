@@ -2,6 +2,8 @@
 
 #include "log.h"
 #include "rtc.h"
+#include "systick.h"   /* systick_now — wake-up timer disable poll timeout */
+#include "panic.h"     /* Error_Handler */
 
 /*
  * rtc.c — STM32 RTC <-> Unix-epoch helpers for the main controller.
@@ -214,6 +216,28 @@ extern void nvic_enable_irq(int32_t irq_n);                                   /*
 #define RCC_BDCR_RTCEN_BB  (*(volatile uint32_t *)0x42470E3Cu)
 #define RTC_WKUP_IRQn      3
 
+/* rtc_init (OEM 0x0803802C — the HAL_RTC_Init wrapper): set Instance = RTC and the
+ * calendar prescalers (AsynchPrediv 127, SynchPrediv 249 -> 1 Hz ck_spre from a
+ * 32.768 kHz clock; 24 h format, no calibration output), then HAL_RTC_Init (which
+ * chains rtc_msp_init). Fatal Error_Handler on failure. */
+extern int HAL_RTC_Init(void *hrtc);   /* 0x08022E6A */
+
+void rtc_init(void)
+{
+    volatile uint32_t *hrtc = (volatile uint32_t *)RTC_HANDLE;
+
+    hrtc[0] = 0x40002800u;   /* Instance = RTC */
+    hrtc[1] = 0;             /* Init.HourFormat = 24h */
+    hrtc[2] = 0x7f;          /* Init.AsynchPrediv = 127 */
+    hrtc[3] = 0xf9;          /* Init.SynchPrediv  = 249  */
+    hrtc[4] = 0;             /* Init.OutPut         = NONE */
+    hrtc[5] = 0;             /* Init.OutPutPolarity = HIGH */
+    hrtc[6] = 0;             /* Init.OutPutType     = OPENDRAIN */
+    if (HAL_RTC_Init((void *)RTC_HANDLE) != 0) {
+        Error_Handler();
+    }
+}
+
 /* HAL_RTC_MspInit (OEM 0x0803805C), called from HAL_RTC_Init for the RTC handle.
  * Enables the RTC peripheral clock and the RTC wake-up interrupt line. */
 void rtc_msp_init(void *hrtc)
@@ -232,4 +256,66 @@ void rtc_msp_init(void *hrtc)
 void rtc_wakeup_event_cb(void)
 {
     *(*(volatile uint32_t **)(0x20000094u + 0x24u)) = 1u;
+}
+
+/* HAL_RTCEx_SetWakeUpTimer_IT (OEM 0x08026EA0) — program RTC_WUTR + enable the
+ * wake-up timer/interrupt; kept as a named extern (HAL core, body deferred). */
+extern int rtc_wakeup_timer_set(void *hrtc, uint16_t counter, uint32_t clock_sel);
+
+/* rtc_wakeup_timer_disable (OEM 0x08026FB0 — HAL_RTCEx_DeactivateWakeUpTimer):
+ * unlock RTC write protection, clear RTC_CR.WUTE/WUTIE, then wait (≤1 s) for
+ * RTC_ISR.WUTWF before re-locking. hrtc layout: +0 Instance, +0x1C Lock,
+ * +0x1D State. Returns 0 = OK, 2 = busy/locked, 3 = timeout. */
+int rtc_wakeup_timer_disable(void *hrtc)
+{
+    uint8_t *h = (uint8_t *)hrtc;
+    volatile uint32_t *rtc = *(volatile uint32_t **)hrtc;   /* hrtc->Instance (RTC) */
+    uint32_t start;
+
+    if (h[0x1c] == 1) {                 /* HAL_LOCKED */
+        return 2;
+    }
+    h[0x1c] = 1;                        /* lock */
+    h[0x1d] = 2;                        /* state = BUSY */
+    rtc[0x24 / 4] = 0xca;               /* RTC_WPR: disable write protection */
+    rtc[0x24 / 4] = 0x53;
+    rtc[0x08 / 4] &= ~0x400u;           /* RTC_CR.WUTE  = 0 (stop wake-up timer) */
+    rtc[0x08 / 4] &= ~0x4000u;          /* RTC_CR.WUTIE = 0 (mask wake-up IRQ)   */
+    start = systick_now();
+    do {
+        if (rtc[0x0c / 4] & 4u) {       /* RTC_ISR.WUTWF: safe to reprogram */
+            rtc[0x24 / 4] = 0xff;       /* re-enable write protection */
+            h[0x1d] = 1;                /* state = READY */
+            h[0x1c] = 0;                /* unlock */
+            return 0;
+        }
+    } while (systick_now() - start < 0x3e9u);   /* ~1 s */
+    rtc[0x24 / 4] = 0xff;
+    h[0x1d] = 3;                        /* state = TIMEOUT */
+    h[0x1c] = 0;
+    return 3;
+}
+
+/* rtc_wakeup_irq_handler (OEM 0x08027020 — HAL_RTCEx_WakeUpTimerIRQHandler): on
+ * RTC_ISR.WUTF, run the wake-up callback and clear the flag, then clear the RTC
+ * wake-up EXTI pending bit (line 22) and return the handle to READY. */
+void rtc_wakeup_irq_handler(void *hrtc)
+{
+    uint8_t *h = (uint8_t *)hrtc;
+    volatile uint32_t *rtc = *(volatile uint32_t **)hrtc;   /* hrtc->Instance (RTC) */
+
+    if (rtc[0x0c / 4] & 0x400u) {                            /* RTC_ISR.WUTF */
+        rtc_wakeup_event_cb();
+        rtc[0x0c / 4] = (rtc[0x0c / 4] & 0xffu) | 0xfffffb7fu;   /* clear WUTF */
+    }
+    *(volatile uint32_t *)(0x40013c00u + 0x14u) = 0x400000u;     /* EXTI->PR line 22 */
+    h[0x1d] = 1;                                             /* state = READY */
+}
+
+/* rtc_set_wakeup_seconds (OEM 0x08038088) — reprogram the RTC wake-up timer to
+ * fire in `seconds` (1 Hz ck_spre clock, sel = 4): deactivate, then re-arm. */
+void rtc_set_wakeup_seconds(uint16_t seconds)
+{
+    rtc_wakeup_timer_disable(RTC_HANDLE);
+    rtc_wakeup_timer_set(RTC_HANDLE, seconds, 4);
 }

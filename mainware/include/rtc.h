@@ -33,6 +33,10 @@ uint32_t rtc_now_epoch_seconds(void);
  * rtc_now_epoch_seconds. OEM rtc_set_from_unix_time at 0x080381D0. */
 void rtc_set_from_unix_time(uint32_t epoch);
 
+/* Initialise the RTC handle (Instance + calendar prescalers for 1 Hz) and run
+ * HAL_RTC_Init. OEM rtc_init at 0x0803802C. */
+void rtc_init(void);
+
 /* HAL_RTC_MspInit (OEM 0x0803805C): enable the RTC peripheral clock (RCC_BDCR.
  * RTCEN) and the RTC_WKUP NVIC line (IRQ 3). Guarded on hrtc->Instance == RTC. */
 void rtc_msp_init(void *hrtc);
@@ -40,5 +44,10 @@ void rtc_msp_init(void *hrtc);
 /* RTC wake-up event callback (OEM 0x08038A04): latch the "wake-up fired" flag
  * polled by the super-loop. Called from rtc_wakeup_irq_handler. */
 void rtc_wakeup_event_cb(void);
+
+/* RTC wake-up timer (RTC_WKUP, NVIC IRQ 3 / EXTI line 22). */
+void rtc_set_wakeup_seconds(uint16_t seconds);   /* 0x08038088 */
+int  rtc_wakeup_timer_disable(void *hrtc);        /* 0x08026FB0 (HAL deactivate) */
+void rtc_wakeup_irq_handler(void *hrtc);          /* 0x08027020 (HAL IRQ handler) */
 
 #endif

@@ -77,6 +77,30 @@ typedef struct {
 int HAL_UART_Init(UART_HandleTypeDef *huart);
 int HAL_UART_DeInit(UART_HandleTypeDef *huart);
 
+/* Per-port init wrappers (OEM 0x08033220..0x0803338C): populate the fixed handle
+ * and HAL_UART_Init. USART1 console (115200) / USART2 GSM modem (115200) / USART3
+ * inter-module Modbus bus (9600) / USART6 (38400) / UART4 (9600) / UART5
+ * BLE-coprocessor (115200) / UART7 (115200) / UART8 BLE-debug (115200). */
+void usart1_init(void);
+void usart2_init(void);
+void usart3_init(void);
+void usart6_init(void);
+void uart4_init(void);
+void uart5_init(void);
+void uart7_init(void);
+void uart8_init(void);
+
+/* Per-port HAL_UART_DeInit veneers (OEM 0x08033894..0x08033910), one leg of the
+ * enter_stop_mode pre-sleep cascade. _0..7 = USART1/2/3 / UART4/5 / USART6 / UART7/8. */
+void uart_handle_deinit_0(void);
+void uart_handle_deinit_1(void);
+void uart_handle_deinit_2(void);
+void uart_handle_deinit_3(void);
+void uart_handle_deinit_4(void);
+void uart_handle_deinit_5(void);
+void uart_handle_deinit_6(void);
+void uart_handle_deinit_7(void);
+
 /* Transmit one byte on the serial link (OEM uart_send_byte, 0x080364F0).
  * Pushes the byte into the TX ring buffer with the peripheral TX interrupt
  * masked for atomicity; returns the ring-buffer push status (1 = queued,

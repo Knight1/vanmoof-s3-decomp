@@ -40,4 +40,15 @@ void speed_capture_init(void *cfg_a, void *cfg_b);   /* 0x08038F30 */
 void tim7_app_hook(void);                             /* 0x08039138 */
 void exti9_5_app_hook(void);                          /* 0x08038FF4 */
 
+/* Configure ADC1 for the 4-channel (4/5/6/7) scan the sense lines use. OEM
+ * adc1_init at 0x08032AF8. */
+void adc1_init(void);
+
+/* De-init ADC1 (pre-sleep teardown). OEM adc_handle_deinit at 0x08032C94. */
+void adc_handle_deinit(void);
+
+/* Start ADC1's DMA scan (4 conversions -> buffer @0x2000092C). OEM
+ * dma_peripheral_transfer_4word_step at 0x08032CA4. */
+void dma_peripheral_transfer_4word_step(void);
+
 #endif

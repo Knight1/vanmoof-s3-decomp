@@ -227,3 +227,13 @@ void HAL_TIM_PWM_MspDeInit(tim_handle_t *htim)
 void tim6_app_hook(void)
 {
 }
+
+/* spi_handle_deinit (OEM 0x0803C614) — NOTE: an OEM misnomer. It de-inits the
+ * TIM1 PWM channels (the lamp LEDs), not SPI — one leg of enter_stop_mode's
+ * pre-sleep teardown, the counterpart to tim1_pwm_init / HAL_TIM_PWM_MspDeInit. */
+extern int HAL_TIM_PWM_DeInit(tim_handle_t *htim);   /* 0x0802752A */
+
+void spi_handle_deinit(void)
+{
+    HAL_TIM_PWM_DeInit(HTIM1);
+}

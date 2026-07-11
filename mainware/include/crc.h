@@ -37,4 +37,12 @@ void HAL_CRC_MspDeInit(crc_dev_t *hcrc);
  * console `show` command. OEM 0x080402E8. */
 uint32_t crc_accumulate_device_uid(void);
 
+/* Initialise the CRC handle (Instance = CRC->DR) and run HAL_CRC_Init (which
+ * enables the peripheral clock). OEM crc_init at 0x08040268. */
+void crc_init(void);
+
+/* De-init the CRC peripheral (gates its AHB1 clock off); pre-sleep teardown. OEM
+ * name `ahb1_periph_handle_deinit` (0x080402D8) is a misnomer — it's HAL_CRC_DeInit. */
+void ahb1_periph_handle_deinit(void);
+
 #endif

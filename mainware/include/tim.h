@@ -68,4 +68,8 @@ void HAL_TIM_PWM_MspDeInit(tim_handle_t *htim);  /* OEM 0x0803C5D0 */
  * (OEM 0x08037AA8). */
 void tim6_app_hook(void);
 
+/* De-init the TIM1 PWM (lamp) channels; pre-sleep teardown. OEM name
+ * `spi_handle_deinit` (0x0803C614) is a misnomer — it calls HAL_TIM_PWM_DeInit. */
+void spi_handle_deinit(void);
+
 #endif

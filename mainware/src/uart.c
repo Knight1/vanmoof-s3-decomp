@@ -3,6 +3,7 @@
 
 #include "uart.h"
 #include "util.h"
+#include "panic.h"   /* Error_Handler */
 
 /* ---------------------------------------------------------------------------
  * CubeF4 UART init/config/deinit (stm32f4xx_hal_uart.c). The eight
@@ -126,6 +127,106 @@ int HAL_UART_DeInit(UART_HandleTypeDef *huart)
     huart->Lock    = 0;                  /* HAL_UNLOCKED */
     return HAL_OK;
 }
+
+/* ── Per-port init wrappers ──────────────────────────────────────────────────
+ * Eight near-identical CubeF4 MX_UARTx_Init routines (OEM 0x08033220..0x0803338C),
+ * each populating a UART_HandleTypeDef (8-bit / 1 stop / no parity, Mode = TX|RX,
+ * 16× oversampling) at its fixed SRAM handle, then calling HAL_UART_Init (which
+ * drives HAL_UART_MspInit for GPIO-AF + RCC clock + NVIC). Kept inline in eight
+ * standalone functions to mirror the OEM (no shared helper — each is a leaf that
+ * writes the handle directly). Fatal Error_Handler on failure. */
+
+void usart1_init(void)   /* 0x080332F0 — console / debug, 115200 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x200098A4u;
+    h->Instance = (USART_TypeDef *)0x40011000u;   /* USART1 */
+    h->Init.BaudRate = 115200u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void usart2_init(void)   /* 0x08033324 — GSM modem, 115200 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x200099A4u;
+    h->Instance = (USART_TypeDef *)0x40004400u;   /* USART2 */
+    h->Init.BaudRate = 115200u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void usart3_init(void)   /* 0x08033358 — inter-module bus, 9600 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x20009824u;
+    h->Instance = (USART_TypeDef *)0x40004800u;   /* USART3 */
+    h->Init.BaudRate = 9600u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void usart6_init(void)   /* 0x0803338C — 38400 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x20009924u;
+    h->Instance = (USART_TypeDef *)0x40011400u;   /* USART6 */
+    h->Init.BaudRate = 38400u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void uart4_init(void)    /* 0x08033220 — 9600 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x20009964u;
+    h->Instance = (USART_TypeDef *)0x40004C00u;   /* UART4 */
+    h->Init.BaudRate = 9600u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void uart5_init(void)    /* 0x08033254 — serial TX primitive (g_uart_dev_pp), 115200 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x20009864u;
+    h->Instance = (USART_TypeDef *)0x40005000u;   /* UART5 */
+    h->Init.BaudRate = 115200u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void uart7_init(void)    /* 0x08033288 — 115200 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x200097E4u;
+    h->Instance = (USART_TypeDef *)0x40007800u;   /* UART7 */
+    h->Init.BaudRate = 115200u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+void uart8_init(void)    /* 0x080332BC — 115200 */
+{
+    UART_HandleTypeDef *h = (UART_HandleTypeDef *)0x200098E4u;
+    h->Instance = (USART_TypeDef *)0x40007C00u;   /* UART8 */
+    h->Init.BaudRate = 115200u;
+    h->Init.WordLength = 0u; h->Init.StopBits = 0u; h->Init.Parity = 0u;
+    h->Init.Mode = 0xcu; h->Init.HwFlowCtl = 0u; h->Init.OverSampling = 0u;
+    if (HAL_UART_Init(h) != HAL_OK) { Error_Handler(); }
+}
+
+/* Per-port HAL_UART_DeInit veneers (OEM 0x08033894..0x08033910), run as one leg
+ * of enter_stop_mode's pre-sleep teardown. Indexed 0..7 over the same handles the
+ * init wrappers use, in USART1/2/3 / UART4/5 / USART6 / UART7/8 order. */
+void uart_handle_deinit_0(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x200098A4u); }  /* USART1 */
+void uart_handle_deinit_1(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x200099A4u); }  /* USART2 */
+void uart_handle_deinit_2(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x20009824u); }  /* USART3 */
+void uart_handle_deinit_3(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x20009964u); }  /* UART4  */
+void uart_handle_deinit_4(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x20009864u); }  /* UART5  */
+void uart_handle_deinit_5(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x20009924u); }  /* USART6 */
+void uart_handle_deinit_6(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x200097E4u); }  /* UART7  */
+void uart_handle_deinit_7(void) { HAL_UART_DeInit((UART_HandleTypeDef *)0x200098E4u); }  /* UART8  */
 
 /* UART/serial TX primitive (OEM uart_send_byte, 0x080364F0).
  *

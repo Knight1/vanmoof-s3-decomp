@@ -4,6 +4,7 @@
 #include "scheduler.h"   /* scheduler_alloc/start/slot_is_idle, SCHED_SLOT_NONE */
 #include "systick.h"     /* systick_now */
 #include "log.h"         /* g_log_func */
+#include "panic.h"       /* Error_Handler */
 
 extern void nvic_clear_pending_irq();   /* 0x0802714C */
 extern void nvic_set_priority();        /* 0x08027078 */
@@ -423,4 +424,64 @@ void exti9_5_app_hook(void)
         }
         *(uint16_t *)(st + 0x34) = 0;
     }
+}
+
+/* ── ADC1 bring-up ───────────────────────────────────────────────────────────
+ * ADC1 feeds every analog sense line (supply voltage, charger level, HW-ID
+ * divider) into the moving-average ring at ADC_CTX. Handle @ SRAM 0x2000973C. */
+
+extern int HAL_ADC_Init(void *hadc);                       /* 0x0802377C */
+extern int HAL_ADC_ConfigChannel(void *hadc, void *cfg);   /* 0x080239E4 */
+
+/* adc1_init (OEM 0x08032AF8) — configure ADC1 for a 4-conversion scan (channels
+ * 4/5/6/7 at ranks 1..4, sample time 7 = 480 cycles), continuous + DMA requests,
+ * software-triggered, 12-bit right-aligned; then HAL_ADC_Init and one
+ * ConfigChannel per rank. Fatal Error_Handler on any HAL failure. */
+void adc1_init(void)
+{
+    uint32_t *h = (uint32_t *)0x2000973cu;     /* ADC1 HAL handle */
+    uint32_t cfg[4];                            /* ADC_ChannelConfTypeDef (stack) */
+
+    h[0]   = 0x40012000u;                       /* Instance = ADC1 */
+    h[1]   = 0x10000u;                          /* Init.ClockPrescaler = PCLK2/4 */
+    h[2]   = 0;                                 /* Init.Resolution = 12-bit */
+    h[4]   = 1;                                 /* Init.ScanConvMode = ENABLE */
+    *(uint8_t *)(h + 6)   = 1;                  /* Init.ContinuousConvMode = ENABLE */
+    *(uint8_t *)(h + 8)   = 0;                  /* Init.DiscontinuousConvMode = DISABLE */
+    h[0xb] = 0;                                 /* Init.ExternalTrigConvEdge = NONE */
+    h[10]  = 0x0f000001u;                       /* Init.ExternalTrigConv (software start) */
+    h[3]   = 0;                                 /* Init.DataAlign = RIGHT */
+    h[7]   = 4;                                 /* Init.NbrOfConversion = 4 */
+    *(uint8_t *)(h + 0xc) = 1;                  /* Init.DMAContinuousRequests = ENABLE */
+    h[5]   = 1;                                 /* Init.EOCSelection = single conversion */
+    if (HAL_ADC_Init(h) != 0) {
+        Error_Handler();
+    }
+
+    cfg[0] = 4; cfg[1] = 1; cfg[2] = 7; cfg[3] = 0;   /* ch4, rank 1, 480-cycle, offset 0 */
+    if (HAL_ADC_ConfigChannel(h, cfg) != 0) { Error_Handler(); }
+    cfg[0] = 5; cfg[1] = 2;                            /* ch5, rank 2 */
+    if (HAL_ADC_ConfigChannel(h, cfg) != 0) { Error_Handler(); }
+    cfg[0] = 6; cfg[1] = 3;                            /* ch6, rank 3 */
+    if (HAL_ADC_ConfigChannel(h, cfg) != 0) { Error_Handler(); }
+    cfg[0] = 7; cfg[1] = 4;                            /* ch7, rank 4 */
+    if (HAL_ADC_ConfigChannel(h, cfg) != 0) { Error_Handler(); }
+}
+
+extern int HAL_ADC_DeInit(void *hadc);                              /* 0x080237D2 */
+extern int HAL_ADC_Start_DMA(void *hadc, void *buf, uint32_t len);  /* 0x0802380C */
+
+/* adc_handle_deinit (OEM 0x08032C94) — HAL_ADC_DeInit(ADC1); one leg of
+ * enter_stop_mode's pre-sleep teardown. */
+void adc_handle_deinit(void)
+{
+    HAL_ADC_DeInit((void *)0x2000973cu);
+}
+
+/* dma_peripheral_transfer_4word_step (OEM 0x08032CA4) — start ADC1's DMA scan:
+ * HAL_ADC_Start_DMA streams the 4 configured conversions (channels 4/5/6/7) into
+ * the destination buffer at SRAM 0x2000092C. */
+void dma_peripheral_transfer_4word_step(void)
+{
+    HAL_ADC_Start_DMA((void *)0x2000973cu, (void *)0x2000092cu, 4);
 }

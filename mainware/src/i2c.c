@@ -912,6 +912,37 @@ void i2c3_handle_init(void)
     }
 }
 
+/* Populate + initialise the general-purpose sensor I2C bus (OEM i2c2_init,
+ * 0x0803C624). NOTE: despite the OEM symbol name, the Instance it programs is
+ * I2C1 (0x40005400) — cf. i2c_tx_complete_callback's own "I2C1" tag — at 400 kHz
+ * Fast-mode, 7-bit addressing. Handle @ SRAM 0x20009BB8. Traps on a HAL error. */
+void i2c2_init(void)
+{
+    I2C_HandleTypeDef *h = (I2C_HandleTypeDef *)0x20009BB8u;
+
+    h->Instance = (I2C_TypeDef *)0x40005400u;     /* I2C1 */
+    h->Init.ClockSpeed = 400000u;                  /* Fast mode */
+    h->Init.DutyCycle = 0u;                        /* I2C_DUTYCYCLE_2         */
+    h->Init.OwnAddress1 = 0u;
+    h->Init.AddressingMode = 0x4000u;              /* I2C_ADDRESSINGMODE_7BIT */
+    h->Init.DualAddressMode = 0u;
+    h->Init.OwnAddress2 = 0u;
+    h->Init.GeneralCallMode = 0u;
+    h->Init.NoStretchMode = 0u;
+
+    if (HAL_I2C_Init(h) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+/* De-init (abort/reset) the general-purpose sensor I2C bus — Instance I2C1
+ * (0x20009BB8) — one leg of enter_stop_mode's pre-sleep teardown. OEM
+ * i2c_handle_deinit, 0x0803C8D4. */
+void i2c_handle_deinit(void)
+{
+    HAL_I2C_DeInit((I2C_HandleTypeDef *)0x20009BB8u);
+}
+
 /* ── I2C transfer/error callbacks + diagnostic bus scan (cluster) ─────────── */
 
 #include "log.h"   /* g_log_func */

@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "crc.h"
+#include "panic.h"   /* Error_Handler */
 
 /* Modbus RTU CRC-16, reflected poly 0xA001 (the project-wide inter-module-bus
  * CRC). The OEM leaves the running CRC in r0 for both routines; Ghidra typed
@@ -91,4 +92,27 @@ uint32_t crc_accumulate_device_uid(void)
     uid[1] = DEVICE_UID[1];
     uid[2] = DEVICE_UID[2];
     return HAL_CRC_Accumulate(CRC_HANDLE, uid, 3);
+}
+
+/* crc_init (OEM 0x08040268 — the HAL_CRC_Init wrapper): point the handle at the
+ * CRC peripheral (Instance = &CRC->DR) and initialise it; HAL_CRC_Init enables
+ * the peripheral clock via HAL_CRC_MspInit. Fatal Error_Handler on failure. */
+extern int HAL_CRC_Init(crc_dev_t *hcrc);   /* 0x080231BA */
+
+void crc_init(void)
+{
+    CRC_HANDLE->dr = CRC_INSTANCE;
+    if (HAL_CRC_Init(CRC_HANDLE) != 0) {
+        Error_Handler();
+    }
+}
+
+/* ahb1_periph_handle_deinit (OEM 0x080402D8) — NOTE: an OEM misnomer. It de-inits
+ * the CRC peripheral handle (HAL_CRC_DeInit gates the CRC AHB1 clock off via
+ * HAL_CRC_MspDeInit), one leg of enter_stop_mode's pre-sleep teardown. */
+extern int HAL_CRC_DeInit(crc_dev_t *hcrc);   /* 0x080231D8 */
+
+void ahb1_periph_handle_deinit(void)
+{
+    HAL_CRC_DeInit(CRC_HANDLE);
 }
