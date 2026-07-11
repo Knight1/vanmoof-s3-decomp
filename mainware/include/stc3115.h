@@ -8,8 +8,8 @@
  * 8-9 VOLTAGE, 10 TEMP, 13-14 OCV, 0x13 CC_CNF, 0x14 VM_CNF, 0x18 ID (=0x14),
  * 0x20.. RAM. A 16-byte working copy of the gauge RAM is mirrored in SRAM at
  * 0x20006E80 (signature 0x53A9 at [0], CRC-8 at [15]). This header covers the
- * transport / RAM-CRC / conversion / measurement layer; the config, startup
- * and SOC-tracking algorithm (stc_read) are sourced separately. */
+ * transport / RAM-CRC / conversion / measurement layer plus the config, startup
+ * and SOC-tracking (stc_read) top layer. */
 
 /* Low-level I2C: write the register address then read `len` bytes / write
  * `len` data bytes after the register byte. Return is the HAL status of the
@@ -45,5 +45,32 @@ uint32_t stc3115_check_id(void);
  * out[6]=counter, out[7]=OCV. Returns 0 on success, <0 on bus error.
  * OEM 0x0803930E. */
 int stc3115_read_measurements(int *out);
+
+/* ── config / startup / SOC-tracking top layer ─────────────────────────────── */
+
+/* Push the config record (OCV curve, CC_CNF/VM_CNF, alarms) and set MODE=GG_RUN.
+ * `cfg` is the int-indexed 0x30-byte config record. OEM 0x080394DC. */
+void stc3115_apply_config(int *cfg);
+
+/* Cold start (seed SOC from REG_OCV, 0x08039580) / warm start (restore the saved
+ * SOC, 0x080395A8). Both return 0 on success or the negative check_id error. */
+int stc3115_startup_from_ocv(int *cfg);
+int stc3115_startup_restore(int *cfg);
+
+/* Build the default config record and pick the startup path from the RAM mirror;
+ * returns the startup status. OEM stc3115_init_device 0x080395D0. */
+int stc3115_init_device(int *cfg, int *arg);
+
+/* Clear MODE.VMODE (bit 0) to leave low-power voltage-only mode; returns the I2C
+ * write status. OEM stc3115_wake 0x080398CE. */
+int stc3115_wake(void);
+
+/* Boot-time gauge bring-up (init_device against the STC context @0x20005DB4).
+ * OEM stc3115_fuel_gauge_init 0x08037130. */
+void stc3115_fuel_gauge_init(void);
+
+/* Periodic SOC-tracking read: 1 while running, 0 otherwise, -3 on gauge reset,
+ * -4 on measurement bus error, else the negative check_id status. OEM 0x080396E4. */
+uint32_t stc_read(void *ctx, uint32_t *out);
 
 #endif
