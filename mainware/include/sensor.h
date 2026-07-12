@@ -9,6 +9,11 @@
  * the periodic sampler). */
 uint16_t supply_voltage_read(void);
 
+/* Modem Vgsm rail (mV, OEM 0x08032DA4) and switched-5V rail (mV, OEM 0x08032DC0),
+ * read from the ADC context. */
+uint32_t adc_read_vgsm(void);
+uint32_t adc_read_5vsw(void);
+
 /* 10-sample circular moving-average filter (OEM 0x08032AB0). Pushes a sample
  * into the ring buffer shared with the ADC context and returns the mean. */
 uint16_t moving_avg10_push(uint16_t sample);

@@ -926,6 +926,49 @@ void sspm_ble_read_bridge(uint16_t char_id)
     ble_read_request_dispatch(char_id);
 }
 
+/* sspm_rx_reply_handler (OEM 0x0803A42C) — poll the inter-module bus for a reply
+ * frame and act on it: a BLE-read reply (cmd 6) or BLE-cmd reply (cmd 7) is bridged
+ * to the phone (sspm_ble_read_bridge / sspm_ble_cmd_bridge) and ACK'd with a 3-byte
+ * {1, 5, handle} frame at SSPM_TX_TABLE+0x1A0; a TX-done reply (cmd 5) releases the
+ * matching TX-table slot (logs "SSPM packet not in buffer" if none matched). A
+ * CRC-bad frame (rc 2) traces "SSPM FAILED" via the alt logger. Returns 1 when a
+ * frame completed, else 0. Called each super-loop. */
+int sspm_rx_reply_handler(void)
+{
+    uint8_t *ctx = SSPM_TX_TABLE;
+    char rc = sspm_bus_recv_frame((ssp_deframe_t *)0x200000ccu);
+
+    if (rc == 0) {
+        uint8_t *frame;
+        uint8_t cmd;
+
+        ctx[0x181] = 0;
+        frame = *(uint8_t **)0x200000ccu;            /* df->buf */
+        cmd = frame[1];
+        if (cmd == 6) {                              /* BLE read reply */
+            uint8_t handle = frame[2];
+            sspm_ble_read_bridge(*(uint16_t *)(frame + 3));
+            ctx[0x1a0] = 1;
+            ctx[0x1a1] = 5;
+            ctx[0x1a2] = handle;
+            sspm_bus_send_frame(ctx + 0x1a0, 3);
+        } else if (cmd == 7) {                       /* BLE cmd reply */
+            uint8_t handle = frame[2];
+            sspm_ble_cmd_bridge(*(uint16_t *)(frame + 3), *(uint16_t *)(frame + 5),
+                                frame + 7);
+            ctx[0x1a0] = 1;
+            ctx[0x1a1] = 5;
+            ctx[0x1a2] = handle;
+            sspm_bus_send_frame(ctx + 0x1a0, 3);
+        } else if (cmd == 5 && tx_table_release_by_handle(frame[2]) == 0) {
+            g_log_func("SSPM packet not in buffer\r\n");
+        }
+    } else if (rc == 2) {
+        ((log_func_t *)0x20009d98u)[2]("SSPM FAILED\r\n");
+    }
+    return rc == 0;
+}
+
 /* download_chunks_pending_count (OEM 0x0803FA98) — count the free slots in the
  * 128-entry SSP-BLE TX queue (each entry 0xC bytes at SRAM 0x20008A40; a slot is
  * free when its in-use byte at +1 is 0). */

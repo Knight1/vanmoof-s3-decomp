@@ -72,4 +72,8 @@ void tim6_app_hook(void);
  * `spi_handle_deinit` (0x0803C614) is a misnomer — it calls HAL_TIM_PWM_DeInit. */
 void spi_handle_deinit(void);
 
+/* Stop the TIM6 time base (HAL_TIM_Base_Stop_IT); pre-sleep teardown.
+ * OEM peripheral_disable_handle at 0x08037A98. */
+void peripheral_disable_handle(void);
+
 #endif

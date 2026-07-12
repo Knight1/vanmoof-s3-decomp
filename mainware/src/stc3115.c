@@ -231,7 +231,7 @@ void stc3115_apply_config(int *cfg)
     stc3115_write_reg(0, 1);                          /* MODE: standby for config */
     stc3115_write_block(cfg + 8, 0x30, 0x10);         /* OCV curve -> regs 0x30.. */
     if (cfg[1] != 0) {
-        stc3115_write_reg(0x13, (uint8_t)(cfg[1] << 1));        /* CC_CNF */
+        stc3115_write_reg(0x13, (uint8_t)((cfg[1] << 1) & 0xfe));   /* CC_CNF */
     }
     if (cfg[2] != 0) {
         int x  = cfg[2] << 9;

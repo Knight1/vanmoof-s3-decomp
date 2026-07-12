@@ -56,4 +56,9 @@ uint8_t flash_config_bank_write(uint32_t a, uint32_t b, uint32_t c, uint32_t d,
  * corrupt; `out` must be >= 0xD0 bytes. OEM 0x08031784 (sourced in flash.c). */
 int flash_read_config_with_crc_restore(void *out);
 
+/* Raise flash Read-Out Protection to Level 1 (RDP 0x55) once (programs + launches
+ * the option bytes, which resets the MCU). OEM flash_program_rdp_level_once
+ * at 0x0803DA78. */
+void flash_program_rdp_level_once(void);
+
 #endif

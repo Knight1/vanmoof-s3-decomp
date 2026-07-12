@@ -20,4 +20,9 @@ int eeprom_read_id_block(uint8_t *out6);
  * OEM 0x0803E174. */
 int eeprom_read_bounded(uint32_t addr, uint8_t *out, uint32_t len);
 
+/* Read the 0x3C-byte config/state record into *out, CRC-checking copy A (offset 0)
+ * and falling back to copy B (offset 0x40). Returns 0 on success, 1 on failure.
+ * OEM eeprom_read_config_with_crc_fallback at 0x0803E1A8. */
+int eeprom_read_config_with_crc_fallback(void *out);
+
 #endif

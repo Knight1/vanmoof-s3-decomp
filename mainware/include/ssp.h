@@ -80,4 +80,9 @@ char tx_table_free_count(void);               /* 0x0803A510 */
 void sspm_ble_cmd_bridge(uint32_t cmd, uint32_t p2, uint8_t *payload); /* 0x0803A1B4 */
 void sspm_ble_read_bridge(uint16_t char_id);  /* 0x0803A1BC */
 
+/* Poll the inter-module bus for a reply frame and act on it (BLE read/cmd reply ->
+ * bridge + ACK, TX-done -> release slot). Returns 1 on a completed frame, else 0.
+ * OEM sspm_rx_reply_handler at 0x0803A42C. */
+int  sspm_rx_reply_handler(void);
+
 #endif

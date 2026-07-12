@@ -13,9 +13,13 @@ extern void nvic_enable_irq();     /* 0x080270E0 */
 void dma_controller_init(void)
 {
     volatile uint32_t *rcc_ahb1enr = (volatile uint32_t *)(0x40023800u + 0x30u);
+    volatile uint32_t  tmp;
 
     *rcc_ahb1enr |= 0x200000u;      /* RCC_AHB1ENR.DMA1EN (bit 21) */
+    tmp = *rcc_ahb1enr & 0x200000u; /* CubeF4 read-back to let the clock settle */
     *rcc_ahb1enr |= 0x400000u;      /* RCC_AHB1ENR.DMA2EN (bit 22) */
+    tmp = *rcc_ahb1enr & 0x400000u;
+    (void)tmp;
     nvic_set_priority(12, 0, 0);    /* DMA1_Stream1_IRQn */
     nvic_enable_irq(12);
     nvic_set_priority(56, 0, 0);    /* DMA2_Stream0_IRQn */

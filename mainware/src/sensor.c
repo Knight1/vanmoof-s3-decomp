@@ -64,6 +64,28 @@ uint16_t supply_voltage_read(void)
     return moving_avg10_push(scaled);   /* smoothed reading */
 }
 
+/* adc_read_vgsm (OEM 0x08032DA4) — modem supply rail Vgsm in mV: the raw ADC
+ * sample at ADC_CTX+0x26 scaled by 0xCE4>>12 (~0.8017, same gain as
+ * supply_voltage_read stage 1). Clears the ADC status byte first. */
+uint32_t adc_read_vgsm(void)
+{
+    *(volatile uint8_t *)(ADC_CTX + 0x22) = 0;
+    return ((uint32_t)*(volatile uint16_t *)(ADC_CTX + 0x26) * 0xce4u) >> 12;
+}
+
+/* adc_read_5vsw (OEM 0x08032DC0) — the switched-5V rail in mV: the raw sample at
+ * ADC_CTX+0x28 scaled by 0xCE4>>12, then ×20000 through the OEM fixed-point
+ * reciprocal (0xD1B71759, hi32 masked to 29 bits, >>13 ≈ ÷10000 — a 2:1 divider).
+ * Clears the ADC status byte first. */
+uint32_t adc_read_5vsw(void)
+{
+    uint32_t inner;
+
+    *(volatile uint8_t *)(ADC_CTX + 0x22) = 0;
+    inner = (((uint32_t)*(volatile uint16_t *)(ADC_CTX + 0x28) * 0xce4u) >> 12) * 20000u;
+    return (uint32_t)((((uint64_t)0xD1B71759u * inner) >> 32) & 0x1fffffffu) >> 13;
+}
+
 /* Charger-level byte for the BLE 0x5543 read (OEM charge_level_adc_get,
  * 0x08037160). The raw 12-bit charger ADC sample lives at +0x10 of the lipo/charge
  * context (0x20005DB4, the object lipo_charge_state_monitor maintains). 0xFFF is

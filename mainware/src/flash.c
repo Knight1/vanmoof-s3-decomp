@@ -267,3 +267,35 @@ int flash_read_config_with_crc_restore(void *out)
                              *(struct boot_cfg_block *)((uint8_t *)rec + 0x10));
     return 0;
 }
+
+/* CubeF4 flash option-byte HAL (vendor, extern). */
+extern int HAL_FLASHEx_OBGetConfig(void *ob);   /* 0x080234D8 */
+extern int HAL_FLASHEx_OBProgram(void *ob);     /* 0x08023454 */
+extern int HAL_FLASH_OB_Unlock(void);           /* 0x08027B44 */
+extern int HAL_FLASH_OB_Launch(void);           /* 0x08027C5C */
+extern int HAL_FLASH_OB_Lock(void);             /* 0x08027B6C */
+
+/* flash_program_rdp_level_once (OEM 0x0803DA78) — raise the flash Read-Out
+ * Protection to Level 1 (RDP byte 0x55) once. Read the option bytes; if RDP isn't
+ * already 0x55, program OPTIONBYTE_RDP = 0x55, log "Set RDPLevel = %X", and launch
+ * the new option bytes (which resets the MCU). The OB registers are re-locked on
+ * the way out. Level 1 blocks debug/bootloader readout of user flash (dropping back
+ * to Level 0 mass-erases it). Called once during boot. */
+void flash_program_rdp_level_once(void)
+{
+    uint32_t ob[8];   /* FLASH_OBProgramInitTypeDef: OptionType @[0], RDPLevel @[4] */
+
+    HAL_FLASHEx_OBGetConfig(ob);
+    if (ob[4] == 0x55u) {                 /* already RDP Level 1 — nothing to do */
+        return;
+    }
+    ob[0] = 2;                            /* OptionType = OPTIONBYTE_RDP */
+    ob[4] = 0x55u;                        /* RDPLevel = Level 1 */
+    HAL_FLASH_Unlock();
+    HAL_FLASH_OB_Unlock();
+    if (HAL_FLASHEx_OBProgram(ob) == 0) {
+        g_log_func("Set RDPLevel = %X\r\n", ob[4]);
+        HAL_FLASH_OB_Launch();
+    }
+    HAL_FLASH_OB_Lock();
+}

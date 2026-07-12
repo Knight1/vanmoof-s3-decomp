@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <string.h>   /* memcpy */
 
 #include "eeprom.h"
 #include "systick.h"
+#include "log.h"       /* g_log_func, log_print_timestamp_prefix */
 
 /* =====================================================================
  * On-board EEPROM map — Atmel/ST AT24C, I2C3 device 0xA0, 128 bytes
@@ -139,4 +141,33 @@ int eeprom_read_bounded(uint32_t addr, uint8_t *out, uint32_t len)
     }
     return HAL_I2C_Mem_Read(g_eeprom_i2c_handle, 0xA0, (uint16_t)addr, 1, out,
                             (uint16_t)len, 0x32);
+}
+
+/* HW CRC-32 over a word buffer (crc.c 0x08023234); the CRC handle @ SRAM 0x20009D90. */
+extern uint32_t HAL_CRC_Accumulate(void *hcrc, uint32_t *buf, uint32_t len);
+
+/* eeprom_read_config_with_crc_fallback (OEM 0x0803E1A8) — read the 0x3C-byte state
+ * record (14 data words + a HW CRC-32 word) into *out from copy A (offset 0); if the
+ * CRC mismatches, log "Read EErom copy" and retry from copy B (offset 0x40). Returns
+ * 0 if either copy verifies, 1 on an EEPROM read error or if both copies fail CRC. */
+int eeprom_read_config_with_crc_fallback(void *out)
+{
+    uint32_t  buf[15];
+    uint32_t *o = (uint32_t *)out;
+
+    if (eeprom_read_bounded(0, (uint8_t *)buf, 0x3c) != 0) {
+        return 1;
+    }
+    memcpy(out, buf, 0x3c);
+    if (o[0xe] == HAL_CRC_Accumulate((void *)0x20009d90u, buf, 0xe)) {
+        return 0;
+    }
+    log_print_timestamp_prefix();
+    g_log_func("Read EErom copy\r\n");
+    eeprom_read_bounded(0x40, (uint8_t *)buf, 0x3c);
+    memcpy(out, buf, 0x3c);
+    if (o[0xe] != HAL_CRC_Accumulate((void *)0x20009d90u, buf, 0xe)) {
+        return 1;
+    }
+    return 0;
 }

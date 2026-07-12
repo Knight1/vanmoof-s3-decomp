@@ -123,4 +123,21 @@ int  console_magic_sequence_match(int key);
  * (printf/puts/write -> no-ops, tx/rx -> active console port). OEM 0x08043148. */
 void console_passthrough_io_install(void);
 
+/* (Re)arm the 180 s console inactivity/auto-logout timer (G_STATE[6]); called by
+ * the line editor on each keystroke. OEM console_activity_timer_rearm 0x08029FE8. */
+void console_activity_timer_rearm(void);
+
+/* Bind the console/logger I/O table @0x20009D98 to UART7 (OEM 0x080430D8) or
+ * USART1 (OEM 0x0804309C); selector byte @0x20000114 records the active port. */
+void console_io_table_install(void);
+void usart1_io_table_install(void);
+
+/* Bring up the debug console (activity slot + history ring + ctx_sub + UART7 table
+ * bind); `magic` (0x55AA5501) is unused. OEM log_console_subsystem_init 0x08043114. */
+void log_console_subsystem_init(uint32_t magic, void *app_ctx);
+
+/* `ver` console command — multi-line firmware/identity version dump (`args` unused).
+ * OEM console_cmd_ver at 0x08040AE4. */
+void console_cmd_ver(const char *args);
+
 #endif

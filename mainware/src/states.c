@@ -3799,3 +3799,14 @@ void charge_time_estimate_reset(void)
     scheduler_start((uint8_t)G_STATE[0x1d], 10000, (void *)0x0);
     *(uint16_t *)(*(uint8_t **)0x20000944u + 0x3FE) = 0x8300;
 }
+
+/* reset_ble_timeout_cb (OEM 0x08038A38) — the 2 s timer callback armed by the
+ * USER/factory-reset SM (state 5): log "BLE reset", drive PE5 high to release the
+ * BLE coprocessor's reset line, then free g_timer_slots[0]. */
+void reset_ble_timeout_cb(void)
+{
+    log_print_timestamp_prefix();
+    g_log_func("BLE reset\r\n");
+    HAL_GPIO_WritePin((void *)0x40021000u, 0x20, 1);   /* PE5 high — release BLE reset */
+    scheduler_release(&g_timer_slots[0]);
+}

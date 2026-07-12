@@ -98,8 +98,34 @@ void enter_low_power_wait(uint32_t pwr_cr_mode, int use_wfi)
     if (use_wfi == 1) {
         __asm volatile ("wfi");
     } else {
+        /* SEV+WFE clears any stale event latch (first WFE returns at once), then
+         * the second WFE performs the real wait — the OEM sequence exactly. */
+        __asm volatile ("sev");
         __asm volatile ("wfe");
         __asm volatile ("wfe");
     }
     *scb_scr &= ~4u;                    /* clear SLEEPDEEP */
+}
+
+/* ── HAL_Init (top-of-boot MCU bring-up) ─────────────────────────────────────── */
+
+extern void NVIC_SetPriorityGrouping(uint32_t group);   /* 0x08027054 (SCB AIRCR PRIGROUP) */
+extern int  HAL_InitTick(uint32_t tick_priority);        /* 0x08023264 (SysTick_Config + prio) */
+extern void HAL_MspInit(void);                           /* 0x0803C270 (PWR+SYSCFG clocks) */
+
+/* hal_mcu_init (OEM 0x080232AC) — the CubeF4 HAL_Init: enable the flash prefetch
+ * buffer + instruction/data caches (FLASH_ACR bits PRFTEN/ICEN/DCEN), select the
+ * 4-bit NVIC priority grouping (group 3), start the 1 kHz SysTick, then run the
+ * board MSP init. Returns 0 (HAL_OK). Called first from the boot sequence. */
+int hal_mcu_init(void)
+{
+    volatile uint32_t *flash_acr = (volatile uint32_t *)0x40023C00u;
+
+    *flash_acr |= 0x200u;              /* ICEN  — instruction cache */
+    *flash_acr |= 0x400u;              /* DCEN  — data cache        */
+    *flash_acr |= 0x100u;              /* PRFTEN — prefetch buffer   */
+    NVIC_SetPriorityGrouping(3);
+    HAL_InitTick(0);
+    HAL_MspInit();
+    return 0;
 }

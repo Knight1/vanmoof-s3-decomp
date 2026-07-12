@@ -52,4 +52,8 @@ void        tim10_announce_period_cb(void *htim);                     /* 0x08043
 void        exti4_app_hook(void);                                     /* 0x08043CEC */
 void        peripheral_irq10_init_and_start(void);                    /* 0x08043CB4 */
 
+/* Bring up the battery-BMS Modbus bus: init the frame ring + the RX-timeout timer.
+ * OEM bmodbus_queue_timer_init at 0x08039F2C. */
+void        bmodbus_queue_timer_init(void);
+
 #endif

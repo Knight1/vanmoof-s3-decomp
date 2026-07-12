@@ -72,6 +72,7 @@ extern int bus_queue_pop();   /* bus ring peek/has-frame */
 extern int bus_queue_reset();   /* bus ring reset */
 extern int shift_aux_state_reset();
 extern uint32_t bus_queue_peek(void *q, uint16_t *out);  /* shifter.c (0x08037f34) */
+extern uint32_t bus_queue_init(void *buf, uint16_t capacity, uint16_t elem_size, void **out); /* shifter.c 0x08037E2C */
 extern void nvic_set_priority();                 /* 0x08027078 */
 extern void nvic_enable_irq();                   /* 0x080270E0 */
 extern int  HAL_TIM_Base_Start_IT(void *htim);   /* 0x080274DC — enable UIE + CEN */
@@ -2068,4 +2069,27 @@ uint8_t power_state_get_clamped(void)
         ctx[0x341] = 0;
     }
     return ctx[0x341];
+}
+
+/* bmodbus_queue_timer_init (OEM 0x08039F2C) — bring up the battery-BMS Modbus bus:
+ * initialise the 0xE-slot frame ring in g_bat_modbus_ctx (+4, 0x108-byte frames,
+ * handle at +0xE74) and allocate the RX-timeout timer ("bmodbus_tmr", slot at
+ * 0x200000C4), then reset the master-SM state. Logs "Error queue" if the ring init
+ * fails. (The OEM returns whether the timer slot is held; the sole caller ignores
+ * it, so this is void.) */
+void bmodbus_queue_timer_init(void)
+{
+    uint8_t *slot = (uint8_t *)0x200000c4u;      /* RX-timeout timer slot */
+
+    if (bus_queue_init(g_bat_modbus_ctx + 4, 0xe, 0x108,
+                       (void **)(g_bat_modbus_ctx + 0xe74)) != 0) {
+        g_log_func("Error queue\r\n");
+    }
+    if (*slot == SCHED_SLOT_NONE) {
+        *slot = scheduler_alloc();
+        scheduler_set_timer_name(*slot, 0, "bmodbus_tmr");
+    }
+    if (*slot != SCHED_SLOT_NONE) {
+        *(uint32_t *)g_bat_modbus_ctx = 0;        /* reset the master-SM state */
+    }
 }

@@ -1695,3 +1695,111 @@ void console_passthrough_io_install(void)
     io->write   = cmdmode_noop_write;
     io->rx_byte = usart1_rx_byte;
 }
+
+/* console_activity_timer_rearm (OEM 0x08029FE8) — (re)arm the 180 s console
+ * inactivity timer held in G_STATE[6]; the line editor calls it on every keystroke
+ * to defer the auto-logout. Allocates the scheduler slot on first use. */
+void console_activity_timer_rearm(void)
+{
+    uint8_t *g = (uint8_t *)0x20000029u;   /* G_STATE */
+
+    if (g[6] == SCHED_SLOT_NONE) {
+        g[6] = scheduler_alloc();
+    }
+    scheduler_start(g[6], 180000, 0);
+}
+
+/* ── console-logger I/O table binding ─────────────────────────────────────────
+ * The logger table @0x20009D98 (cmdmode_io_t: printf/tx_byte/puts/write/rx_byte,
+ * slot 0 = g_log_func) is bound to whichever debug port is active; the selector
+ * byte @0x20000114 records which (1 = USART1, 7 = UART7). */
+
+extern void console_history_init(void *e);   /* 0x0804094C (console_edit.c) */
+
+/* console_io_table_install (OEM 0x080430D8) — route the console/logger to UART7. */
+void console_io_table_install(void)
+{
+    cmdmode_io_t *io = (cmdmode_io_t *)0x20009d98u;
+
+    *(volatile uint8_t *)0x20000114u = 7;
+    io->printf  = console_printf;
+    io->tx_byte = uart7_tx_byte;
+    io->puts    = uart7_puts;
+    io->write   = uart7_write;
+    io->rx_byte = uart_rx_ringbuf_get_byte;
+}
+
+/* usart1_io_table_install (OEM 0x0804309C) — route the console/logger to USART1. */
+void usart1_io_table_install(void)
+{
+    cmdmode_io_t *io = (cmdmode_io_t *)0x20009d98u;
+
+    *(volatile uint8_t *)0x20000114u = 1;
+    io->printf  = usart1_printf;
+    io->tx_byte = usart1_tx_byte;
+    io->puts    = usart1_puts;
+    io->write   = usart1_write;
+    io->rx_byte = usart1_rx_byte;
+}
+
+/* log_console_subsystem_init (OEM 0x08043114) — bring up the debug console: alloc
+ * the activity-timer slot, init the line-editor history ring (g_app_state+0x2E4),
+ * stash the session-context pointer (g_app_state.ctx_sub, +0x2DC) and bind the
+ * UART7 logger table. `magic` (the OEM passes 0x55AA5501) is unused by the body. */
+void log_console_subsystem_init(uint32_t magic, void *app_ctx)
+{
+    uint8_t *g    = (uint8_t *)0x20009368u;   /* g_app_state */
+    uint8_t *slot = (uint8_t *)0x20000115u;   /* console activity-timer slot */
+
+    (void)magic;
+    if (*slot == SCHED_SLOT_NONE) {
+        *slot = scheduler_alloc();
+    }
+    console_history_init((void *)(g + 0x2e4));
+    *(void **)(g + 0x2dc) = app_ctx;
+    console_io_table_install();
+}
+
+/* console_cmd_ver (OEM 0x08040AE4) — the `ver` console command: a multi-line
+ * firmware/identity dump. Each sub-firmware version is packed as bytes in a word
+ * and split with shifts. Sources: app image header @0x08020004, boot header
+ * @0x08007FDC, and session_ctx fields (model +0x64A, motor id +0x388, BMS
+ * +0x406/8 & RSOC/cycles +0x422/4, shifter +0x52A/+0x336, BLE +0x38C, modem
+ * version *(+0x3E8)+0x20, powerbank +0x3DA.. gated on +0x3E1, MAC +0x390..). */
+void console_cmd_ver(const char *args)
+{
+    uint8_t *ctx  = *(uint8_t **)0x20009644u;      /* g_app_state.ctx_sub (session_ctx) */
+    uint32_t app  = *(uint32_t *)0x08020004u;      /* app image version word  */
+    uint32_t boot = *(uint32_t *)0x08007fdcu;      /* bootloader version word */
+    uint32_t id   = *(uint32_t *)(ctx + 0x388);    /* motorware id/version    */
+    uint32_t ble  = *(uint32_t *)(ctx + 0x38c);    /* bleware version         */
+    uint16_t bms2 = *(uint16_t *)(ctx + 0x408);
+    uint16_t bms  = *(uint16_t *)(ctx + 0x406);
+    uint16_t shf  = *(uint16_t *)(ctx + 0x52a);
+    uint16_t shs  = *(uint16_t *)(ctx + 0x336);
+
+    (void)args;
+
+    g_log_func("%s Main  %d.%02d.%02d\r\n", (const char *)(ctx + 0x64a),
+               (int)(app >> 24), (int)((app & 0xffffff) >> 16), (int)((app & 0xffff) >> 8));
+    g_log_func("ES3 boot    %X.%02X\r\n",
+               (unsigned)(boot >> 24), (unsigned)((boot & 0xffffff) >> 16));
+    g_log_func("Motorware   %c.%d.%02d.%02d\r\n", (int)(id >> 24),
+               (int)((id & 0xffffff) >> 16), (int)((id & 0xffff) >> 8), (int)(id & 0xff));
+    g_log_func("BMSWare     %X.%02X RSOC %d Cycles %d HW %X.%02X\r\n",
+               (unsigned)(bms2 >> 8), (unsigned)(uint8_t)bms2,
+               (int)*(int16_t *)(ctx + 0x422), (int)*(int16_t *)(ctx + 0x424),
+               (unsigned)(bms >> 8), (unsigned)(uint8_t)bms);
+    g_log_func("Shifterware %d.%d stored: %d.%d\r\n",
+               (int)(shf >> 8), (int)(uint8_t)shf, (int)(shs >> 8), (int)(uint8_t)shs);
+    g_log_func("BLEWare     %d.%d.%02d\r\n",
+               (int)((ble & 0xffffff) >> 16), (int)((ble & 0xffff) >> 8), (int)(ble & 0xff));
+    g_log_func("GSMWare     %s\r\n", (const char *)(*(uint8_t **)(ctx + 0x3e8) + 0x20));
+    if (ctx[0x3e1] != 0) {
+        g_log_func("powerbank    %02X.%02X.%02X\r\n",
+                   (unsigned)ctx[0x3da], (unsigned)ctx[0x3db], (unsigned)ctx[0x3dc]);
+    }
+    g_log_func("CMD_BLE_MAC %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+               (unsigned)ctx[0x390], (unsigned)ctx[0x391], (unsigned)ctx[0x392],
+               (unsigned)ctx[0x393], (unsigned)ctx[0x394], (unsigned)ctx[0x395]);
+}

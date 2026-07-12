@@ -237,3 +237,13 @@ void spi_handle_deinit(void)
 {
     HAL_TIM_PWM_DeInit(HTIM1);
 }
+
+/* peripheral_disable_handle (OEM 0x08037A98) — stop the TIM6 time base:
+ * HAL_TIM_Base_Stop_IT(HTIM6) clears the update interrupt and (if no capture/
+ * compare channel is active) the counter. Part of the pre-sleep teardown. */
+extern int HAL_TIM_Base_Stop_IT(tim_handle_t *htim);   /* 0x080274FE */
+
+void peripheral_disable_handle(void)
+{
+    HAL_TIM_Base_Stop_IT(HTIM6);
+}

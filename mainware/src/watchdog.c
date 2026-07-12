@@ -71,7 +71,12 @@ void watchdog_init(void)
  * re-arm the watchdog clock around a flash operation (see update.c). */
 void wwdg_apb_clk_enable(void)
 {
-    *(volatile uint32_t *)(0x40023800u + 0x40u) |= 0x800u;   /* RCC_APB1ENR.WWDGEN */
+    volatile uint32_t *rcc_apb1enr = (volatile uint32_t *)(0x40023800u + 0x40u);
+    volatile uint32_t  tmp;
+
+    *rcc_apb1enr |= 0x800u;              /* RCC_APB1ENR.WWDGEN */
+    tmp = *rcc_apb1enr & 0x800u;         /* CubeF4 read-back to let the clock settle */
+    (void)tmp;
 }
 
 /* Disable the WWDG APB1 peripheral clock (OEM wwdg_apb_clk_disable, 0x080314A4):
