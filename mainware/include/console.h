@@ -140,4 +140,8 @@ void log_console_subsystem_init(uint32_t magic, void *app_ctx);
  * OEM console_cmd_ver at 0x08040AE4. */
 void console_cmd_ver(const char *args);
 
+/* `show` console command — the full bike-state dump (I/O pins, flash + EEPROM
+ * config, globals). OEM console_cmd_show at 0x08042820. */
+void console_cmd_show(void);
+
 #endif

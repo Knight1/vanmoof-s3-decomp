@@ -1803,3 +1803,150 @@ void console_cmd_ver(const char *args)
                (unsigned)ctx[0x390], (unsigned)ctx[0x391], (unsigned)ctx[0x392],
                (unsigned)ctx[0x393], (unsigned)ctx[0x394], (unsigned)ctx[0x395]);
 }
+
+extern uint32_t crc_accumulate_device_uid(void);   /* crc.c 0x080402E8 */
+extern uint32_t light_sensor_read_step(void);       /* lighting.c */
+extern uint8_t  maybe_get_bike_state(void);         /* 0x08029BA0 */
+
+/* console_cmd_show (OEM 0x08042820) — the `show` console command ("Parameters"):
+ * the full bike-state dump across four sections — I/O pin states, flash-resident
+ * config, EEPROM-resident config and globals. It is the source of the session_ctx
+ * field map in docs/console.md. Pure logging (only side effect is a watchdog kick).
+ * ctx = g_app_state.ctx_sub @0x20009644; the LiPo/alarm state names come from the
+ * pointer tables @0x0804F810/0x0804F820. Structure / GPIO / field-offsets verified
+ * against the disassembly; the log-string text is transcribed from the OEM rodata. */
+void console_cmd_show(void)
+{
+    uint8_t *ctx   = *(uint8_t **)0x20009644u;    /* session_ctx (g_app_state+0x2DC) */
+    void    *GPIOA = (void *)0x40020000u;
+    void    *GPIOC = (void *)0x40020800u;
+    void    *GPIOD = (void *)0x40020c00u;
+    void    *GPIOE = (void *)0x40021000u;
+    uint32_t v;
+    int      i;
+
+    /* ── I/O pin states ─────────────────────────────────────────────────────── */
+    g_log_func("\x1b[33m");
+    g_log_func(" < I/O >\r\n");
+    g_log_func("Botton_Left  %d\r\n", HAL_GPIO_ReadPin(GPIOC, 1) == 0);      /* PC0  */
+    g_log_func("Botton_Right %d\r\n", HAL_GPIO_ReadPin(GPIOC, 2) == 0);      /* PC1  */
+    g_log_func("Lock         %d\r\n", HAL_GPIO_ReadPin(GPIOC, 0x100));       /* PC8  */
+    g_log_func("Wheel        %d\r\n", HAL_GPIO_ReadPin(GPIOC, 0x20));        /* PC5  */
+    g_log_func("Charger      %d\r\n", HAL_GPIO_ReadPin(GPIOC, 0x10) == 0);   /* PC4  */
+    g_log_func("Off/rst      %d\r\n", HAL_GPIO_ReadPin(GPIOD, 4) == 0);      /* PD2  */
+    g_log_func("MEMS_WAKE    %d\r\n", HAL_GPIO_ReadPin(GPIOC, 8));           /* PC3  */
+    g_log_func("BLE_WAKE     %d\r\n", HAL_GPIO_ReadPin(GPIOC, 4));           /* PC2  */
+    g_log_func("BAT_FAULT    %d\r\n", HAL_GPIO_ReadPin(GPIOD, 2) == 0);      /* PD1  */
+    g_log_func("BAT_KEY_IN   %d\r\n", HAL_GPIO_ReadPin(GPIOC, 0x400));       /* PC10 */
+    g_log_func("Fb coil det  %d\r\n", HAL_GPIO_ReadPin(GPIOA, 0x800) == 0);  /* PA11 */
+    g_log_func("Simcard      %d\r\n", HAL_GPIO_ReadPin(GPIOE, 0x400));       /* PE10 */
+    g_log_func("LiPo STAT    %d\r\n", HAL_GPIO_ReadPin(GPIOE, 0x10));        /* PE4  */
+    g_log_func("LiPo Status  %s\r\n",
+               ((const char *const *)0x0804f810u)[ctx[0x3d0]]);             /* k_lipo_state_names */
+    g_log_func("Serial       %u\r\n", (unsigned)crc_accumulate_device_uid());
+    g_log_func("Error Flags: 0x%08X %08X\r\n",
+               (unsigned)*(uint32_t *)(ctx + 0x3bc), (unsigned)*(uint32_t *)(ctx + 0x3b8));
+    g_log_func("APP          %s\r\n",
+               HAL_GPIO_ReadPin(GPIOC, 4) != 0 ? "CONNECTED" : "DISCON");
+    v = *(uint16_t *)(ctx + 0x3b2);
+    g_log_func("Ibat         %d.%dA\r\n", (int)(v / 10), (int)(v % 10));
+    if (ctx[0x3e1] == 0) {
+        g_log_func("No extbat\r\n");
+    } else {
+        g_log_func("powerbank:\r\n sn  %02X.%02X.%02X.%02X.%02X\r\n",
+                   (unsigned)ctx[0x3d5], (unsigned)ctx[0x3d6], (unsigned)ctx[0x3d7],
+                   (unsigned)ctx[0x3d8], (unsigned)ctx[0x3d9]);
+        g_log_func("ver %02X.%02X.%02X\r\n",
+                   (unsigned)ctx[0x3da], (unsigned)ctx[0x3db], (unsigned)ctx[0x3dc]);
+        g_log_func("soc %d soh %d noc %d\r\n",
+                   (int)(int8_t)ctx[0x3d4], (unsigned)ctx[0x3dd],
+                   (unsigned)*(uint16_t *)(ctx + 0x3de));
+    }
+
+    /* ── flash-resident config ──────────────────────────────────────────────── */
+    g_log_func("\x1b[32m");
+    g_log_func(" <Flash>\r\n");
+    g_log_func("Dark         %d Lx now %d Lx\r\n",
+               (unsigned)*(uint16_t *)(ctx + 0x102), (unsigned)light_sensor_read_step());
+    if (*(int16_t *)(ctx + 0x100) == (int16_t)0xff) {
+        g_log_func("backupcode   not set\r\n");
+    } else {
+        g_log_func("backupcode   set\r\n");
+    }
+    watchdog_kick();
+    g_log_func("Volume Low    %d\r\n", ctx[0x105]);
+    g_log_func("Volume Medium %d\r\n", ctx[0x106]);
+    g_log_func("Volume High   %d\r\n", ctx[0x107]);
+    g_log_func("Group low     %08X\r\n", (unsigned)*(uint32_t *)(ctx + 0xf4));
+    g_log_func("Group medium  %08X\r\n", (unsigned)*(uint32_t *)(ctx + 0xf8));
+    g_log_func("Group high    %08X\r\n", (unsigned)*(uint32_t *)(ctx + 0xfc));
+    g_log_func("Unit         %s\r\n", ctx[0x10a] == 0 ? "Metric" : "Imperial");
+    g_log_func("Wheel        %s\r\n", ctx[0x10b] == 0 ? "24 inch" : "28 inch");
+    g_log_func("Transmission:%s\r\n", ctx[0x108] != 0 ? "Enable" : "Disable");
+    g_log_func("Light mode:  ");
+    switch (ctx[0x10c]) {
+    case 1:  g_log_func("LIGHT_ALWAYS_ON\r\n"); break;
+    case 2:  g_log_func("LIGHT_OFF\r\n");       break;
+    case 0:  g_log_func("LIGHT_AUTO\r\n");      break;
+    default: g_log_func("ERROR\r\n");           break;
+    }
+    if (ctx[0x109] == 2) {                                   /* off-road region layout */
+        for (i = 0; i < 6; i++) {
+            uint8_t *r = ctx + (i + 0x5b) * 8;
+            g_log_func("%d Ratio:%d Vlim:%d Derating:%d Maxspeed:%d\r\n", i,
+                       (unsigned)*(uint16_t *)(r + 6), (unsigned)*(uint16_t *)(r + 8),
+                       (unsigned)*(uint16_t *)(r + 10), (unsigned)*(uint16_t *)(r + 0xc));
+        }
+    } else {
+        for (i = 0; i < 6; i++) {
+            uint8_t *r = ctx + (i + 0x70) * 4;
+            g_log_func("%d MaxSpeed %d hm/h\t %d %%\r\n", i,
+                       (unsigned)*(uint16_t *)(r + 6), (unsigned)*(uint16_t *)(r + 4));
+        }
+    }
+    g_log_func("Region:       ");
+    switch (ctx[0x109]) {
+    case 0:  g_log_func("REGION_EU\r\n");          break;
+    case 1:  g_log_func("1 = REGION_US\r\n");      break;
+    case 2:  g_log_func("2 = REGION_JP\r\n");      break;
+    case 3:  g_log_func("3 = REGION_OFFROAD\r\n"); break;
+    default: g_log_func("REGION_???\r\n");         break;
+    }
+    {
+        uint8_t *m = ctx + ctx[0x109] * 6;                  /* per-region assist presets */
+        g_log_func("Moment 1 up:%d\t down:%d hm/h\r\n",
+                   (unsigned)*(uint16_t *)(m + 0x10e), (unsigned)*(uint16_t *)(m + 0x126));
+        g_log_func("Moment 2 up:%d\t down:%d hm/h\r\n",
+                   (unsigned)*(uint16_t *)(m + 0x110), (unsigned)*(uint16_t *)(m + 0x128));
+        g_log_func("Moment 3 up:%d\t down:%d hm/h\r\n",
+                   (unsigned)*(uint16_t *)(m + 0x112), (unsigned)*(uint16_t *)(m + 0x12a));
+    }
+    g_log_func("Saved version: %X\r\n", (unsigned)*(uint32_t *)(ctx + 0x140));
+
+    /* ── EEPROM-resident config ─────────────────────────────────────────────── */
+    g_log_func("\x1b[33m");
+    g_log_func(" <EEROM>\r\n");
+    g_log_func("Alarm        %s\r\n",   ctx[0x317] != 0 ? "Enable" : "Disable");
+    g_log_func("log_by_app   %s\r\n",   ctx[0x313] != 0 ? "APP"    : "Serial");
+    g_log_func("Shipping     %s\r\n",   ctx[0x314] != 0 ? "Active" : "Off");
+    g_log_func("Alarm state %s %d\r\n",
+               ((const char *const *)0x0804f820u)[ctx[0x310]], (int)ctx[0x318]);
+    g_log_func("remote_locked %d\r\n", ctx[0x312]);
+    g_log_func("Horn file    %d\r\n",  ctx[0x318]);
+    v = *(uint32_t *)(ctx + 0x31c);
+    g_log_func("Distance     %u.%u Km\r\n", (unsigned)(v / 10), (unsigned)(v % 10));
+    g_log_func("Play_lock    %d\r\n", ctx[0x311]);
+    v = *(uint16_t *)(ctx + 0x336);
+    g_log_func("Shifter    \t%d.%d\r\n", (int)(v >> 8), (int)(uint8_t)v);
+    g_log_func("epoch_horn   %d\r\n", (unsigned)*(uint32_t *)(ctx + 0x320));
+    g_log_func("shftr tries  %d\r\n", ctx[0x334]);
+
+    /* ── globals ────────────────────────────────────────────────────────────── */
+    g_log_func("\x1b[39m");
+    g_log_func(" <GLOBAL>\r\n");
+    g_log_func("pedal_speed: %d\r\n",  (unsigned)*(uint16_t *)(ctx + 0x372));
+    g_log_func("torque     : %d\r\n",  (unsigned)*(uint16_t *)(ctx + 0x374));
+    g_log_func("power level: %d\r\n",  ctx[0x3c9]);
+    g_log_func("ride cha... %s\r\n",   ctx[0x3cb] != 0 ? "Yes" : "No");
+    g_log_func("bike state   %d\r\n",  maybe_get_bike_state());
+}
