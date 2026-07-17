@@ -80,14 +80,77 @@ the 5×7 icon glyphs (`+0x08`) and digit glyphs (`+0x8C`).
 
 ## Display-mode presenter (`display_mode_sm_step`)
 
-A ~40-case state machine (jump table, cases 0..0x29; 2 and 0xB fall through to a
-no-op) driven from the super-loop with the app context. It reads the app-context
-display fields (speed `+0x3c2`, digit `+0x3fc`/`+0x3fe`, payload `+0x3d4..+0x3e0`,
-state-flag bitset `+0x3b8`, mode flags `+0xf0`/`+0xf1`, codes `+0x3c9`/`+0x3ca`),
-picks what to show, and drives the draw API + `maybe_set_pending_request` against
-flash request descriptors. `lowest_set_bit_index` maps the 64-bit state-flag
-bitset to an alert-icon index; `led_driver_set_shipping_mode` is invoked from the
-ship-mode case. `set_mode_state_byte`/`display_mode_set_if_changed` advance the SM.
+A ~40-case state machine (jump table, cases `0`..`0x29`; `2` and `0xB` fall
+through to a no-op) driven from the super-loop with the app context. It reads the
+app-context display fields (speed `+0x3c2`, digit `+0x3fc`/`+0x3fe`, payload
+`+0x3d4..+0x3e0`, fault bitset `+0x3b8`/`+0x3bc`, pack voltage `+0x3f8`, mode
+flags `+0xf0`/`+0xf1`, codes `+0x3c9`/`+0x3ca`), picks what to show, and drives the
+draw API + `maybe_set_pending_request` against flash request descriptors.
+
+The **mode byte is `g_mode_sm[0]` @ `0x20000068`** — the switch selector, written
+by `set_mode_state_byte(m)` (`app.c`) from all over the app (states / shifter /
+modem / OTA / testmode) to request a screen. `display_mode_set_if_changed` shadows
+it into `g_disp_flags[0]` @ `0x20000288`. Two small SRAM control blocks back the SM:
+
+`g_mode_sm` @ `0x20000068`:
+
+| byte | role |
+| --- | --- |
+| `[0]` | **current mode** (switch selector) |
+| `[1]` | previous mode — edge detect; on change clears the per-frame latches |
+| `[2]` | blink-timer scheduler slot; each expiry toggles `g_disp_flags[3]` |
+| `[4..5]` | last-drawn speed (uint16 cache — suppresses redundant redraws) |
+| `[6]` | `"slow_show_speed_tmr"` slot — ~1 s speed-refresh cadence (mode 7) |
+| `[7]` | timed-show slot — auto-return for modes 3/4 |
+
+`g_disp_flags` @ `0x20000288`: `[1]`/`[2]` main/secondary frame latches, `[3]`
+**blink phase** (0/1, toggled by `[2]`'s timer — gates the fault display so the
+error frame alternates with the normal screen), `[4]` saved *return* mode, `[5]`/`[6]`
+overlay-request latches (turn signals / notifications), `[7]` battery-frame blink
+latch, `[8]` restore-target mode consumed by mode 1.
+
+### Operational modes
+
+| Mode | Screen | Transition |
+| --- | --- | --- |
+| `0` | init — wait for the display bus, reset announce records | → `6` |
+| `1` | restore the saved mode | → `g_disp_flags[8]` |
+| `2`, `0xB` | idle / no-op (terminal — a screen was already drawn) | — |
+| `3` | timed "show" (info screen); wait the show timer | → `g_disp_flags[4]` |
+| `4` | timed "show" + power-level icon (`g_disp_req_0804c930`) | → `g_disp_flags[4]` |
+| `5` | blank / off (`g_disp_req_0804da64`) | → `0` |
+| `6` | **standby idle** (parked, speed < 10) — idle frame `0804cb1c` + corner LED; draws speed | fault → `0xc`; speed ≥ 10 → `7` |
+| `7` | **riding** (speed ≥ 9) — `matrix_draw_number(km/h, 3)` on a ~1 s cadence + speed bar | speed < 9 → `6` |
+| `8` | **riding + battery/charge** — battery/charge frames; draws speed | low-supply in range → `9`; low-word fault + blink → `0xc` |
+| `9` | battery-low frame (`0804693c`) | supply-low bit clears → `8` |
+| `0xa` | secondary/assist speed — `matrix_draw_speed((v/10)+9, …)` from `+0x3d2` | — |
+| `0xd` | power-level icon — `matrix_draw_icon(+0x3c9)` | → `2` |
+| `0xe` | turn/indicator icon — `matrix_draw_icon(+0x3ca)` | — |
+| `0xf` | charging animation — toggles two frames on a `systick/10` blink | — |
+
+### Fault / error display modes
+
+Four modes render a fault. Two draw the **numeric error code** —
+`matrix_draw_number(lowest_set_bit_index(low, high), 4)` over the error frame
+`g_disp_req_0804c1d0`, i.e. *the lowest set bit index of the 64-bit fault pair*
+(see [error-flags.md](error-flags.md) for the full 0..63 code map):
+
+| Mode | Screen | Entered by / meaning |
+| --- | --- | --- |
+| `0xc` | **numeric fault — riding path.** Draws the error number, *unless* the only cause is bit 20 "supply low" (`0x100000`) with the pack voltage `+0x3f8` in `[0x6c4, 0xa46]`, in which case it shows the battery icon `0804693c` instead. Saves `g_disp_flags[8]`, then → `1` (restore). | modes `6`/`8` when a **low-word** bit (`0x3fffff`) is set and the blink phase `g_disp_flags[3]` is high |
+| `0x24` | **numeric fault — standby path.** Same error frame + number, then → `2`. Shows **any** code 0..63, so high-word faults (no-SIM, wrong-SIM, horn/boost stuck, motor, …) surface here. | `status_process` when the **whole pair** is non-zero (`low \|\| high`) |
+| `0x10` | **fixed error 60.** `matrix_draw_number(lowest_set_bit_index(0, 0x10000000), 4)` — a **hardcoded** code 60 (high-word bit 28) over the same error frame, then → `2`. The literal argument means the "60" is fixed by the mode, *not* read from the fault pair. | trigger not yet in the sourced set (no `set_mode_state_byte(0x10)` call site reconstructed) |
+| `0x18` | **fixed error frame** (`g_disp_req_08048518`) — a *generic* error graphic with **no** number. Stays in mode `0x18`. | the **shifter / OTA codes 24..37** (`shifter_mode_command_dispatch`, `testmode_command_dispatch`) — these set the fault bit *and* `set_mode_state_byte(0x18)`, so the matrix shows this frame, not the numeric bit-index (the number is what BLE `0x5563` / the log report) |
+
+`lowest_set_bit_index` (the 64-bit → code mapper) is the shared primitive for
+modes `0xc`/`0x10`/`0x24`. `led_driver_set_shipping_mode` is invoked from mode `0xa`.
+
+### Canned status / splash frames
+
+Modes `0x11`..`0x17`, `0x19`..`0x23`, `0x25`..`0x29` each just push one fixed flash
+request descriptor (lock / unlock / charging / boot / OTA / region splash screens)
+and most fall back to mode `2`. They are selected by their respective subsystems;
+the per-descriptor bitmaps live in `src/display_requests.c` (`g_disp_req_<addr>`).
 
 ## Request descriptors (`display_requests.c`)
 

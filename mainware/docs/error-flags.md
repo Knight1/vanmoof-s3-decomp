@@ -45,7 +45,10 @@ one of the requested bits is set in either word.
   stuck, motor, …) render here too. When several faults are set the **lowest** bit
   wins. The `status_process` `"Error Flags: %d"` log uses the same index, and the
   `"Possible error 21"` log text is itself that matrix code (low bit 21). The
-  **"Matrix"** column in the tables below is each flag's shown code.
+  **"Matrix"** column in the tables below is each flag's shown code. **Exception:**
+  the shifter/OTA codes 24..37 (marked `‡`) are set together with display mode `0x18`,
+  which shows a *fixed* error frame (`g_disp_req_08048518`) rather than the numeric
+  bit-index — see the note under the high-word table.
 
 ---
 
@@ -73,10 +76,10 @@ Bits **16..23** are mainware-level battery / BLE faults:
 | 21 | `0x00200000` | **21** | **"Possible error 21"** — `ctx+0x3FE` reads < 0xB persistently (checked twice, 10 s apart) | `status_process` |
 | 22 | `0x00400000` | **22** | **SSP/BLE TX backlog overflow** — >4 committed inter-module frames unacknowledged | `sspm_tx_queue_pump`; cleared when `sspm_rx_reply_handler` drains (`main`) |
 | 23 | `0x00800000` | **23** | **BLE coprocessor reboot** in progress (`"Reboot BLE"`, drives the CC2642 reset) | `ssp`; cleared when `ble_ssp_dispatch` recovers (`main`) |
-| 24 | `0x01000000` | **24** | **eShifter fault A** — mode-cmd 4/7 (overwrites the pair, enters fault-display mode `0x18`) | `shifter_mode_command_dispatch` |
-| 25 | `0x02000000` | **25** | **eShifter fault B** — mode-cmd 5 | `shifter_mode_command_dispatch` |
-| 27 | `0x08000000` | **27** | **eShifter fault C** — mode-cmd 6 | `shifter_mode_command_dispatch` |
-| 26, 28-31 | `0x04000000`, `0x10000000`..`0x80000000` | **26, 28-31** | **testmode-injected** fault codes (diagnostic self-test only) | `testmode_command_dispatch` |
+| 24 | `0x01000000` | 24 ‡ | **eShifter error A** — `shifter_mode_command_dispatch(4/7)` (SSP/BLE-driven, `ssp.c`); *overwrites* the whole pair and enters display mode `0x18` | `shifter_mode_command_dispatch` |
+| 25 | `0x02000000` | 25 ‡ | **eShifter error B** — cmd 5 | `shifter_mode_command_dispatch` |
+| 27 | `0x08000000` | 27 ‡ | **eShifter error C** — cmd 6 | `shifter_mode_command_dispatch` |
+| 26, 28-31 | `0x04000000`, `0x10000000`..`0x80000000` | 26, 28-31 ‡ | **OTA / status error codes** via `testmode_command_dispatch(cmd)`: cmd 12→26 (`status_process`), cmd 2→28 (OTA, `update.c`), cmd 3/4/5→29/30/31 | `testmode_command_dispatch` |
 
 ---
 
@@ -84,7 +87,7 @@ Bits **16..23** are mainware-level battery / BLE faults:
 
 | Bit | Mask | Matrix | Meaning | Set / cleared by |
 | --- | --- | --- | --- | --- |
-| 0-5 | `0x01`..`0x20` | **32-37** | **testmode-injected** fault codes (diagnostic self-test only) | `testmode_command_dispatch` |
+| 0-5 | `0x01`..`0x20` | 32-37 ‡ | **OTA / shifter error codes** via `testmode_command_dispatch(cmd)`: cmd 6..11 → codes 32..37 (e.g. cmd 10→36, `shifter.c`) | `testmode_command_dispatch` |
 | 6 | `0x00000040` | 38 | **Internal-LiPo gauge (STC3115) read failure** — ≥5 consecutive `stc_read` errors (`" ERR Read STC"`) | `status_process` |
 | 7 | `0x00000080` | 39 | **Ambient light sensor (CM2323) fault** — >4 consecutive I2C fails (`" ERR CM2323"`) | `light_sensor_read_step` |
 | 8 | `0x00000100` | 40 | **Horn/bell button (PC0) stuck** — held pressed > 20 s | `charger_and_pc1_sense_debounce` |
@@ -102,6 +105,17 @@ Bits **16..23** are mainware-level battery / BLE faults:
 | 26 | `0x04000000` | **58** | **GSM/modem power fail** (`"GSM power fail"`) | `modem_sim_state_machine` |
 
 Bits not listed are unused by the reconstructed sources.
+
+**‡ codes 24..37** — unlike the operational faults, these are written together with
+`set_mode_state_byte(0x18)`, and display **mode `0x18`** shows a **fixed error frame**
+(`g_disp_req_08048518`), *not* the numeric bit-index. So on the matrix they appear as
+that generic error frame; the number in the "Matrix" column is the code reported over
+BLE `0x5563` and the `"Error Flags: %d"` log (and is drawn as a matrix number only if
+the fault persists into the standby numeric display, mode `0x24`). They are set by
+`shifter_mode_command_dispatch` (codes 24/25/27) and `testmode_command_dispatch`
+(codes 26, 28..37) — despite the latter's name it is invoked from the OTA/update
+(`update.c`), status (`status_process`) and shifter (`shifter.c`) paths, not only
+factory test.
 
 **Alias note:** the modem sets/tests these via `async_request_post(low, high)` and
 `async_request_poll(low, high, …)`, which are just mis-named aliases of
