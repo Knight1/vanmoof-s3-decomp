@@ -91,6 +91,32 @@ void HAL_GPIO_EXTI_IRQHandler(uint16_t GPIO_Pin)
     }
 }
 
+/* OEM HAL_GPIO_EXTI_Callback, 0x08038964 — the application's override of the
+ * __weak HAL EXTI callback, invoked above for whichever line fired. It records
+ * the *wake source* — which EXTI line woke the bike — as a code through the
+ * write-through pointer at g_sleep_ctx+0x24 (0x20000094). That is the same latch
+ * rtc_wakeup_event_cb (0x08038A04, its flash neighbour) writes 1 into for an RTC
+ * wake and that enter_stop_mode zeroes just before sleeping. The code is cleared
+ * to 0 on entry, then set per line. Only single-line masks match; note EXTI8 -> 9
+ * and EXTI10 -> 8 are deliberately swapped relative to pin order. */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    volatile uint32_t *wake_src = *(volatile uint32_t **)(0x20000094u + 0x24u);
+
+    *wake_src = 0;
+    switch (GPIO_Pin) {
+    case 0x0001: *wake_src = 2; break;   /* EXTI0  */
+    case 0x0002: *wake_src = 3; break;   /* EXTI1  */
+    case 0x0004: *wake_src = 4; break;   /* EXTI2  */
+    case 0x0008: *wake_src = 5; break;   /* EXTI3  */
+    case 0x0010: *wake_src = 6; break;   /* EXTI4  */
+    case 0x0020: *wake_src = 7; break;   /* EXTI5  */
+    case 0x0100: *wake_src = 9; break;   /* EXTI8  */
+    case 0x0400: *wake_src = 8; break;   /* EXTI10 */
+    default: break;
+    }
+}
+
 void gpio_init(void)
 {
     gpio_init_record_t gi = { 0, 0, 0, 0 };

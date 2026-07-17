@@ -52,7 +52,10 @@ void HAL_GPIO_DeInit(GPIO_TypeDef *GPIOx, uint32_t GPIO_Pin);
  * (OEM HAL_GPIO_EXTI_IRQHandler, 0x08026AD4). */
 void HAL_GPIO_EXTI_IRQHandler(uint16_t GPIO_Pin);
 
-/* Weak user hook fired by HAL_GPIO_EXTI_IRQHandler (OEM 0x08038964). */
+/* Application override of the weak HAL EXTI callback, fired by
+ * HAL_GPIO_EXTI_IRQHandler (OEM 0x08038964). Latches which EXTI line woke the
+ * bike as a wake-source code (EXTI0..5 -> 2..7, EXTI8 -> 9, EXTI10 -> 8) through
+ * g_sleep_ctx+0x24; sibling of rtc_wakeup_event_cb (writes 1 for an RTC wake). */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 
 /* PC0 / PC1 sense lines: 1 if the pin reads LOW, else 0 (OEM 0x08040350 /
