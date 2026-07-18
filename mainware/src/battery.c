@@ -417,8 +417,11 @@ uint32_t bat_modbus_txn_pump(void)
  * Master-SM state lives at g_bat_modbus_ctx[0] (state uint8_t) with a u16 running
  * uint8_t counter at g_bat_modbus_ctx[2].
  *
- * Returns: 1 while busy/idle-continuing, 0 when a frame completed OK,
- *          2 after a final CRC verify, 3 on a Modbus exception response.
+ * Returns (= (busy ^ 1), matching the OEM): 0 while idle/continuing (no state
+ * advance), 1 when a frame completed OK — the caller (modbus_bat_service_step)
+ * tests `status == 1` to advance to the telemetry-unpack state; 2 while a flagged
+ * exception is re-syncing (the state-8 CRC-verify path), 3 once an exception
+ * response has been consumed. (Caller: 1 -> unpack, 2/3 -> error handling.)
  */
 unsigned int bat_modbus_master_step(uint8_t *frame)
 {

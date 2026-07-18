@@ -151,6 +151,8 @@ Modes `0x11`..`0x17`, `0x19`..`0x23`, `0x25`..`0x29` each just push one fixed fl
 request descriptor (lock / unlock / charging / boot / OTA / region splash screens)
 and most fall back to mode `2`. They are selected by their respective subsystems;
 the per-descriptor bitmaps live in `src/display_requests.c` (`g_disp_req_<addr>`).
+Identified so far: **`0x22` = "Diag fail"** / **`0x23` = "Diag ok"** — the self-test
+result screens set by `status_process` state `0x17` (see [error-flags.md](error-flags.md)).
 
 ## Request descriptors (`display_requests.c`)
 

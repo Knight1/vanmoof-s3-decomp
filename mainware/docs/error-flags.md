@@ -29,9 +29,12 @@ one of the requested bits is set in either word.
 - **`status_process`** also rotates the word bit-by-bit and logs each set bit's
   index (`"Error Flags: %d"`), or `"Error Flags: None"` when clear.
 - **BLE read `0x5563`** returns the 8 bytes at `+0x3B8` (both words).
-- **Diagnostics self-test** (`diagnostics_run_step`) loads the pair as one 64-bit
-  value: `(low | high) == 0` → `"Diag ok"`, else `"Diag fail"` (+ raises error
-  state `0x22`).
+- **Diagnostics self-test** — `status_process` state `0x17` runs `diagnostics_run_step`
+  (the mode-`0x15` status-dump sequence) and, when it finishes, tests the fault pair:
+  `(*+0x3B8 == 0 && *+0x3BC == 0)` → logs `"Diag ok"` and shows display screen `0x23`;
+  otherwise logs `"Diag fail"` and shows display screen `0x22`. (`0x22`/`0x23` are
+  `set_mode_state_byte` display modes — the fail/ok result frames — not fault states;
+  the check itself lives in `status_process`, not in `diagnostics_run_step`.)
 - **LED-matrix fault display** — the matrix draws an error frame (`g_disp_req_0804C1D0`)
   with a decimal **error number = the lowest set bit index (0..63)** across the pair
   (`matrix_draw_number(lowest_set_bit_index(low, high), 4)`; low word → codes 0..31,
