@@ -81,7 +81,7 @@ soft float for now.
 | `0x2000010E` | ≥6 | `g_state` | (not yet decoded) | Status/console block. `g_state[5]` (byte at `0x20000113`) is the login state machine: `0xFA` = ready-to-accept password, non-`0xFA` = locked-out / scheduler-slot id. |
 | `0x20000000` | 4 | `g_boot_marker` | `main` | Warm-boot magic. `main` compares it against `0x55AA55CF`; match → `boot_init_warm` (skip cold init), else `boot_init_cold`. `enter_stop_mode` re-evaluates it on wake (warm vs cold clock re-init) then clears it; `reboot_restart_task` clears it before an NVIC reset to force a **cold** boot. Lives in the **retained low-RAM** below `.data` (`0x20000000..0x20000013` — not touched by the `.data` copy or `.bss` zero), so it survives a warm reset. |
 | `0x20000014` | 1 | `g_systick_step` | `systick.c` | Muco-runtime SysTick increment-per-tick (initially 1). **Same SRAM address as in mainboot** — both wares' `.data` starts at +0x14 from SRAM base. |
-| `0x20000094` | 0x28 | `g_sleep_ctx` | `states.c` (`enter_stop_mode`) | Per-reason STOP/sleep parameters (runtime-populated from settings). `slot[reason]` (u32) = sleep duration in ms — its **low u16** is reused as the RTC wakeup period in seconds; `enter_stop_mode` indexes it with a 4-byte stride. `+0x24` is a write-through pointer the OEM zeroes just before sleeping; `rtc_wakeup_event_cb` (RTC_WKUP IRQ) writes 1 through it to flag the wake. RTC bring-up runs `rtc_msp_init` (`RCC_BDCR.RTCEN` via bit-band `0x42470E3C` + NVIC IRQ 3). |
+| `0x20000094` | 0x28 | `g_sleep_ctx` | `states.c` (`enter_stop_mode`) | Per-reason STOP/sleep parameters (runtime-populated from settings). `slot[reason]` (u32) = sleep duration in ms — its **low u16** is reused as the RTC wakeup period in seconds; `enter_stop_mode` indexes it with a 4-byte stride. `+0x24` is a write-through pointer to the **wake-flag / wake-source latch**: `enter_stop_mode` zeroes it just before sleeping, then whichever ISR fires stamps the source through it — `rtc_wakeup_event_cb` (RTC_WKUP IRQ) writes 1 for an RTC wake, and `HAL_GPIO_EXTI_Callback` (`gpio.c`) writes a per-line code for an EXTI wake (EXTI0..5 → 2..7, EXTI8 → 9, EXTI10 → 8). RTC bring-up runs `rtc_msp_init` (`RCC_BDCR.RTCEN` via bit-band `0x42470E3C` + NVIC IRQ 3). |
 | `0x200000BC` | 4 | `g_reset_sm_timer_slots` | `states.c` (`factory_reset_sm_step`) | Array of scheduler timer-slot handles (`0xFA` = free) the reset SM holds: `[0]` 2 s BLE-reset, `[1]` primary reset, `[2]` 6 s `reset_tmr`, `[3]` `reboot_tmr`. |
 | `0x20000076` | 1 | `g_update_mode` | `app.c` | subsystem firmware-update mode (`+1` of a small control block at `0x20000075`); `update_mode_request` only overwrites it from idle (`==2`). |
 | `0x20000288` | ≥7 | `g_announce` | `app.c` | broadcast dirty-flags block; `announce_mark` sets `+5` (channel 0) / `+6` (channel 1). |
@@ -464,7 +464,7 @@ poly 0xA001) over the shared inter-module bus. Control/sense GPIO (from
 | signal | pin | role |
 | --- | --- | --- |
 | BMS present | **PC10** (GPIOC, `0x400`) | pack-inserted detect |
-| charger sense | **PC4** (GPIOC, `0x10`) | charging vs discharging |
+| charger sense | **PC4** (GPIOC, `0x10`) | charging vs discharging; **also the EXTI4 "announce" input** (below) |
 | sense / FAULT | **PD1** (GPIOD, `0x2`) | BMS sleep / battery FAULT pin |
 | BMS reset | **PB5** (GPIOB, `0x20`) | reset/power pulse |
 | motor reset | **PB10/PB9** (GPIOB, `0x400`/`0x200`) | motor reset during pack bring-up |
@@ -472,6 +472,30 @@ poly 0xA001) over the shared inter-module bus. Control/sense GPIO (from
 Telemetry registers are unpacked (big-endian u16) into the app context at
 `g_app_ctx + 0x3F2 + reg*2`; the batteryware register map (cells 1–10 at regs
 27–36) is cross-validated from both sides.
+
+**PC4 "announce" receiver (single-wire Manchester RX).** Beyond its charger-level
+sense role, **PC4** doubles as a coded-message input: the charge line carries a
+pulse-gap-coded serial frame that mainware decodes with **EXTI4** (IRQ 10) against
+the free-running **TIM10** time base (`0x40014400`, prescaler 95 / period 5000).
+The three-stage receiver is in `battery.c`:
+
+1. `exti4_app_hook` (`0x08043CEC`, runs ahead of the EXTI4 HAL demux) — latches
+   `TIM10->CNT` at each PC4 edge, classifies the gap into a preamble window
+   (`[0xBC5,0xE5F]` → leading bit 0, `(0xEB1,0x11F5)` → leading bit 1) or a data-bit
+   window (`Period-999 … Period-0x29B`, sampled at PC4 level), and shifts each
+   recovered bit into the staging buffer at `rec+0x14..` indexed by `rec[0x26]`.
+2. `tim10_announce_period_cb` (`0x08043DE0`, TIM10 update ISR) — uses the elapsed
+   period as end-of-frame gap detection and commits the double buffer
+   (staging `+0x14..0x23` → active `+0x04..0x13`, `rec[1]`=bit length, `rec[0]`=ready).
+3. `staged_msg_validate_and_dispatch` (`0x08043C74`, super-loop) — when `rec[0]`,
+   CRC-16s the `rec[1]>>3` payload bytes and, on a pass, `manchester_announce_decode`s
+   them into `session_ctx+0x3D4` (the display payload block `matrix_draw_speed`
+   renders), then clears the record.
+
+The receiver record lives at SRAM **`0x200096D4`** (`[0]` ready, `[1]` bit length,
+`+0x04..0x13` committed payload, `+0x14..0x23` staging, `[0x24]` edge-activity,
+`[0x25]` receive-phase, `[0x26]` bit index); it is armed by
+`peripheral_irq10_init_and_start` (`0x08043CB4`) at boot.
 
 ## Vector table (head, from raw bytes — image @ flash `0x08020200`)
 
