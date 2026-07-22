@@ -1,0 +1,36 @@
+// STM32F413VGT6 — minimal Renode platform for the VanMoof mainware
+// (main-controller application) image.
+//
+// Mainware is VanMoof's central-controller firmware: a Cortex-M4F super-loop
+// linked at 0x08020000 (512-B VanMoof envelope, then the vector table at
+// 0x08020200 — naturally VTOR-aligned). Only what the pure-leaf and boot tests
+// need is modelled here: the whole flash bank, the 320 KB SRAM, and the core
+// NVIC. The clock/peripheral status registers SystemInit and the boot path
+// touch (RCC 0x40023800, FLASH_ACR 0x40023C00, the CRC unit at 0x40023000, ...)
+// are left unmodelled — Renode reads them back as 0 and warns, never faults —
+// and SystemInit is a straight register-write sequence with no ready-bit spins,
+// so Reset_Handler runs cleanly through to main() without any clock hooks.
+//
+// This part has an architectural VTOR; the boot test points cpu.VectorTableOffset
+// at the application vector table at 0x08020200.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    systickFrequency: 100000000
+    IRQ -> cpu@0
+
+// Whole 1 MB flash bank. The mainware image occupies sector 5 + part of
+// sector 6 (0x08020000..~0x080556A0); mapping the full bank means the envelope,
+// vector table, and every flash symbol the suite resolves land in real memory.
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000
+
+// 320 KB SRAM = SRAM1 (256 K) + SRAM2 (64 K), contiguous from 0x20000000.
+// Holds the firmware's globals (scattered up to ~0x2000A000), the OEM stack
+// (initial SP _estack = 0x20037000), and the suite's leaf-call scratch buffer
+// (placed at 0x20020000, clear of both).
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x50000
