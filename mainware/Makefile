@@ -26,6 +26,8 @@ OBJS         := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS)) \
                 $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(S_SRCS))
 DEPS         := $(OBJS:.o=.d)
 
+comma        := ,
+
 ARCH_FLAGS   := -mcpu=$(MCU) -mthumb -mfloat-abi=soft
 
 CFLAGS       := $(ARCH_FLAGS) \
@@ -46,7 +48,19 @@ LDFLAGS      := $(ARCH_FLAGS) \
                 -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map \
                 -nostartfiles -nostdlib
 
-.PHONY: all clean compare size disasm flash help
+# --- Renode test image -------------------------------------------------------
+# The normal --gc-sections build drops every function main() cannot reach (main
+# is still the startup spin-stub until the real super-loop's callee closure is
+# rooted), so the test ELF re-roots the pure leaves the Renode suite calls by
+# forcing each one `undefined` at link time. All listed symbols are self-contained
+# integer routines (Cortex-M4 hardware MUL/UDIV — no libgcc helper is pulled in
+# under -nostdlib), so the closure links cleanly.
+TEST_KEEP    := crc16 crc16_modbus_update bcd_to_bin bin_to_bcd \
+                ringbuf_push_byte ringbuf_get_byte ringbuf_free_space \
+                telemetry_map_clamp
+TEST_ELF     := $(BUILD_DIR)/$(PROJECT)-test.elf
+
+.PHONY: all clean compare size disasm flash help renode-test
 .DEFAULT_GOAL := all
 
 all: $(BUILD_DIR)/$(PROJECT).bin size
@@ -87,6 +101,18 @@ compare: $(BUILD_DIR)/$(PROJECT).bin
 	echo "differing bytes: $$diff_bytes"
 	@cmp $(OEM_IMAGE) $(BUILD_DIR)/$(PROJECT).bin && echo "BYTE-EQUIVALENT" || true
 
+# Test image: same objects as the normal build, but re-root the leaves the
+# Renode suite exercises so --gc-sections keeps them.
+$(TEST_ELF): $(OBJS) $(LD_SCRIPT)
+	$(LD) $(LDFLAGS) $(addprefix -Wl$(comma)--undefined=,$(TEST_KEEP)) $(OBJS) -o $@
+
+# Renode emulation smoke tests. Runs from the repo root so the suite's
+# @mainware/... paths resolve. Requires `renode-test` on PATH.
+renode-test: $(TEST_ELF)
+	@command -v renode-test >/dev/null 2>&1 || { \
+		echo "renode-test not found on PATH — install Renode (https://renode.io)"; exit 1; }
+	cd .. && renode-test mainware/tests/$(PROJECT).robot
+
 clean:
 	rm -rf $(BUILD_DIR)
 
@@ -96,6 +122,7 @@ help:
 	@echo "  size    — show flash/SRAM usage"
 	@echo "  disasm  — emit interleaved C+asm listing"
 	@echo "  compare — diff our build against OEM_IMAGE"
+	@echo "  renode-test — run the Renode smoke-test suite"
 	@echo "  clean   — remove build/"
 	@echo "Variables:"
 	@echo "  OEM_IMAGE=$(OEM_IMAGE)"
