@@ -36,7 +36,9 @@ Voltages are in **mV**; temperatures use `°C = (int16(reg) − 2731) / 10`
 
 | Reg | Hex | Field | Scaling | Firmware source |
 | ---: | --- | --- | --- | --- |
-| 2  | 0x02 | **Protection / shutdown status** | bitfield (see below) | composed from `g_fault_flags` `0x20002C44` |
+| 0  | 0x00 | **AP-alive signature** | constant `0x0100` | hardcoded `modem_send_2bytes(1,0)` (`uart.c:434`) |
+| 1  | 0x01 | Protocol/format marker | constant `0x0001` | hardcoded `modem_send_2bytes(0,1)` (`uart.c:435`) |
+| 2  | 0x02 | **Run state / protection word** | state bitmask (see below) | live state `g_bms_state` `0x20002B58` -> `report_arm_value` (`uart.c:436`) |
 | 3  | 0x03 | Battery temperature | (i16−2731)/10 °C | hottest of the two pack NTCs |
 | 4  | 0x04 | **Pack voltage** | mV | Σ cell voltages `0x2000281C` |
 | 5  | 0x05 | RSOC (relative state of charge) | % | `bms_ctx+0x36` (`0x200029DE`) |
@@ -91,9 +93,66 @@ to the telemetry mirror `0x200028A4`. So:
 for balancing and are not in this read map; registers 3/37/38/39 are the
 board NTC + MOSFET thermistors.)
 
-### Register 2 — protection / shutdown bitfield
+### Registers 0-1 - constants (AP-alive signature)
 
-Non-zero means the pack has shut down. Bit → flag (LSB first):
+The read cascade emits two fixed words before any live data (`uart.c:434-435`):
+
+- **Reg 0 = `0x0100`** - hardcoded `modem_send_2bytes(1, 0)`. It is a
+  constant, **not** a state: it reads `0x0100` whenever the AP application
+  firmware is alive and answering Modbus. Treat it as an "AP present /
+  running" liveness signature; any other value means the responder is not
+  the running AP (bootloader, or garbage). Do **not** try to read the
+  operating mode from it.
+- **Reg 1 = `0x0001`** - hardcoded `modem_send_2bytes(0, 1)`. Fixed
+  protocol/format marker.
+
+> **Gotcha:** reg 0 (constant) and reg 2 (state) can *both* read `0x0100`
+> - but reg 2 = `0x0100` only when `g_bms_state == 12`. They are unrelated;
+> read the mode from reg 2, never reg 0.
+
+### Register 2 - run-state word (`report_arm_value`)
+
+On the wire, register 2 is **not** the raw `g_fault_flags` value. It is the
+live state byte `g_bms_state` (`0x20002B58`, `0`..`0x19`) passed through
+`report_arm_value(g_bms_state - 3)` (`uart.c:315,436-440`), i.e. a one-hot
+**state** word (the same encoding written into the flash event-log records
+in `state_handlers.c:865-885`):
+
+| `g_bms_state` | reg-2 value | note |
+| ---: | --- | --- |
+| 0,1,2,4,5,6 | `0x0000` | no arm value (lossy - these states are indistinguishable at reg 2) |
+| 3 | fault word | the protection readback (see the bitfield below) |
+| 7 | `0x0080` | Power-On OVP1 |
+| 8 | `0x0040` | Power-On OVP2 |
+| 9 | `0x0020` | Power-On UVP1 |
+| 10 | `0x0010` | Power-On UVP2 |
+| 11 | `0x0200` | |
+| 12 | `0x0100` | |
+| 13 | `0x0800` | |
+| 14 | `0x0400` | |
+| 15 | `0x0008` | |
+| 16 | `0x0004` | |
+| 17 | `0x0001` | |
+| 18 | `0x2000` | |
+| 19 | `0x1000` | |
+| 20 | `0x8000` | |
+| 21 | `0x4000` | |
+| 22 | `0x0002` | |
+| 23 | `0xFFFF` | |
+| 24 | `0x00C0` | |
+| 25 | `0x0030` | |
+
+Because states `0/1/2/4/5/6` all map to `0x0000`, you **cannot** recover the
+exact state index from reg 2 alone.
+
+#### Register 2 in state 3 - protection / shutdown bitfield
+
+When `g_bms_state == 3`, `report_arm_value(0)` composes the word from
+`g_fault_flags` (`0x20002C44`): `ff&0x0001 -> 0x2000`, `ff&0x0002 -> 0x1000`,
+`ff&0x0100 -> 0x0200`, `ff&0x0200 -> 0x0100` (only those four bits are
+remapped on the wire). The underlying `g_fault_flags` internal register uses
+the full 16-bit protection layout below; non-zero means the pack has shut
+down. Bit -> flag (LSB first):
 
 ```
 0 DOTP   1 DUTP   2 COTP   3 CUTP    4 DOCP1  5 DOCP2  6 COCP1  7 COCP2
